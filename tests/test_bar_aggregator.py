@@ -10,6 +10,11 @@ from src.storage.bar_aggregator import BarAggregator
 from src.storage.market_store import MarketStore
 
 
+def test_bar_aggregator_supports_common_intervals() -> None:
+    """The aggregator should accept the common interval sizes we plan to use."""
+    assert BarAggregator.SUPPORTED_INTERVALS == {1, 60, 300, 1800, 3600, 86400}
+
+
 def test_bar_aggregator_builds_one_minute_bars(tmp_path: Path) -> None:
     """The aggregator should merge persisted ticks into a single minute bar."""
     store = MarketStore(database_path=tmp_path / "bars.db")

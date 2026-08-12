@@ -1,10 +1,10 @@
-"""Simple OHLCV bar aggregation over persisted market snapshots."""
+"""OHLCV bar aggregation over persisted market snapshots."""
 
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from src.storage.market_store import MarketStore
@@ -26,9 +26,13 @@ class OHLCVBar:
 
 
 class BarAggregator:
-    """Aggregate persisted market ticks into minute bars."""
+    """Aggregate persisted market ticks into OHLCV bars for common intervals."""
+
+    SUPPORTED_INTERVALS = {1, 60, 300, 1800, 3600, 86400}
 
     def __init__(self, store: MarketStore, interval_seconds: int = 60) -> None:
+        if interval_seconds not in self.SUPPORTED_INTERVALS:
+            raise ValueError(f"Unsupported interval: {interval_seconds}")
         self.store = store
         self.interval_seconds = interval_seconds
 
