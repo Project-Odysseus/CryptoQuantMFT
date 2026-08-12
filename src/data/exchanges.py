@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import urllib.parse
+import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+from config import settings
 
 
 @dataclass(slots=True)
@@ -28,6 +33,7 @@ class ExchangeConnector(ABC):
     def __init__(self, name: str, symbol: str) -> None:
         self.name = name
         self.symbol = symbol
+        self._connected = False
 
     @abstractmethod
     async def connect(self) -> None:
@@ -41,13 +47,40 @@ class ExchangeConnector(ABC):
     async def fetch_snapshot(self) -> MarketTick:
         """Fetch a single normalized market snapshot from the exchange."""
 
+    def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        data: Any = None,
+    ) -> dict[str, Any] | list[Any]:
+        """Perform an HTTP request and decode JSON payloads."""
+        if params:
+            query = urllib.parse.urlencode(params)
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}{query}"
+
+        body = None
+        if data is not None:
+            body = json.dumps(data).encode("utf-8")
+
+        request_headers = {"User-Agent": "CryptoQuantMFT/0.1", "Accept": "application/json"}
+        if headers:
+            request_headers.update(headers)
+
+        request = urllib.request.Request(url, method=method, headers=request_headers, data=body)
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = response.read().decode("utf-8")
+            return json.loads(payload)
+
 
 class MockExchangeConnector(ExchangeConnector):
     """Simple in-memory connector used for offline development and tests."""
 
     def __init__(self, symbol: str = "BTC/NOK") -> None:
         super().__init__(name="mock", symbol=symbol)
-        self._connected = False
 
     async def connect(self) -> None:
         self._connected = True
@@ -70,3 +103,134 @@ class MockExchangeConnector(ExchangeConnector):
             volume=1.25,
             raw={"source": "mock"},
         )
+
+
+class FiriConnector(ExchangeConnector):
+    """Connector for the Firi exchange using the configured API key."""
+
+    def __init__(self, symbol: str = "BTC/NOK", api_key: str | None = None) -> None:
+        super().__init__(name="firi", symbol=symbol)
+        self.api_key = api_key or settings.firi_api_key
+
+    async def connect(self) -> None:
+        if not self.api_key:
+            raise RuntimeError("Firi API key is not configured")
+
+        payload = self._request_json(
+            "GET",
+            "https://api.firi.com/v2/markets",
+            headers={"X-API-KEY": self.api_key},
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("Unexpected Firi market payload")
+        self._connected = True
+
+    async def disconnect(self) -> None:
+        self._connected = False
+
+    async def fetch_snapshot(self) -> MarketTick:
+        if not self._connected:
+            raise RuntimeError("connector is not connected")
+
+        payload = self._request_json(
+            "GET",
+            "https://api.firi.com/v2/markets",
+            headers={"X-API-KEY": self.api_key},
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("Unexpected Firi market payload")
+
+        pair_code = self._normalize_pair_code(self.symbol)
+        for market in payload:
+            market_id = str(market.get("id", "")).upper()
+            if market_id == pair_code:
+                last_price = float(market.get("last", 0) or 0)
+                volume = float(market.get("todays_volume", 0) or 0)
+                return MarketTick(
+                    exchange=self.name,
+                    symbol=self.symbol,
+                    timestamp=datetime.now(timezone.utc),
+                    bid=last_price,
+                    ask=last_price,
+                    last=last_price,
+                    volume=volume,
+                    raw={"source": "firi", "market": market},
+                )
+
+        raise ValueError(f"Unsupported Firi symbol: {self.symbol}")
+
+    def _normalize_pair_code(self, symbol: str) -> str:
+        return symbol.upper().replace("/", "")
+
+
+class KrakenConnector(ExchangeConnector):
+    """Connector for Kraken public market data using the configured credentials."""
+
+    def __init__(
+        self,
+        symbol: str = "BTC/EUR",
+        api_key: str | None = None,
+        api_secret: str | None = None,
+    ) -> None:
+        super().__init__(name="kraken", symbol=symbol)
+        self.api_key = api_key or settings.kraken_api_key
+        self.api_secret = api_secret or settings.kraken_secret
+
+    async def connect(self) -> None:
+        if not self.api_key or not self.api_secret:
+            raise RuntimeError("Kraken API credentials are not configured")
+
+        payload = self._request_json("GET", "https://api.kraken.com/0/public/Time")
+        if not isinstance(payload, dict):
+            raise RuntimeError("Unexpected Kraken time payload")
+        self._connected = True
+
+    async def disconnect(self) -> None:
+        self._connected = False
+
+    async def fetch_snapshot(self) -> MarketTick:
+        if not self._connected:
+            raise RuntimeError("connector is not connected")
+
+        pair_code = self._normalize_pair_code(self.symbol)
+        payload = self._request_json(
+            "GET",
+            "https://api.kraken.com/0/public/Ticker",
+            params={"pair": pair_code},
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Unexpected Kraken ticker payload")
+        if payload.get("error"):
+            raise RuntimeError(str(payload["error"]))
+
+        result = payload.get("result", {})
+        if not isinstance(result, dict):
+            raise RuntimeError("Unexpected Kraken result payload")
+
+        market = result.get(pair_code)
+        if market is None:
+            raise ValueError(f"Unsupported Kraken symbol: {self.symbol}")
+
+        ask = float(market.get("a", [0, 0, 0])[0])
+        bid = float(market.get("b", [0, 0, 0])[0])
+        last = float(market.get("c", [0, 0, 0])[0])
+        volume = float(market.get("v", [0, 0])[1])
+        return MarketTick(
+            exchange=self.name,
+            symbol=self.symbol,
+            timestamp=datetime.now(timezone.utc),
+            bid=bid,
+            ask=ask,
+            last=last,
+            volume=volume,
+            raw={"source": "kraken", "market": market},
+        )
+
+    def _normalize_pair_code(self, symbol: str) -> str:
+        symbol_map = {
+            "BTC/EUR": "XXBTZEUR",
+            "BTC/USD": "XXBTZUSD",
+            "ETH/EUR": "XETHZEUR",
+            "ETH/USD": "XETHZUSD",
+        }
+        return symbol_map.get(symbol, symbol.upper().replace("/", ""))
