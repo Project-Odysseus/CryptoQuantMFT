@@ -5,6 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from src.signals.order_book_signals import (
+    MicroPriceSignal,
+    OrderBookImbalanceSignal,
+    OrderBookSignalEngine,
+    VolumeDeltaSignal,
+)
+
 
 @dataclass(slots=True)
 class OrderBookSnapshot:
@@ -34,6 +41,19 @@ class OrderBookReconstructor:
 
     def __init__(self, depth_levels: int = 5) -> None:
         self.depth_levels = depth_levels
+        self._signal_engine = OrderBookSignalEngine(depth_levels=depth_levels)
+
+    def compute_obi(self, snapshot: OrderBookSnapshot) -> OrderBookImbalanceSignal:
+        """Compute an order-book imbalance signal from the top depth levels."""
+        return self._signal_engine.compute_obi(snapshot)
+
+    def compute_micro_price(self, snapshot: OrderBookSnapshot) -> MicroPriceSignal:
+        """Compute a volume-weighted micro-price signal from the top depth levels."""
+        return self._signal_engine.compute_micro_price(snapshot)
+
+    def compute_volume_delta(self, snapshot: OrderBookSnapshot) -> VolumeDeltaSignal:
+        """Compute a simple volume-delta signal from the top depth levels."""
+        return self._signal_engine.compute_volume_delta(snapshot)
 
     def reconstruct(self, snapshot: OrderBookSnapshot) -> OrderBookMetrics:
         """Compute summary metrics from a bid/ask book snapshot."""

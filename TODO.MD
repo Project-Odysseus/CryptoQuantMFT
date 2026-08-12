@@ -34,8 +34,8 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] Implement Kraken WebSocket L2 Order Book (`book-10` depth) client using `websockets` / `ccxt.pro` (implemented as a REST-based live connector scaffold for now; WebSocket transport remains a future enhancement)
   - [x] Implement Firi L2 REST/WS polling client with rate-limit bucket throttling (implemented as a live REST connector using the configured API key)
   - [x] Implement FX Rate Collector (EUR/NOK) with local cache and fallback mechanisms (scaffolded as part of the shared connector architecture; live FX integration remains future work)
-- [ ] **Multi-Timeframe Resampler**
-  - [ ] Build real-time streaming aggregator converting raw tick/orderbook streams into 1-second, 1-minute, 5-minute, and 1-hour OHLCV candle bars
+- [x] **Multi-Timeframe Resampler**
+  - [x] Build real-time streaming aggregator converting raw tick/orderbook streams into 1-second, 1-minute, 5-minute, and 1-hour OHLCV candle bars
 - [x] **Storage Infrastructure**
   - [x] Setup `DuckDB` / `Parquet` pipeline for high-compression, microsecond-timestamp tick and bar storage (implemented a local SQLite-backed snapshot store as the initial persistence layer)
   - [x] Build Data Normalizer to align non-synchronous timestamps across exchanges into uniform time-bar snapshots
@@ -66,22 +66,6 @@ A production-grade, event-driven quantitative trading system in Python designed 
 
 ---
 
-## Phase 4: Risk Management & Dynamic Position Sizing
-- [ ] **Pre-Trade Risk Engine (Gatekeeper)**
-  - [ ] **Slippage & VWAP Check:** Reject trades where L2 book depth is insufficient to execute without exceeding max allowed slippage
-  - [ ] **Spread Guard:** Block entry if current bid-ask spread exceeds historical $95^{\text{th}}$ percentile
-  - [ ] **Stale Quote Guard:** Disallow order placement if WS feed latency exceeds $X$ milliseconds
-- [ ] **Position Sizing & Capital Allocation**
-  - [ ] Implement Volatility-Adjusted Sizing (Half-Kelly Criterion or Fixed Fractional Risk)
-  - [ ] Implement Dynamic Inventory Risk Manager: penalize buy signals if portfolio inventory is heavily long-skewed on one exchange
-- [ ] **Post-Trade & Portfolio Risk Controls**
-  - [ ] **Circuit Breakers:** Implement daily Max Drawdown limit (e.g., hard stop at -2% account equity drop in 24 hours)
-  - [ ] **Time Stops:** Automatically liquidate/exit mean-reversion positions if $Z$-score fails to revert within $N$ half-lives
-  - [ ] **Volatility-Based Stops:** ATR-driven trailing stop-loss logic
-  - [ ] **Counterparty Risk:** Monitor and alert on asset balance distribution between Firi (NOK) and Kraken (EUR/BTC)
-
----
-
 ## Phase 5: Two-Tier Backtesting & Simulation Engine
 - [ ] **Tier 1: Fast Vectorized Backtester**
   - [ ] Build Polars/VectorBT vectorized engine operating on 1m, 5m, and 1h OHLCV bars for rapid signal parameter exploration
@@ -98,13 +82,30 @@ A production-grade, event-driven quantitative trading system in Python designed 
 
 ---
 
+## Phase 4: Risk Management & Dynamic Position Sizing
+- [ ] **Pre-Trade Risk Engine (Gatekeeper)**
+  - [ ] **Slippage & VWAP Check:** Reject trades where L2 book depth is insufficient to execute without exceeding max allowed slippage
+  - [ ] **Spread Guard:** Block entry if current bid-ask spread exceeds historical $95^{\text{th}}$ percentile
+  - [ ] **Stale Quote Guard:** Disallow order placement if WS feed latency exceeds $X$ milliseconds
+- [ ] **Position Sizing & Capital Allocation**
+  - [ ] Implement Volatility-Adjusted Sizing (Half-Kelly Criterion or Fixed Fractional Risk)
+  - [ ] Implement Dynamic Inventory Risk Manager: penalize buy signals if portfolio inventory is heavily long-skewed on one exchange
+- [ ] **Post-Trade & Portfolio Risk Controls**
+  - [ ] **Circuit Breakers:** Implement daily Max Drawdown limit (e.g., hard stop at -2% account equity drop in 24 hours)
+  - [ ] **Time Stops:** Automatically liquidate/exit mean-reversion positions if $Z$-score fails to revert within $N$ half-lives
+  - [ ] **Volatility-Based Stops:** ATR-driven trailing stop-loss logic
+  - [ ] **Counterparty Risk:** Monitor and alert on asset balance distribution between Firi (NOK) and Kraken (EUR/BTC)
+
+---
+
 ## Phase 6: OMS & Smart Order Router (Maker-First Execution)
-- [ ] **Smart Order Router (SOR)**
+- [ ] **Phase 6A: Paper-Trading Execution Skeleton**
+  - [ ] Build a lightweight paper-trading execution engine that accepts signals and records simulated fills
+  - [ ] Implement a simple order state machine for `PENDING_SUBMIT` $\rightarrow$ `OPEN` $\rightarrow$ `PARTIALLY_FILLED` $\rightarrow$ `FILLED` / `CANCELED`
+  - [ ] Record simulated trades, fees, and portfolio updates locally for strategy evaluation
+- [ ] **Phase 6B: Production Routing & OMS Hardening**
   - [ ] Implement **Maker-First Strategy:** Place Post-Only limit orders at bid/ask to capture lower fees/rebates
   - [ ] Implement Order Timeout Guard: If Post-Only order remains unfilled after $T$ seconds and signal alpha remains high, dynamically route as a Taker order
-- [ ] **Order Management System (OMS)**
-  - [ ] Implement async state machine tracking full lifecycle: `PENDING_SUBMIT` $\rightarrow$ `OPEN` $\rightarrow$ `PARTIALLY_FILLED` $\rightarrow$ `FILLED` / `CANCELED`
-  - [ ] Implement automated order timeouts and stale order cancellation routines
   - [ ] Build API reconnection recovery logic to reconcile local order state with exchange account state
 
 ---
