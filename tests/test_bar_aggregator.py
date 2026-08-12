@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.data.exchanges import MarketTick
-from src.storage.bar_aggregator import BarAggregator
+from src.storage.bar_aggregator import BarAggregator, build_multi_interval_bars
 from src.storage.market_store import MarketStore
 
 
@@ -41,3 +41,25 @@ def test_bar_aggregator_builds_one_minute_bars(tmp_path: Path) -> None:
     assert bars[0].low == 99.0
     assert bars[0].close == 99.5
     assert bars[0].volume == 3.0
+
+
+def test_build_multi_interval_bars_returns_all_supported_intervals(tmp_path: Path) -> None:
+    """The multi-interval helper should return bars for each supported interval size."""
+    store = MarketStore(database_path=tmp_path / "multi.db")
+    tick = MarketTick(
+        exchange="firi",
+        symbol="BTC/NOK",
+        timestamp=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        bid=100.0,
+        ask=101.0,
+        last=100.5,
+        volume=1.0,
+        raw={"source": "test"},
+    )
+    store.save_tick(tick)
+
+    multi_bars = build_multi_interval_bars(store=store, limit=10)
+
+    assert set(multi_bars) == {1, 60, 300, 1800, 3600, 86400}
+    assert len(multi_bars[60]) == 1
+    assert len(multi_bars[86400]) == 1

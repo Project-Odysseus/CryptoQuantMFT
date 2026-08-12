@@ -72,3 +72,12 @@ class BarAggregator:
     def _bucket_key(self, timestamp: datetime) -> int:
         epoch = int(timestamp.replace(tzinfo=timezone.utc).timestamp())
         return (epoch // self.interval_seconds) * self.interval_seconds
+
+
+def build_multi_interval_bars(store: MarketStore, limit: int | None = None) -> dict[int, list[OHLCVBar]]:
+    """Build OHLCV bars for every supported interval from the same tick history."""
+    intervals = sorted(BarAggregator.SUPPORTED_INTERVALS)
+    return {
+        interval: BarAggregator(store=store, interval_seconds=interval).build_bars(limit=limit)
+        for interval in intervals
+    }
