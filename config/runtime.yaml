@@ -1,0 +1,4 @@
+app_name: CryptoQuantMFT
+log_level: INFO
+database_path: data/cryptoquant.db
+eur_nok_fallback: 11.50
