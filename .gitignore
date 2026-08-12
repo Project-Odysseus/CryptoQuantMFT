@@ -3,6 +3,13 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Data artifacts and runtime outputs
+*.parquet
+*.db
+*.sqlite
+*.sqlite3
+logs/
+
 # C extensions
 *.so
 
