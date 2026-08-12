@@ -12,6 +12,9 @@ from typing import Any
 
 from config import settings
 
+if False:  # pragma: no cover
+    from src.storage.market_store import MarketStore
+
 
 @dataclass(slots=True)
 class MarketTick:
@@ -30,10 +33,11 @@ class MarketTick:
 class ExchangeConnector(ABC):
     """Base interface for exchange-specific live data adapters."""
 
-    def __init__(self, name: str, symbol: str) -> None:
+    def __init__(self, name: str, symbol: str, store: "MarketStore | None" = None) -> None:
         self.name = name
         self.symbol = symbol
         self._connected = False
+        self.store = store
 
     @abstractmethod
     async def connect(self) -> None:
@@ -75,12 +79,17 @@ class ExchangeConnector(ABC):
             payload = response.read().decode("utf-8")
             return json.loads(payload)
 
+    def _persist_tick(self, tick: MarketTick) -> None:
+        if self.store is None:
+            return
+        self.store.save_tick(tick)
+
 
 class MockExchangeConnector(ExchangeConnector):
     """Simple in-memory connector used for offline development and tests."""
 
-    def __init__(self, symbol: str = "BTC/NOK") -> None:
-        super().__init__(name="mock", symbol=symbol)
+    def __init__(self, symbol: str = "BTC/NOK", store: "MarketStore | None" = None) -> None:
+        super().__init__(name="mock", symbol=symbol, store=store)
 
     async def connect(self) -> None:
         self._connected = True
@@ -93,7 +102,7 @@ class MockExchangeConnector(ExchangeConnector):
             raise RuntimeError("connector is not connected")
 
         now = datetime.now(timezone.utc)
-        return MarketTick(
+        tick = MarketTick(
             exchange=self.name,
             symbol=self.symbol,
             timestamp=now,
@@ -103,13 +112,20 @@ class MockExchangeConnector(ExchangeConnector):
             volume=1.25,
             raw={"source": "mock"},
         )
+        self._persist_tick(tick)
+        return tick
 
 
 class FiriConnector(ExchangeConnector):
     """Connector for the Firi exchange using the configured API key."""
 
-    def __init__(self, symbol: str = "BTC/NOK", api_key: str | None = None) -> None:
-        super().__init__(name="firi", symbol=symbol)
+    def __init__(
+        self,
+        symbol: str = "BTC/NOK",
+        api_key: str | None = None,
+        store: "MarketStore | None" = None,
+    ) -> None:
+        super().__init__(name="firi", symbol=symbol, store=store)
         self.api_key = api_key or settings.firi_api_key
 
     async def connect(self) -> None:
@@ -146,7 +162,7 @@ class FiriConnector(ExchangeConnector):
             if market_id == pair_code:
                 last_price = float(market.get("last", 0) or 0)
                 volume = float(market.get("todays_volume", 0) or 0)
-                return MarketTick(
+                tick = MarketTick(
                     exchange=self.name,
                     symbol=self.symbol,
                     timestamp=datetime.now(timezone.utc),
@@ -156,6 +172,8 @@ class FiriConnector(ExchangeConnector):
                     volume=volume,
                     raw={"source": "firi", "market": market},
                 )
+                self._persist_tick(tick)
+                return tick
 
         raise ValueError(f"Unsupported Firi symbol: {self.symbol}")
 
@@ -171,8 +189,9 @@ class KrakenConnector(ExchangeConnector):
         symbol: str = "BTC/EUR",
         api_key: str | None = None,
         api_secret: str | None = None,
+        store: "MarketStore | None" = None,
     ) -> None:
-        super().__init__(name="kraken", symbol=symbol)
+        super().__init__(name="kraken", symbol=symbol, store=store)
         self.api_key = api_key or settings.kraken_api_key
         self.api_secret = api_secret or settings.kraken_secret
 
@@ -215,7 +234,7 @@ class KrakenConnector(ExchangeConnector):
         bid = float(market.get("b", [0, 0, 0])[0])
         last = float(market.get("c", [0, 0, 0])[0])
         volume = float(market.get("v", [0, 0])[1])
-        return MarketTick(
+        tick = MarketTick(
             exchange=self.name,
             symbol=self.symbol,
             timestamp=datetime.now(timezone.utc),
@@ -225,6 +244,8 @@ class KrakenConnector(ExchangeConnector):
             volume=volume,
             raw={"source": "kraken", "market": market},
         )
+        self._persist_tick(tick)
+        return tick
 
     def _normalize_pair_code(self, symbol: str) -> str:
         symbol_map = {
