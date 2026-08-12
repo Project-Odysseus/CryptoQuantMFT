@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
+from src.storage.market_store import MarketStore
 
 
 @pytest.mark.asyncio
@@ -21,6 +22,19 @@ async def test_mock_exchange_connector_fetch_snapshot() -> None:
     assert snapshot.last is not None
 
     await connector.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_mock_connector_persists_to_store(tmp_path: pytest.TempPathFactory) -> None:
+    """The connector should persist snapshots when a store is supplied."""
+    store = MarketStore(database_path=tmp_path / "persisted.db")
+    connector = MockExchangeConnector(symbol="BTC/NOK", store=store)
+
+    await connector.connect()
+    await connector.fetch_snapshot()
+
+    rows = store.list_ticks(limit=5)
+    assert len(rows) == 1
 
 
 @pytest.mark.asyncio
