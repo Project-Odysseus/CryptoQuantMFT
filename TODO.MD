@@ -38,8 +38,8 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [ ] Build real-time streaming aggregator converting raw tick/orderbook streams into 1-second, 1-minute, 5-minute, and 1-hour OHLCV candle bars
 - [x] **Storage Infrastructure**
   - [x] Setup `DuckDB` / `Parquet` pipeline for high-compression, microsecond-timestamp tick and bar storage (implemented a local SQLite-backed snapshot store as the initial persistence layer)
-  - [ ] Build Data Normalizer to align non-synchronous timestamps across exchanges into uniform time-bar snapshots
-  - [ ] Create order book reconstruction module (computing mid-price, micro-price, bid-ask spread, L2 VWAP depth)
+  - [x] Build Data Normalizer to align non-synchronous timestamps across exchanges into uniform time-bar snapshots
+  - [x] Create order book reconstruction module (computing mid-price, micro-price, bid-ask spread, L2 VWAP depth)
 
 ---
 
