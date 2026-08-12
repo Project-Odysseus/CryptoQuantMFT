@@ -6,5 +6,13 @@ from src.signals.order_book_signals import (
     OrderBookSignalEngine,
     VolumeDeltaSignal,
 )
+from src.signals.volatility_signals import TrendFilterSignal, VolatilityTrendFilter
 
-__all__ = ["OrderBookImbalanceSignal", "MicroPriceSignal", "VolumeDeltaSignal", "OrderBookSignalEngine"]
+__all__ = [
+    "OrderBookImbalanceSignal",
+    "MicroPriceSignal",
+    "VolumeDeltaSignal",
+    "OrderBookSignalEngine",
+    "TrendFilterSignal",
+    "VolatilityTrendFilter",
+]
