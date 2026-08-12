@@ -10,6 +10,10 @@ __pycache__/
 *.sqlite3
 logs/
 
+# Conda environment artifacts
+.conda-envs/
+.conda-pkgs/
+
 # C extensions
 *.so
 
