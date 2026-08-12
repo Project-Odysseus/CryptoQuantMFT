@@ -1,0 +1,38 @@
+### AI Assistant System Instructions: Quantitative Trading Engine
+
+You must strictly adhere to the following software development principles for every code modification, generation, or refactor within this workspace.
+
+### 1. Version Control & Atomic Commit Rules 🪵
+* **Promote Micro-Commits:** Design code increments so they represent exactly one logical task or feature.
+* **Do Not Over-Generate:** Never dump massive multi-file blocks at once. Break complex modules down into small, iterative steps.
+* **Proactive Commit Messages:** When completing a distinct function, class interface, or fix, explicitly suggest a concise Git commit message matching standard conventions (e.g., `feat: ...`, `refactor: ...`, `fix: ...`).
+* **Commit Trailer Preference:** When creating commits, do not add the `Co-authored-by:` trailer to the commit message.
+* **Require Explicit Push Permission:** All changes remain local until explicitly instructed to push. Stage and commit local changes after each logical task.
+
+### 2. Code Simplification & Refactoring Rules 🧹
+* **Prioritize Simplicity:** Write straightforward, elegant Python. Avoid premature abstraction or unnecessary design patterns.
+* **Aggressive Refactoring:** Continuously break long methods into small, single-purpose subroutines (Single Responsibility Principle).
+* **Scannability:** Ensure clean whitespace partitioning, intuitive variable names, and standard PEP 8 formatting.
+
+### 3. Architectural & Code Standards 🏛️
+* **Object-Oriented & Modular Design:** Decouple components into distinct modules: `data/` (collectors/resamplers), `signals/` (alpha generation), `risk/` (risk controls), `execution/` (OMS/SOR), and `storage/` (database).
+* **Strict Type Hinting:** Every function and class method declaration MUST use full Python type definitions (`typing`, `pydantic`, primitive types, structural classes).
+* **Concise Docstrings:** Provide Google-style docstrings for all classes and public methods, documenting the *why* rather than just the *what*.
+
+### 4. Performance & Mathematical Optimization ⚡
+* **Async Concurrency:** Ensure all WebSocket listeners, polling loops, and network calls use asynchronous `asyncio` / `aiohttp` patterns without blocking the main event loop.
+* **Multi-Timeframe Vectorization:** Use Pandas/Polars vectorized matrix calculations for historical candle bars (1m, 5m, 1h) in Tier 1 research, and NumPy/async loops for real-time L2 tick signal generation in Tier 2.
+* **Log-Returns & Cointegration:** Compute price movements using logarithmic returns $\ln(P_t / P_{t-1})$ for numerical stability in statistical arbitrage and mean-reversion modeling.
+
+### 5. Financial Precision & Execution Guardrails 📊
+* **Dual Precision Standard:**
+  * Use `decimal.Decimal` for **Accounting, Cash Balances, Order Sizes, and API Payloads** to prevent binary rounding errors.
+  * Use `float` / `np.float64` inside vectorized matrix calculations for maximum execution speed.
+* **Smart Order Routing (Maker Preference):** Prioritize Maker (Post-Only) limit orders to minimize fee drag. Enforce an execution timeout buffer before falling back to Taker orders if signal alpha remains high.
+* **VWAP Order Book Depth Evaluation:** Never evaluate trade viability using top-of-book (Level 1) prices alone. Always calculate the Volume-Weighted Average Price (VWAP) across the L2 order book depth array for target order sizes.
+* **Realistic Slippage & Fee Penalties:** Backtesting and paper trading simulation engines must enforce Maker/Taker fee deductions and penalize fills based on available liquidity.
+
+### 6. Operational Resiliency & Replayability 🛡️
+* **Defensive Circuit Breakers:** Wrap API connections and strategy handlers in isolated `try/except` blocks. An API failure on one exchange must fail gracefully without crashing the core execution loop.
+* **Deterministic Backtesting:** Ensure timestamps, tick processing, and event logs are strictly ordered to guarantee 100% reproducible backtests without look-ahead bias.
+* **Offline Mocking Support:** Data feed handlers and exchange adapters should support offline replay using saved JSON/Parquet payload fixtures for unit testing.
