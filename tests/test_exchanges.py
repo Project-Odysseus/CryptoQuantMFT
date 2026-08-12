@@ -6,6 +6,7 @@ import pytest
 
 from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
 from src.storage.market_store import MarketStore
+from src.storage.streaming_aggregator import StreamingAggregator
 
 
 @pytest.mark.asyncio
@@ -35,6 +36,19 @@ async def test_mock_connector_persists_to_store(tmp_path: pytest.TempPathFactory
 
     rows = store.list_ticks(limit=5)
     assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_mock_connector_updates_streaming_aggregator(tmp_path: pytest.TempPathFactory) -> None:
+    """The connector should feed the streaming aggregator when one is supplied."""
+    store = MarketStore(database_path=tmp_path / "aggregate.db")
+    aggregator = StreamingAggregator(store=store, interval_seconds=60)
+    connector = MockExchangeConnector(symbol="BTC/NOK", store=store, aggregator=aggregator)
+
+    await connector.connect()
+    await connector.fetch_snapshot()
+
+    assert ("mock", "BTC/NOK") in aggregator.bars
 
 
 @pytest.mark.asyncio

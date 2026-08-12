@@ -8,12 +8,13 @@ import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from config import settings
 
-if False:  # pragma: no cover
+if TYPE_CHECKING:  # pragma: no cover
     from src.storage.market_store import MarketStore
+    from src.storage.streaming_aggregator import StreamingAggregator
 
 
 @dataclass(slots=True)
@@ -33,11 +34,18 @@ class MarketTick:
 class ExchangeConnector(ABC):
     """Base interface for exchange-specific live data adapters."""
 
-    def __init__(self, name: str, symbol: str, store: "MarketStore | None" = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        symbol: str,
+        store: "MarketStore | None" = None,
+        aggregator: "StreamingAggregator | None" = None,
+    ) -> None:
         self.name = name
         self.symbol = symbol
         self._connected = False
         self.store = store
+        self.aggregator = aggregator
 
     @abstractmethod
     async def connect(self) -> None:
@@ -84,12 +92,30 @@ class ExchangeConnector(ABC):
             return
         self.store.save_tick(tick)
 
+    def _update_aggregator(self, tick: MarketTick) -> None:
+        if self.aggregator is None:
+            return
+        self.aggregator.update(
+            exchange=tick.exchange,
+            symbol=tick.symbol,
+            timestamp=tick.timestamp,
+            bid=tick.bid,
+            ask=tick.ask,
+            last=tick.last if tick.last is not None else tick.bid,
+            volume=tick.volume if tick.volume is not None else 0.0,
+        )
+
 
 class MockExchangeConnector(ExchangeConnector):
     """Simple in-memory connector used for offline development and tests."""
 
-    def __init__(self, symbol: str = "BTC/NOK", store: "MarketStore | None" = None) -> None:
-        super().__init__(name="mock", symbol=symbol, store=store)
+    def __init__(
+        self,
+        symbol: str = "BTC/NOK",
+        store: "MarketStore | None" = None,
+        aggregator: "StreamingAggregator | None" = None,
+    ) -> None:
+        super().__init__(name="mock", symbol=symbol, store=store, aggregator=aggregator)
 
     async def connect(self) -> None:
         self._connected = True
@@ -113,6 +139,7 @@ class MockExchangeConnector(ExchangeConnector):
             raw={"source": "mock"},
         )
         self._persist_tick(tick)
+        self._update_aggregator(tick)
         return tick
 
 
@@ -124,8 +151,9 @@ class FiriConnector(ExchangeConnector):
         symbol: str = "BTC/NOK",
         api_key: str | None = None,
         store: "MarketStore | None" = None,
+        aggregator: "StreamingAggregator | None" = None,
     ) -> None:
-        super().__init__(name="firi", symbol=symbol, store=store)
+        super().__init__(name="firi", symbol=symbol, store=store, aggregator=aggregator)
         self.api_key = api_key or settings.firi_api_key
 
     async def connect(self) -> None:
@@ -173,6 +201,7 @@ class FiriConnector(ExchangeConnector):
                     raw={"source": "firi", "market": market},
                 )
                 self._persist_tick(tick)
+                self._update_aggregator(tick)
                 return tick
 
         raise ValueError(f"Unsupported Firi symbol: {self.symbol}")
@@ -190,8 +219,9 @@ class KrakenConnector(ExchangeConnector):
         api_key: str | None = None,
         api_secret: str | None = None,
         store: "MarketStore | None" = None,
+        aggregator: "StreamingAggregator | None" = None,
     ) -> None:
-        super().__init__(name="kraken", symbol=symbol, store=store)
+        super().__init__(name="kraken", symbol=symbol, store=store, aggregator=aggregator)
         self.api_key = api_key or settings.kraken_api_key
         self.api_secret = api_secret or settings.kraken_secret
 
@@ -245,6 +275,7 @@ class KrakenConnector(ExchangeConnector):
             raw={"source": "kraken", "market": market},
         )
         self._persist_tick(tick)
+        self._update_aggregator(tick)
         return tick
 
     def _normalize_pair_code(self, symbol: str) -> str:
