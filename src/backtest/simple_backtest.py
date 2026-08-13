@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from src.backtest.costs import CostModel, build_default_cost_model
+from src.backtest.costs import CostModel
 
 
 StrategyFn = Callable[[Sequence[Any], int, Any], float | int | str | None]
@@ -90,7 +90,7 @@ class SimpleBacktester:
         current_position = 0.0
         entry_size = 1.0
 
-        cost_model = self.cost_model or build_default_cost_model(_get_exchange(bars[0]))
+        cost_model = self.cost_model
 
         for index in range(1, len(bars)):
             history = list(bars[: index + 1])
@@ -260,7 +260,9 @@ class SimpleBacktester:
             return -1
         return 0
 
-    def _apply_cost(self, price: float, *, side: str, cost_model: CostModel) -> float:
+    def _apply_cost(self, price: float, *, side: str, cost_model: CostModel | None) -> float:
+        if cost_model is None:
+            return price
         price_with_fees = cost_model.apply_trade_cost(price, side=side, role="taker", size=1.0)
         return cost_model.apply_fx_cost(price_with_fees, side=side, size=1.0)
 

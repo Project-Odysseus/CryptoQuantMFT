@@ -10,6 +10,7 @@ from pathlib import Path
 from config import settings
 from src.backtest import BacktestConfig, StrategyPlotter, compare_backtests, run_backtest
 from src.data.exchanges import FiriConnector, KrakenConnector
+from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
 from src.storage.bar_aggregator import OHLCVBar
 from src.storage.market_store import MarketStore
@@ -61,9 +62,14 @@ def build_demo_bars() -> list[OHLCVBar]:
     return bars
 
 
-def run_demo_backtest(output_dir: str | Path = "plots") -> None:
+def build_kraken_bars(symbol: str = "BTC/EUR", count: int = 200) -> list[OHLCVBar]:
+    """Fetch recent Kraken OHLCV bars for the configured backtest."""
+    return fetch_kraken_ohlcv(symbol=symbol, interval_seconds=60, count=count)
+
+
+def run_demo_backtest(output_dir: str | Path = "plots", bars: list[OHLCVBar] | None = None) -> None:
     """Run a small synthetic backtest and generate equity/trade plots."""
-    bars = build_demo_bars()
+    bars = bars or build_demo_bars()
     config = BacktestConfig(strategy_name="moving_average_crossover", include_costs=False)
     result = run_backtest(bars, config=config)
 
@@ -101,6 +107,9 @@ def main() -> None:
     parser.add_argument("--strategy", default="moving_average_crossover", help="Name of the strategy to run")
     parser.add_argument("--include-costs", action="store_true", help="Apply the fee and FX cost model")
     parser.add_argument("--compare-costs", action="store_true", help="Compare baseline and cost-adjusted backtests")
+    parser.add_argument("--use-kraken-data", action="store_true", help="Backtest on recent Kraken OHLCV bars instead of synthetic demo bars")
+    parser.add_argument("--kraken-symbol", default="BTC/EUR", help="Kraken symbol to fetch, e.g. BTC/EUR")
+    parser.add_argument("--kraken-bars", type=int, default=200, help="Number of Kraken OHLCV bars to fetch")
     parser.add_argument("--taker-fee", type=float, default=0.4, help="Approximate taker fee as a percentage")
     parser.add_argument("--maker-fee", type=float, default=0.25, help="Approximate maker fee as a percentage")
     parser.add_argument("--fx-spread-bps", type=float, default=10.0, help="Approximate FX spread in bps")
@@ -111,6 +120,10 @@ def main() -> None:
     logger.info("log_level={}", settings.log_level)
 
     if args.demo_backtest:
+        bars = build_demo_bars()
+        if args.use_kraken_data:
+            bars = build_kraken_bars(symbol=args.kraken_symbol, count=args.kraken_bars)
+
         config = BacktestConfig(
             strategy_name=args.strategy,
             include_costs=args.include_costs,
@@ -119,23 +132,25 @@ def main() -> None:
             fx_spread_bps=args.fx_spread_bps,
         )
         if args.compare_costs:
-            comparison = compare_backtests(build_demo_bars(), config=config)
+            comparison = compare_backtests(bars, config=config)
             logger.info(
-                "demo_backtest_compare strategy={} baseline_return={} cost_return={} equity_delta={}",
+                "demo_backtest_compare strategy={} baseline_return={} cost_return={} equity_delta={} bars={}",
                 config.strategy_name,
                 comparison.baseline.total_return,
                 comparison.with_costs.total_return,
                 comparison.equity_delta,
+                len(bars),
             )
         else:
-            result = run_backtest(build_demo_bars(), config=config)
+            result = run_backtest(bars, config=config)
             logger.info(
-                "demo_backtest_complete strategy={} include_costs={} total_return={} trades={} final_equity={}",
+                "demo_backtest_complete strategy={} include_costs={} total_return={} trades={} final_equity={} bars={}",
                 config.strategy_name,
                 config.include_costs,
                 result.total_return,
                 result.trades,
                 result.final_equity,
+                len(bars),
             )
         return
 
