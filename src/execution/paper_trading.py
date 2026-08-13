@@ -133,6 +133,8 @@ class PaperTradingEngine:
                     current_bar=bar,
                     bar_index=index,
                     signal_side="buy",
+                    current_notional=max(0.0, position_size * price),
+                    open_positions=1 if position_size != 0.0 else 0,
                 )
                 if not risk_decision.allow_entry:
                     pass
@@ -151,6 +153,8 @@ class PaperTradingEngine:
                     current_bar=bar,
                     bar_index=index,
                     signal_side="sell",
+                    current_notional=max(0.0, position_size * price),
+                    open_positions=1 if position_size != 0.0 else 0,
                 )
                 if not risk_decision.allow_entry:
                     pass
@@ -276,6 +280,8 @@ class PaperTradingEngine:
         current_bar: Any | None = None,
         bar_index: int | None = None,
         signal_side: str | None = None,
+        current_notional: float = 0.0,
+        open_positions: int = 0,
     ) -> Any:
         if self.risk_manager is None:
             return type("RiskDecision", (), {"allow_entry": True, "position_size": self.default_order_size})()
@@ -287,6 +293,8 @@ class PaperTradingEngine:
             current_bar=current_bar,
             bar_index=bar_index,
             signal_side=signal_side,
+            current_notional=current_notional,
+            open_positions=open_positions,
         )
 
     def _apply_cost(self, price: float, *, side: str, size: float) -> float:
