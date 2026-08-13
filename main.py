@@ -16,6 +16,7 @@ from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
 from src.storage.bar_aggregator import OHLCVBar
 from src.storage.market_store import MarketStore
+from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
 
 
@@ -125,12 +126,14 @@ def run_paper_trading(bars: list[OHLCVBar], signals: list[float | int | str | No
             kelly_window=20,
         )
     )
+    trade_logger = TradeLogger(database_path="data/trades.db")
     engine = PaperTradingEngine(
         initial_cash=1000.0,
         default_order_size=1.0,
         partial_fill_fraction=1.0,
         max_order_lifetime_bars=3,
         risk_manager=risk_manager,
+        trade_logger=trade_logger,
     )
     result = engine.run(bars, signals)
     final_equity = result.portfolio_history[-1].equity if result.portfolio_history else 1000.0
@@ -143,6 +146,31 @@ def run_paper_trading(bars: list[OHLCVBar], signals: list[float | int | str | No
         result.portfolio_history[-1].cash if result.portfolio_history else 1000.0,
         result.portfolio_history[-1].position_size if result.portfolio_history else 0.0,
     )
+
+
+def print_trade_report(limit: int = 10) -> None:
+    """Print the most recent trades and equity snapshots from the SQLite logger."""
+    logger = TradeLogger(database_path="data/trades.db")
+    trades = logger.list_trades(limit=limit)
+    snapshots = logger.list_equity_snapshots(limit=limit)
+
+    print(f"Recent trades (last {len(trades)}):")
+    if not trades:
+        print("  (none)")
+    else:
+        for trade in trades:
+            print(
+                f"  {trade['timestamp']} | {trade['side']} {trade['pair']} @ {trade['price']:.4f} size={trade['size']:.4f} fee={trade['fee']:.4f}"
+            )
+
+    print(f"\nRecent equity snapshots (last {len(snapshots)}):")
+    if not snapshots:
+        print("  (none)")
+    else:
+        for snapshot in snapshots:
+            print(
+                f"  {snapshot['timestamp']} | equity={snapshot['equity']:.4f} cash={snapshot['cash']:.4f} position={snapshot['position_size']:.4f}"
+            )
 
 
 def main() -> None:
@@ -160,11 +188,17 @@ def main() -> None:
     parser.add_argument("--taker-fee", type=float, default=0.4, help="Approximate taker fee as a percentage")
     parser.add_argument("--maker-fee", type=float, default=0.25, help="Approximate maker fee as a percentage")
     parser.add_argument("--fx-spread-bps", type=float, default=10.0, help="Approximate FX spread in bps")
+    parser.add_argument("--report", action="store_true", help="Print recent trades and equity snapshots from the SQLite logger")
+    parser.add_argument("--report-limit", type=int, default=10, help="Number of recent rows to print in the report")
     args = parser.parse_args()
 
     logger.info("CryptoQuantMFT startup complete")
     logger.info("database_path={}", settings.database_path)
     logger.info("log_level={}", settings.log_level)
+
+    if args.report:
+        print_trade_report(limit=args.report_limit)
+        return
 
     if args.demo_backtest:
         bars = build_demo_bars()

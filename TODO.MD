@@ -116,12 +116,10 @@ A production-grade, event-driven quantitative trading system in Python designed 
 ---
 
 ## Phase 7: Record Keeper, Trade Analytics & Telemetry
-- [ ] **Database Trade Logger (DuckDB / SQLite)**
-  - [ ] Design relational database schema:
-    - [ ] `trades` (id, timestamp, exchange, pair, side, price, amount, fee, role_maker_taker, latency_ms)
-    - [ ] `signals` (id, timestamp, z_score, obi_value, lead_lag_delta, atr, model_confidence)
-    - [ ] `equity_snapshots` (timestamp, total_equity_nok, firi_fiat, firi_crypto, kraken_fiat, kraken_crypto)
-    - [ ] `errors` (timestamp, error_code, component, stack_trace)
+- [x] **Database Trade Logger (SQLite-backed trade/equity persistence)**
+  - [x] Implement an initial SQLite logger for trades and equity snapshots
+  - [x] Add a CLI report command to print recent trades and equity snapshots from the logger
+  - [ ] Design a fuller relational schema for signals, errors, and richer portfolio columns
 - [ ] **Performance Analytics & Review Script**
   - [ ] Script to plot cumulative equity curve vs. Buy-and-Hold Bitcoin benchmark
   - [ ] Calculate trade duration distribution, execution slippage vs. expected VWAP, and alpha decay over time
