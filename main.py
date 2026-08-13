@@ -9,11 +9,12 @@ from pathlib import Path
 
 from config import settings
 from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, run_backtest, moving_average_crossover_strategy
-from src.data.exchanges import FiriConnector, KrakenConnector
+from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
 from src.execution import PaperTradingEngine
 from src.risk.controls import RiskControlConfig, RiskManager
 from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
+from src.runtime import RuntimeOrchestrator
 from src.storage.bar_aggregator import OHLCVBar
 from src.storage.market_store import MarketStore
 from src.storage.order_book import OrderBookSnapshot
@@ -42,6 +43,69 @@ async def run_pipeline(iterations: int = 3, interval_seconds: float = 1.0) -> No
         )
         if index < iterations - 1:
             await asyncio.sleep(interval_seconds)
+
+
+async def run_runtime_orchestrator(
+    *,
+    mode: str = "paper",
+    iterations: int = 3,
+    interval_seconds: float = 1.0,
+    use_mock_connector: bool = False,
+) -> None:
+    """Run the runtime orchestrator over a simple market-data pipeline."""
+    store = MarketStore(database_path=settings.database_path)
+    pipeline = MarketDataPipeline(store=store, interval_seconds=60)
+
+    if use_mock_connector:
+        pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))
+    else:
+        pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
+        if settings.firi_api_key:
+            pipeline.add_connector(FiriConnector(symbol="BTC/NOK"))
+
+    risk_manager = RiskManager(
+        RiskControlConfig(
+            max_drawdown_pct=0.25,
+            max_volatility_pct=0.10,
+            risk_per_trade_pct=0.02,
+            max_position_size=1.0,
+            volatility_window=10,
+            kelly_fraction=0.5,
+            kelly_window=20,
+        )
+    )
+    trade_logger = TradeLogger(database_path=settings.database_path)
+    engine = PaperTradingEngine(
+        initial_cash=1000.0,
+        default_order_size=1.0,
+        partial_fill_fraction=1.0,
+        max_order_lifetime_bars=3,
+        risk_manager=risk_manager,
+        trade_logger=trade_logger,
+    )
+    orchestrator = RuntimeOrchestrator(
+        pipeline=pipeline,
+        execution_engine=engine,
+        strategy=moving_average_crossover_strategy(short_window=3, long_window=6),
+        mode=mode,
+        interval_seconds=interval_seconds,
+    )
+    await orchestrator.run_loop(iterations=iterations, interval_seconds=interval_seconds)
+
+    last_cycle = orchestrator.last_cycle
+    if last_cycle is None or last_cycle.execution_result is None:
+        logger.info("runtime_complete mode={} iterations={} completed=0", mode, iterations)
+        return
+
+    portfolio_history = last_cycle.execution_result.portfolio_history
+    final_equity = portfolio_history[-1].equity if portfolio_history else 1000.0
+    logger.info(
+        "runtime_complete mode={} iterations={} trades={} final_equity={}",
+        mode,
+        iterations,
+        len(last_cycle.execution_result.trades),
+        final_equity,
+    )
 
 
 def build_demo_bars() -> list[OHLCVBar]:
@@ -253,6 +317,10 @@ def main() -> None:
     parser.add_argument("--report", action="store_true", help="Print recent trades and equity snapshots from the SQLite logger")
     parser.add_argument("--report-limit", type=int, default=10, help="Number of recent rows to print in the report")
     parser.add_argument("--l2-simulator", action="store_true", help="Run the lightweight event-driven L2 simulator over synthetic snapshots")
+    parser.add_argument("--runtime", choices=["paper", "live_dry_run", "live"], help="Run the runtime orchestrator with the requested mode")
+    parser.add_argument("--runtime-iterations", type=int, default=3, help="Number of runtime cycles to execute")
+    parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
+    parser.add_argument("--use-mock-connector", action="store_true", help="Use the mock exchange connector for the runtime loop")
     args = parser.parse_args()
 
     logger.info("CryptoQuantMFT startup complete")
@@ -265,6 +333,17 @@ def main() -> None:
 
     if args.l2_simulator:
         run_l2_simulation()
+        return
+
+    if args.runtime:
+        asyncio.run(
+            run_runtime_orchestrator(
+                mode=args.runtime,
+                iterations=args.runtime_iterations,
+                interval_seconds=args.runtime_interval,
+                use_mock_connector=args.use_mock_connector,
+            )
+        )
         return
 
     if args.demo_backtest:

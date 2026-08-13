@@ -26,6 +26,20 @@ async def test_mock_exchange_connector_fetch_snapshot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mock_exchange_connector_trends_upward() -> None:
+    """The mock connector should produce a small deterministic trend for strategy tests."""
+    connector = MockExchangeConnector(symbol="BTC/NOK")
+
+    await connector.connect()
+    first = await connector.fetch_snapshot()
+    second = await connector.fetch_snapshot()
+
+    assert first.last < second.last
+
+    await connector.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_mock_connector_persists_to_store(tmp_path: pytest.TempPathFactory) -> None:
     """The connector should persist snapshots when a store is supplied."""
     store = MarketStore(database_path=tmp_path / "persisted.db")
