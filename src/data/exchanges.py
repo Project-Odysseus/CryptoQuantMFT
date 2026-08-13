@@ -116,6 +116,8 @@ class MockExchangeConnector(ExchangeConnector):
         aggregator: "StreamingAggregator | None" = None,
     ) -> None:
         super().__init__(name="mock", symbol=symbol, store=store, aggregator=aggregator)
+        self._last_price = 100.0
+        self._drift = 0.25
 
     async def connect(self) -> None:
         self._connected = True
@@ -128,15 +130,18 @@ class MockExchangeConnector(ExchangeConnector):
             raise RuntimeError("connector is not connected")
 
         now = datetime.now(timezone.utc)
+        self._last_price += self._drift
+        bid = self._last_price - 0.2
+        ask = self._last_price + 0.2
         tick = MarketTick(
             exchange=self.name,
             symbol=self.symbol,
             timestamp=now,
-            bid=100.0,
-            ask=101.0,
-            last=100.5,
+            bid=bid,
+            ask=ask,
+            last=self._last_price,
             volume=1.25,
-            raw={"source": "mock"},
+            raw={"source": "mock", "price": self._last_price},
         )
         self._persist_tick(tick)
         self._update_aggregator(tick)
