@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from src.data.exchanges import MockExchangeConnector
@@ -23,3 +25,27 @@ async def test_runtime_orchestrator_runs_cycle_and_collects_results() -> None:
     assert len(cycle.signals) == 1
     assert orchestrator.last_cycle is cycle
     assert len(orchestrator.history) == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_orchestrator_marks_unhealthy_when_startup_checks_fail() -> None:
+    class FailingConnector:
+        name = "failing"
+
+        async def connect(self) -> None:
+            raise RuntimeError("connector unavailable")
+
+        async def disconnect(self) -> None:
+            return None
+
+        async def fetch_snapshot(self) -> None:
+            return None
+
+    pipeline = SimpleNamespace(connectors=[FailingConnector()])
+    orchestrator = RuntimeOrchestrator(pipeline=pipeline, mode="paper")
+
+    healthy = await orchestrator.run_startup_checks()
+
+    assert healthy is False
+    assert orchestrator.health.healthy is False
+    assert orchestrator.health.startup_checks_passed is False

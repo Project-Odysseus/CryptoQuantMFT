@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import signal
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -90,7 +91,37 @@ async def run_runtime_orchestrator(
         mode=mode,
         interval_seconds=interval_seconds,
     )
-    await orchestrator.run_loop(iterations=iterations, interval_seconds=interval_seconds)
+
+    loop = asyncio.get_running_loop()
+
+    def _request_shutdown(signum: int) -> None:
+        logger.warning("runtime_shutdown_signal signal={}", signum)
+        orchestrator.request_shutdown(reason=f"signal:{signum}")
+
+    def _install_signal_handlers() -> None:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(signum, lambda current_signum=signum: _request_shutdown(current_signum))
+            except (AttributeError, NotImplementedError):
+                signal.signal(signum, lambda current_signum, _frame: _request_shutdown(current_signum))
+
+    def _remove_signal_handlers() -> None:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.remove_signal_handler(signum)
+            except (AttributeError, NotImplementedError):
+                pass
+
+    _install_signal_handlers()
+    try:
+        await orchestrator.run_loop(iterations=iterations, interval_seconds=interval_seconds)
+    except (asyncio.CancelledError, KeyboardInterrupt) as exc:
+        orchestrator.request_shutdown(reason="interrupted")
+        logger.warning("runtime_interrupted error={}", exc)
+    finally:
+        _remove_signal_handlers()
+
+    logger.info("runtime_health_report {}", orchestrator.get_health_report())
 
     last_cycle = orchestrator.last_cycle
     if last_cycle is None or last_cycle.execution_result is None:

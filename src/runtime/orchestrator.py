@@ -9,6 +9,7 @@ from typing import Any, Callable, Sequence
 from src.backtest.simple_backtest import moving_average_crossover_strategy
 from src.execution.paper_trading import PaperTradingEngine
 from src.risk.controls import RiskManager
+from src.utils.logger import logger
 
 StrategyFn = Callable[[Sequence[Any], int, Any], float | int | str | None]
 
@@ -22,6 +23,19 @@ class RuntimeCycleResult:
     bars: list[Any] = field(default_factory=list)
     signals: list[float] = field(default_factory=list)
     execution_result: Any | None = None
+
+
+@dataclass(slots=True)
+class RuntimeHealth:
+    """Simple health snapshot for the runtime loop."""
+
+    healthy: bool = True
+    startup_checks_passed: bool = False
+    last_error: str | None = None
+    cycles_completed: int = 0
+    shutdown_requested: bool = False
+    shutdown_reason: str | None = None
+    connector_status: dict[str, str] = field(default_factory=dict)
 
 
 class RuntimeOrchestrator:
@@ -50,16 +64,63 @@ class RuntimeOrchestrator:
         self.last_cycle: RuntimeCycleResult | None = None
         self.history: list[RuntimeCycleResult] = []
         self._bar_history: list[Any] = []
+        self.health = RuntimeHealth()
+
+    async def run_startup_checks(self) -> bool:
+        """Validate that the configured connectors can fetch a snapshot before starting the loop."""
+        self.health.startup_checks_passed = False
+        self.health.connector_status = {}
+        connectors = getattr(self.pipeline, "connectors", [])
+        if not connectors:
+            self._mark_unhealthy("no market-data connectors configured")
+            return False
+
+        for connector in connectors:
+            connector_name = getattr(connector, "name", connector.__class__.__name__)
+            try:
+                await connector.connect()
+                await connector.fetch_snapshot()
+                await connector.disconnect()
+            except Exception as exc:  # pragma: no cover - exercised through runtime smoke tests
+                self.health.connector_status[connector_name] = f"error:{exc}"
+                self._mark_unhealthy(f"{connector_name} health check failed: {exc}")
+                logger.warning("runtime_startup_failed connector={} error={}", connector_name, exc)
+                return False
+            self.health.connector_status[connector_name] = "ok"
+
+        self.health.startup_checks_passed = True
+        self.health.healthy = True
+        self.health.last_error = None
+        logger.info("runtime_startup_checks_passed connectors={}", len(connectors))
+        return True
 
     async def run_once(self) -> RuntimeCycleResult:
         """Fetch one batch of market data, derive signals, and execute them."""
-        snapshots = await self.pipeline.run_once()
-        new_bars = self.pipeline.flush_bars()
+        if self.health.shutdown_requested:
+            raise RuntimeError("runtime shutdown requested")
+
+        try:
+            snapshots = await self.pipeline.run_once()
+            new_bars = self.pipeline.flush_bars()
+        except Exception as exc:
+            self._mark_unhealthy(f"pipeline cycle failed: {exc}")
+            self.request_shutdown(reason=f"pipeline_error:{exc}")
+            raise
+
         self._bar_history.extend(new_bars)
         signals = self._build_signals(self._bar_history)
         if self.mode == "live":
+            self._mark_unhealthy("live execution adapters are not implemented")
+            self.request_shutdown(reason="live_not_implemented")
             raise NotImplementedError("Live execution adapters are not implemented yet; use paper or live_dry_run")
-        execution_result = self.execution_engine.run(self._bar_history, signals)
+
+        try:
+            execution_result = self.execution_engine.run(self._bar_history, signals)
+        except Exception as exc:
+            self._mark_unhealthy(f"execution cycle failed: {exc}")
+            self.request_shutdown(reason=f"execution_error:{exc}")
+            raise
+
         cycle = RuntimeCycleResult(
             mode=self.mode,
             snapshots=snapshots,
@@ -69,6 +130,9 @@ class RuntimeOrchestrator:
         )
         self.last_cycle = cycle
         self.history.append(cycle)
+        self.health.cycles_completed += 1
+        self.health.healthy = True
+        self.health.last_error = None
         return cycle
 
     async def run_loop(self, iterations: int = 3, *, interval_seconds: float | None = None) -> list[RuntimeCycleResult]:
@@ -76,11 +140,47 @@ class RuntimeOrchestrator:
         if iterations < 1:
             raise ValueError("iterations must be at least 1")
 
-        for _ in range(iterations):
-            await self.run_once()
-            if _ < iterations - 1:
+        if not await self.run_startup_checks():
+            return self.history
+
+        for index in range(iterations):
+            if self.health.shutdown_requested:
+                logger.warning("runtime_shutdown_requested reason={}", self.health.shutdown_reason)
+                break
+            try:
+                await self.run_once()
+            except (asyncio.CancelledError, KeyboardInterrupt) as exc:
+                self.request_shutdown(reason="interrupted")
+                logger.warning("runtime_interrupted error={}", exc)
+                break
+            except Exception as exc:
+                logger.exception("runtime_cycle_failed error={}", exc)
+                break
+
+            if index < iterations - 1 and not self.health.shutdown_requested:
                 await asyncio.sleep(interval_seconds if interval_seconds is not None else self.interval_seconds)
         return self.history
+
+    def request_shutdown(self, *, reason: str | None = None) -> None:
+        """Request a graceful shutdown for the runtime loop."""
+        self.health.shutdown_requested = True
+        self.health.shutdown_reason = reason or "requested"
+
+    def _mark_unhealthy(self, message: str) -> None:
+        self.health.healthy = False
+        self.health.last_error = message
+
+    def get_health_report(self) -> dict[str, Any]:
+        """Return a simple health summary for the runtime loop."""
+        return {
+            "healthy": self.health.healthy,
+            "startup_checks_passed": self.health.startup_checks_passed,
+            "cycles_completed": self.health.cycles_completed,
+            "shutdown_requested": self.health.shutdown_requested,
+            "shutdown_reason": self.health.shutdown_reason,
+            "last_error": self.health.last_error,
+            "connector_status": dict(self.health.connector_status),
+        }
 
     def _build_signals(self, bars: Sequence[Any]) -> list[float]:
         signals: list[float] = []
