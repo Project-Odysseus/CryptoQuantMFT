@@ -22,6 +22,8 @@ class RiskControlConfig:
     max_slippage_pct: float = 0.03
     max_spread_pct: float = 0.03
     max_quote_age_seconds: int = 900
+    inventory_skew_threshold: float = 0.5
+    inventory_penalty_factor: float = 0.5
 
 
 @dataclass(slots=True)
@@ -48,6 +50,8 @@ class RiskManager:
         current_position: float = 0.0,
         current_bar: Any | None = None,
         bar_index: int | None = None,
+        signal_side: str | None = None,
+        inventory_skew: float = 0.0,
     ) -> RiskDecision:
         """Return whether a new position should be allowed and how large it should be."""
         if current_position != 0.0:
@@ -74,11 +78,22 @@ class RiskManager:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="volatility_limit")
 
         if volatility_pct <= 0.0:
-            return RiskDecision(allow_entry=True, position_size=self.config.max_position_size)
+            position_size = self.config.max_position_size
+            position_size = self._apply_inventory_penalty(
+                position_size=position_size,
+                signal_side=signal_side,
+                inventory_skew=inventory_skew,
+            )
+            return RiskDecision(allow_entry=True, position_size=max(0.0, min(self.config.max_position_size, position_size)))
 
         base_position_size = min(self.config.max_position_size, self.config.risk_per_trade_pct / volatility_pct)
         kelly_multiplier = self._estimate_kelly_multiplier(bars)
         position_size = base_position_size * kelly_multiplier
+        position_size = self._apply_inventory_penalty(
+            position_size=position_size,
+            signal_side=signal_side,
+            inventory_skew=inventory_skew,
+        )
         return RiskDecision(allow_entry=True, position_size=max(0.0, min(self.config.max_position_size, position_size)))
 
     def _estimate_volatility(self, bars: Sequence[Any]) -> float:
@@ -134,6 +149,22 @@ class RiskManager:
         kelly_fraction = max(0.0, min(1.0, kelly_fraction))
 
         return max(0.0, min(1.0, kelly_fraction * self.config.kelly_fraction))
+
+    def _apply_inventory_penalty(self, *, position_size: float, signal_side: str | None, inventory_skew: float) -> float:
+        if position_size <= 0.0:
+            return 0.0
+
+        normalized_side = (signal_side or "").strip().lower()
+        if normalized_side not in {"buy", "long", "1", "true", "enter"}:
+            return position_size
+
+        normalized_skew = max(0.0, inventory_skew)
+        if normalized_skew <= self.config.inventory_skew_threshold:
+            return position_size
+
+        skew_ratio = (normalized_skew - self.config.inventory_skew_threshold) / max(1e-9, 1.0 - self.config.inventory_skew_threshold)
+        penalty = min(1.0, skew_ratio * self.config.inventory_penalty_factor)
+        return max(0.0, position_size * (1.0 - penalty))
 
     def _estimate_slippage_pct(self, bar: Any) -> float:
         close = _get_close(bar)

@@ -108,6 +108,40 @@ def test_risk_manager_reduces_position_size_for_high_volatility() -> None:
     assert decision.position_size < 1.0
 
 
+def test_risk_manager_reduces_position_size_for_inventory_skew() -> None:
+    """Heavily skewed inventory should shrink buy sizing for new long entries."""
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        ),
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+            open=101.0,
+            high=101.0,
+            low=101.0,
+            close=101.0,
+            volume=10.0,
+        ),
+    ]
+
+    manager = RiskManager(RiskControlConfig(inventory_skew_threshold=0.5, inventory_penalty_factor=1.0))
+    decision = manager.evaluate(bars=bars, equity=100.0, peak_equity=100.0, signal_side="buy", inventory_skew=0.8)
+
+    assert decision.allow_entry
+    assert decision.position_size < 1.0
+
+
 def test_risk_manager_blocks_entries_on_high_spread() -> None:
     """A wide spread should block entry before sizing is considered."""
     bar = OHLCVBar(
