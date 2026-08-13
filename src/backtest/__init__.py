@@ -8,6 +8,7 @@ from src.backtest.plotting import StrategyPlotter
 from src.backtest.runner import BacktestConfig, BacktestComparison, StrategyRegistry, build_cost_model, compare_backtests, run_backtest
 from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, moving_average_crossover_strategy
 from src.backtest.simulator import EventDrivenSimulator, EventDrivenTrade
+from src.backtest.walk_forward import WalkForwardFoldResult, WalkForwardResult, evaluate_walk_forward
 
 __all__ = [
     "BacktestResult",
@@ -26,4 +27,7 @@ __all__ = [
     "build_cost_model",
     "compare_backtests",
     "run_backtest",
+    "WalkForwardFoldResult",
+    "WalkForwardResult",
+    "evaluate_walk_forward",
 ]

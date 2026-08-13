@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config import settings
-from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, run_backtest, moving_average_crossover_strategy
+from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, evaluate_walk_forward, run_backtest, moving_average_crossover_strategy
 from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
 from src.execution import PaperTradingEngine
 from src.risk.controls import RiskControlConfig, RiskManager
@@ -108,9 +108,14 @@ async def run_runtime_orchestrator(
     )
 
 
-def build_demo_bars() -> list[OHLCVBar]:
+def build_demo_bars(count: int = 60) -> list[OHLCVBar]:
     """Create a synthetic OHLCV series for a simple demo backtest."""
-    closes = [100.0, 103.0, 104.5, 108.0, 107.0, 111.0, 112.0, 115.0, 113.5, 118.0]
+    closes: list[float] = []
+    close = 100.0
+    for index in range(count):
+        close = close + (0.6 if index % 3 else -0.2) + (0.15 if index % 5 == 0 else 0.0)
+        closes.append(close)
+
     bars: list[OHLCVBar] = []
     for index, close in enumerate(closes):
         timestamp = datetime(2024, 1, 1, 0, index, tzinfo=timezone.utc)
@@ -317,6 +322,10 @@ def main() -> None:
     parser.add_argument("--report", action="store_true", help="Print recent trades and equity snapshots from the SQLite logger")
     parser.add_argument("--report-limit", type=int, default=10, help="Number of recent rows to print in the report")
     parser.add_argument("--l2-simulator", action="store_true", help="Run the lightweight event-driven L2 simulator over synthetic snapshots")
+    parser.add_argument("--walk-forward", action="store_true", help="Run a simple walk-forward evaluation over the selected bars")
+    parser.add_argument("--walk-forward-train-window", type=int, default=40, help="Number of bars to use as the warmup/training window")
+    parser.add_argument("--walk-forward-test-window", type=int, default=20, help="Number of bars to use as the out-of-sample test window")
+    parser.add_argument("--walk-forward-step", type=int, default=20, help="Number of bars to move between walk-forward windows")
     parser.add_argument("--runtime", choices=["paper", "live_dry_run", "live"], help="Run the runtime orchestrator with the requested mode")
     parser.add_argument("--runtime-iterations", type=int, default=3, help="Number of runtime cycles to execute")
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
@@ -333,6 +342,35 @@ def main() -> None:
 
     if args.l2_simulator:
         run_l2_simulation()
+        return
+
+    if args.walk_forward:
+        bars = build_demo_bars()
+        if args.use_kraken_data:
+            bars = build_kraken_bars(symbol=args.kraken_symbol, count=args.kraken_bars)
+
+        config = BacktestConfig(
+            strategy_name=args.strategy,
+            include_costs=args.include_costs,
+            taker_fee=args.taker_fee,
+            maker_fee=args.maker_fee,
+            fx_spread_bps=args.fx_spread_bps,
+        )
+        result = evaluate_walk_forward(
+            bars,
+            config=config,
+            train_window=args.walk_forward_train_window,
+            test_window=args.walk_forward_test_window,
+            step_size=args.walk_forward_step,
+        )
+        logger.info(
+            "walk_forward_complete folds={} avg_return={} median_return={} positive_folds={} cumulative_return={}",
+            result.summary["fold_count"],
+            result.summary["avg_return"],
+            result.summary["median_return"],
+            result.summary["positive_folds"],
+            result.summary["cumulative_return"],
+        )
         return
 
     if args.runtime:

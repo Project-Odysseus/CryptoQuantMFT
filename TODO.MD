@@ -73,7 +73,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] Generate equity-curve and trade plots against time using recorded timestamps
   - [x] Add a simple strategy-selection interface so a user can choose a strategy by name/config rather than only by passing a Python callable
   - [x] Add richer risk controls such as volatility-adjusted sizing and max-drawdown guards
-  - [ ] Add a simple out-of-sample / walk-forward evaluation harness to test strategy robustness
+  - [x] Add a simple out-of-sample / walk-forward evaluation harness to test strategy robustness
 - [x] **Tier 2: Event-Driven L2 Tick Simulator**
   - [x] Build a simple event loop that processes time-ordered L2 snapshots sequentially (eliminating look-ahead bias)
   - [x] Implement a lightweight fill simulator that matches orders against recorded book depth and order flow
