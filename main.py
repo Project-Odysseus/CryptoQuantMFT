@@ -11,11 +11,11 @@ from pathlib import Path
 from config import settings
 from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, evaluate_walk_forward, run_backtest, moving_average_crossover_strategy
 from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
-from src.execution import PaperTradingEngine
+from src.execution import ExecutionRouter, PaperTradingEngine
 from src.risk.controls import RiskControlConfig, RiskManager
 from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
-from src.runtime import RuntimeOrchestrator
+from src.runtime import RuntimeOrchestrator, RuntimeWatchdogError
 from src.storage.bar_aggregator import OHLCVBar
 from src.storage.market_store import MarketStore
 from src.storage.order_book import OrderBookSnapshot
@@ -46,14 +46,14 @@ async def run_pipeline(iterations: int = 3, interval_seconds: float = 1.0) -> No
             await asyncio.sleep(interval_seconds)
 
 
-async def run_runtime_orchestrator(
+def build_runtime_orchestrator(
     *,
-    mode: str = "paper",
-    iterations: int = 3,
-    interval_seconds: float = 1.0,
-    use_mock_connector: bool = False,
-) -> None:
-    """Run the runtime orchestrator over a simple market-data pipeline."""
+    mode: str,
+    interval_seconds: float,
+    use_mock_connector: bool,
+    watchdog_timeout_seconds: float,
+) -> tuple[RuntimeOrchestrator, MarketDataPipeline]:
+    """Build the runtime orchestrator and its market-data pipeline for a run."""
     store = MarketStore(database_path=settings.database_path)
     pipeline = MarketDataPipeline(store=store, interval_seconds=60)
 
@@ -76,6 +76,7 @@ async def run_runtime_orchestrator(
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
+    execution_router = ExecutionRouter(mode=mode)
     engine = PaperTradingEngine(
         initial_cash=1000.0,
         default_order_size=1.0,
@@ -83,6 +84,7 @@ async def run_runtime_orchestrator(
         max_order_lifetime_bars=3,
         risk_manager=risk_manager,
         trade_logger=trade_logger,
+        execution_adapter=execution_router.adapter,
     )
     orchestrator = RuntimeOrchestrator(
         pipeline=pipeline,
@@ -90,40 +92,77 @@ async def run_runtime_orchestrator(
         strategy=moving_average_crossover_strategy(short_window=3, long_window=6),
         mode=mode,
         interval_seconds=interval_seconds,
+        watchdog_timeout_seconds=watchdog_timeout_seconds,
     )
+    return orchestrator, pipeline
 
-    loop = asyncio.get_running_loop()
 
-    def _request_shutdown(signum: int) -> None:
-        logger.warning("runtime_shutdown_signal signal={}", signum)
-        orchestrator.request_shutdown(reason=f"signal:{signum}")
+async def run_runtime_orchestrator(
+    *,
+    mode: str = "paper",
+    iterations: int = 3,
+    interval_seconds: float = 1.0,
+    use_mock_connector: bool = False,
+    watchdog_timeout_seconds: float = 5.0,
+    watchdog_restarts: int = 0,
+) -> None:
+    """Run the runtime orchestrator over a simple market-data pipeline."""
+    restart_attempts = max(0, watchdog_restarts) + 1
+    last_orchestrator: RuntimeOrchestrator | None = None
 
-    def _install_signal_handlers() -> None:
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(signum, lambda current_signum=signum: _request_shutdown(current_signum))
-            except (AttributeError, NotImplementedError):
-                signal.signal(signum, lambda current_signum, _frame: _request_shutdown(current_signum))
+    for attempt in range(restart_attempts):
+        orchestrator, _pipeline = build_runtime_orchestrator(
+            mode=mode,
+            interval_seconds=interval_seconds,
+            use_mock_connector=use_mock_connector,
+            watchdog_timeout_seconds=watchdog_timeout_seconds,
+        )
+        loop = asyncio.get_running_loop()
 
-    def _remove_signal_handlers() -> None:
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.remove_signal_handler(signum)
-            except (AttributeError, NotImplementedError):
-                pass
+        def _request_shutdown(signum: int) -> None:
+            logger.warning("runtime_shutdown_signal signal={}", signum)
+            orchestrator.request_shutdown(reason=f"signal:{signum}")
 
-    _install_signal_handlers()
-    try:
-        await orchestrator.run_loop(iterations=iterations, interval_seconds=interval_seconds)
-    except (asyncio.CancelledError, KeyboardInterrupt) as exc:
-        orchestrator.request_shutdown(reason="interrupted")
-        logger.warning("runtime_interrupted error={}", exc)
-    finally:
-        _remove_signal_handlers()
+        def _install_signal_handlers() -> None:
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(signum, lambda current_signum=signum: _request_shutdown(current_signum))
+                except (AttributeError, NotImplementedError):
+                    signal.signal(signum, lambda current_signum, _frame: _request_shutdown(current_signum))
 
-    logger.info("runtime_health_report {}", orchestrator.get_health_report())
+        def _remove_signal_handlers() -> None:
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.remove_signal_handler(signum)
+                except (AttributeError, NotImplementedError):
+                    pass
 
-    last_cycle = orchestrator.last_cycle
+        _install_signal_handlers()
+        try:
+            await orchestrator.run_loop(iterations=iterations, interval_seconds=interval_seconds)
+        except RuntimeWatchdogError as exc:
+            orchestrator.request_shutdown(reason="watchdog_timeout")
+            logger.warning("runtime_watchdog_triggered attempt={} reason={}", attempt + 1, exc)
+            if attempt + 1 >= restart_attempts:
+                raise
+            logger.info("runtime_restarting attempt={} of={}", attempt + 2, restart_attempts)
+            continue
+        except (asyncio.CancelledError, KeyboardInterrupt) as exc:
+            orchestrator.request_shutdown(reason="interrupted")
+            logger.warning("runtime_interrupted error={}", exc)
+        finally:
+            _remove_signal_handlers()
+
+        last_orchestrator = orchestrator
+        break
+
+    if last_orchestrator is None:
+        logger.info("runtime_complete mode={} iterations={} completed=0", mode, iterations)
+        return
+
+    logger.info("runtime_health_report {}", last_orchestrator.get_health_report())
+
+    last_cycle = last_orchestrator.last_cycle
     if last_cycle is None or last_cycle.execution_result is None:
         logger.info("runtime_complete mode={} iterations={} completed=0", mode, iterations)
         return
@@ -361,6 +400,8 @@ def main() -> None:
     parser.add_argument("--runtime-iterations", type=int, default=3, help="Number of runtime cycles to execute")
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
     parser.add_argument("--use-mock-connector", action="store_true", help="Use the mock exchange connector for the runtime loop")
+    parser.add_argument("--watchdog-timeout", type=float, default=5.0, help="Seconds without a completed cycle or fresh data before the watchdog triggers")
+    parser.add_argument("--watchdog-restarts", type=int, default=0, help="Number of times to restart the runtime after a watchdog timeout")
     args = parser.parse_args()
 
     logger.info("CryptoQuantMFT startup complete")
@@ -411,6 +452,8 @@ def main() -> None:
                 iterations=args.runtime_iterations,
                 interval_seconds=args.runtime_interval,
                 use_mock_connector=args.use_mock_connector,
+                watchdog_timeout_seconds=args.watchdog_timeout,
+                watchdog_restarts=args.watchdog_restarts,
             )
         )
         return

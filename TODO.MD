@@ -121,7 +121,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [ ] Implement **Maker-First Strategy:** Place Post-Only limit orders at bid/ask to capture lower fees/rebates
   - [ ] Implement Order Timeout Guard: If Post-Only order remains unfilled after $T$ seconds and signal alpha remains high, dynamically route as a Taker order
   - [ ] Build API reconnection recovery logic to reconcile local order state with exchange account state
-  - [ ] Support testnet / sandbox routing so orders can be exercised without real capital
+  - [x] Support testnet / sandbox routing so orders can be exercised without real capital
 
 ---
 
@@ -168,10 +168,10 @@ This phase captures the remaining work needed to move from a prototype backtest/
   - [x] Implement a single live-runtime loop that wires market data ingestion, signal generation, risk gates, execution routing, persistence, and monitoring together
   - [x] Support explicit runtime modes: `paper`, `live_dry_run`, and `live`
   - [x] Add startup health checks and graceful shutdown handling for reconnects and unexpected process exits
-  - [ ] Add a watchdog that can restart the runtime if the main loop stalls or the data feed dies
+  - [x] Add a watchdog that can restart the runtime if the main loop stalls or the data feed dies
 - [ ] **Exchange Execution Adapters**
   - [ ] Add authenticated order submission / cancellation adapters for Kraken and Firi
-  - [ ] Support testnet / sandbox mode for safer validation before using real capital
+  - [x] Support testnet / sandbox mode for safer validation before using real capital
   - [ ] Add order-book and fill reconciliation logic so local order state can be matched to exchange state
   - [ ] Add replay / recovery support so missed fills and rejected orders can be reconciled after reconnects
 - [ ] **Operational Safety & Risk Controls**
