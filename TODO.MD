@@ -76,8 +76,10 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [ ] Inject simple artificial network latency delays between signal trigger and fill execution
   - [ ] Improve later with more realistic execution details: partial fills, queue position effects, adverse selection, and order-book slippage modeling
 - [ ] **Fee & Cost Modeling**
-  - [ ] Model exact Maker vs. Taker fee tiers for Firi and Kraken
-  - [ ] Model FX conversion spread costs (EUR/NOK)
+  - [ ] Implement a simple first-pass fee model with approximate Maker/Taker fees for Firi and Kraken
+  - [ ] Apply fees to simulated trades in the backtest and paper-trading flow
+  - [ ] Model FX conversion spread costs (EUR/NOK) in a lightweight way
+  - [ ] Improve later with exchange-specific fee schedules, tiered maker rebates, partial-fill fee handling, and more realistic FX spread modeling
 - [ ] **Quantitative Performance Analytics**
   - [ ] Generate statistics: Sharpe Ratio, Sortino Ratio, Max Drawdown, Calmar Ratio, Win/Loss Ratio, Profit Factor, Expectancy
   - [ ] Build Out-of-Sample (OOS) testing framework and Walk-Forward Optimization (WFO) to eliminate overfitting

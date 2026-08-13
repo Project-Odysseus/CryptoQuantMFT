@@ -31,3 +31,7 @@ def test_market_store_persists_and_reads_ticks(tmp_path: Path) -> None:
     assert rows[0]["exchange"] == "firi"
     assert rows[0]["symbol"] == "BTC/NOK"
     assert rows[0]["last"] == 100.5
+
+    parquet_rows = store.read_parquet_ticks()
+    assert len(parquet_rows) == 1
+    assert parquet_rows[0]["exchange"] == "firi"
