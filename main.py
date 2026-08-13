@@ -11,6 +11,7 @@ from config import settings
 from src.backtest import BacktestConfig, StrategyPlotter, compare_backtests, run_backtest, moving_average_crossover_strategy
 from src.data.exchanges import FiriConnector, KrakenConnector
 from src.execution import PaperTradingEngine
+from src.risk.controls import RiskControlConfig, RiskManager
 from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
 from src.storage.bar_aggregator import OHLCVBar
@@ -113,7 +114,24 @@ def run_paper_trading(bars: list[OHLCVBar], signals: list[float | int | str | No
             history = list(bars[: index + 1])
             signals.append(strategy(history, index, bars[index]))
 
-    engine = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=3)
+    risk_manager = RiskManager(
+        RiskControlConfig(
+            max_drawdown_pct=0.25,
+            max_volatility_pct=0.10,
+            risk_per_trade_pct=0.02,
+            max_position_size=1.0,
+            volatility_window=10,
+            kelly_fraction=0.5,
+            kelly_window=20,
+        )
+    )
+    engine = PaperTradingEngine(
+        initial_cash=1000.0,
+        default_order_size=1.0,
+        partial_fill_fraction=1.0,
+        max_order_lifetime_bars=3,
+        risk_manager=risk_manager,
+    )
     result = engine.run(bars, signals)
     final_equity = result.portfolio_history[-1].equity if result.portfolio_history else 1000.0
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from src.execution import PaperTradingEngine
+from src.risk.controls import RiskControlConfig, RiskManager
 from src.storage.bar_aggregator import OHLCVBar
 
 
@@ -95,7 +96,14 @@ def test_paper_trading_engine_can_cancel_unfilled_orders() -> None:
     ]
     signals = [1.0, 1.0, 1.0]
 
-    result = PaperTradingEngine(default_order_size=1.0, partial_fill_fraction=0.5, max_order_lifetime_bars=1).run(bars, signals)
+    result = PaperTradingEngine(
+        default_order_size=1.0,
+        partial_fill_fraction=0.5,
+        max_order_lifetime_bars=1,
+        risk_manager=RiskManager(
+            RiskControlConfig(max_drawdown_pct=0.0, max_volatility_pct=0.0, risk_per_trade_pct=0.02, max_position_size=1.0)
+        ),
+    ).run(bars, signals)
 
     assert result.orders[0].status == "CANCELED"
     assert len(result.trades) == 0
