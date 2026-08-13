@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config import settings
-from src.backtest import BacktestConfig, StrategyPlotter, compare_backtests, run_backtest, moving_average_crossover_strategy
+from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, run_backtest, moving_average_crossover_strategy
 from src.data.exchanges import FiriConnector, KrakenConnector
 from src.execution import PaperTradingEngine
 from src.risk.controls import RiskControlConfig, RiskManager
@@ -16,6 +16,7 @@ from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
 from src.storage.bar_aggregator import OHLCVBar
 from src.storage.market_store import MarketStore
+from src.storage.order_book import OrderBookSnapshot
 from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
 
@@ -70,6 +71,44 @@ def build_kraken_bars(symbol: str = "BTC/EUR", count: int = 200) -> list[OHLCVBa
     return fetch_kraken_ohlcv(symbol=symbol, interval_seconds=60, count=count)
 
 
+def build_demo_order_book_snapshots() -> list[OrderBookSnapshot]:
+    """Create a small synthetic sequence of L2-style order book snapshots."""
+    mid_prices = [100.0, 101.0, 99.5, 100.8, 102.0, 101.0]
+    snapshots: list[OrderBookSnapshot] = []
+    for index, mid_price in enumerate(mid_prices):
+        spread = 0.6 + (index * 0.05)
+        half_spread = spread / 2.0
+        bids = [(mid_price - half_spread, 0.8), (mid_price - half_spread - 0.2, 0.6), (mid_price - half_spread - 0.4, 0.4)]
+        asks = [(mid_price + half_spread, 0.8), (mid_price + half_spread + 0.2, 0.6), (mid_price + half_spread + 0.4, 0.4)]
+        snapshots.append(
+            OrderBookSnapshot(
+                bids=bids,
+                asks=asks,
+                timestamp=datetime(2024, 1, 1, 0, index, tzinfo=timezone.utc),
+            )
+        )
+    return snapshots
+
+
+def build_demo_l2_signals(snapshots: list[OrderBookSnapshot]) -> list[float]:
+    """Create simple momentum-based signals from synthetic order-book snapshots."""
+    if not snapshots:
+        return []
+
+    signals: list[float] = []
+    previous_mid = None
+    for snapshot in snapshots:
+        mid_price = (snapshot.bids[0][0] + snapshot.asks[0][0]) / 2.0 if snapshot.bids and snapshot.asks else 0.0
+        if previous_mid is None:
+            signals.append(0.0)
+        elif mid_price > previous_mid:
+            signals.append(1.0)
+        else:
+            signals.append(-1.0)
+        previous_mid = mid_price
+    return signals
+
+
 def run_demo_backtest(output_dir: str | Path = "plots", bars: list[OHLCVBar] | None = None) -> None:
     """Run a small synthetic backtest and generate equity/trade plots."""
     bars = bars or build_demo_bars()
@@ -103,6 +142,21 @@ def run_demo_backtest(output_dir: str | Path = "plots", bars: list[OHLCVBar] | N
         result.metrics.profit_factor,
         equity_path,
         trade_path,
+    )
+
+
+def run_l2_simulation() -> None:
+    """Run the lightweight L2 simulator over synthetic order-book snapshots."""
+    snapshots = build_demo_order_book_snapshots()
+    signals = build_demo_l2_signals(snapshots)
+    simulator = EventDrivenSimulator(latency_ms=200, max_slippage=0.01, initial_equity=1000.0, position_size=1.0)
+    trades, equity_curve = simulator.run(snapshots, signals)
+
+    logger.info(
+        "l2_simulator_complete trades={} final_equity={} first_equity={}",
+        len(trades),
+        equity_curve[-1] if equity_curve else 1000.0,
+        equity_curve[0] if equity_curve else 1000.0,
     )
 
 
@@ -190,6 +244,7 @@ def main() -> None:
     parser.add_argument("--fx-spread-bps", type=float, default=10.0, help="Approximate FX spread in bps")
     parser.add_argument("--report", action="store_true", help="Print recent trades and equity snapshots from the SQLite logger")
     parser.add_argument("--report-limit", type=int, default=10, help="Number of recent rows to print in the report")
+    parser.add_argument("--l2-simulator", action="store_true", help="Run the lightweight event-driven L2 simulator over synthetic snapshots")
     args = parser.parse_args()
 
     logger.info("CryptoQuantMFT startup complete")
@@ -198,6 +253,10 @@ def main() -> None:
 
     if args.report:
         print_trade_report(limit=args.report_limit)
+        return
+
+    if args.l2_simulator:
+        run_l2_simulation()
         return
 
     if args.demo_backtest:
