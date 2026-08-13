@@ -149,7 +149,15 @@ def run_l2_simulation() -> None:
     """Run the lightweight L2 simulator over synthetic order-book snapshots."""
     snapshots = build_demo_order_book_snapshots()
     signals = build_demo_l2_signals(snapshots)
-    simulator = EventDrivenSimulator(latency_ms=200, max_slippage=0.01, initial_equity=1000.0, position_size=1.0)
+    simulator = EventDrivenSimulator(
+        latency_ms=200,
+        max_slippage=0.01,
+        initial_equity=1000.0,
+        position_size=1.0,
+        queue_position_penalty=0.0002,
+        impact_penalty=0.001,
+        adverse_selection_penalty=0.0005,
+    )
     trades, equity_curve = simulator.run(snapshots, signals)
 
     logger.info(
