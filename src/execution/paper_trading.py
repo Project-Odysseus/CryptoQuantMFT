@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
 from src.risk.controls import RiskManager
+from src.storage.trade_logger import TradeLogger
 
 
 @dataclass(slots=True)
@@ -81,6 +82,7 @@ class PaperTradingEngine:
         max_order_lifetime_bars: int = 2,
         cost_model: CostModel | None = None,
         risk_manager: RiskManager | None = None,
+        trade_logger: TradeLogger | None = None,
     ) -> None:
         if initial_cash <= 0:
             raise ValueError("initial_cash must be positive")
@@ -97,6 +99,7 @@ class PaperTradingEngine:
         self.max_order_lifetime_bars = max_order_lifetime_bars
         self.cost_model = cost_model or build_default_cost_model("mock")
         self.risk_manager = risk_manager
+        self.trade_logger = trade_logger
         self._order_counter = 0
 
     def run(self, bars: Sequence[Any], signals: Sequence[float | int | str | None]) -> PaperTradingResult:
@@ -198,6 +201,19 @@ class PaperTradingEngine:
                             cost=cost,
                         )
                     )
+                    if self.trade_logger is not None:
+                        self.trade_logger.log_trade(
+                            timestamp=timestamp,
+                            source="paper_trading",
+                            exchange="mock",
+                            pair="BTC/NOK",
+                            side=order.side,
+                            price=execution_price,
+                            size=fill_size,
+                            fee=cost,
+                            role_maker_taker="taker",
+                            latency_ms=0,
+                        )
 
             equity = cash + (position_size * price if position_size else 0.0)
             peak_equity = max(peak_equity, equity)
@@ -211,6 +227,14 @@ class PaperTradingEngine:
                     equity=equity,
                 )
             )
+            if self.trade_logger is not None:
+                self.trade_logger.log_equity_snapshot(
+                    timestamp=timestamp,
+                    source="paper_trading",
+                    equity=equity,
+                    cash=cash,
+                    position_size=position_size,
+                )
 
         return PaperTradingResult(orders=orders, trades=trades, equity_curve=equity_curve, portfolio_history=portfolio_history)
 
