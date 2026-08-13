@@ -166,6 +166,8 @@ class SimpleBacktester:
                     current_bar=current_bar,
                     bar_index=index,
                     signal=signal_value,
+                    current_notional=max(0.0, current_position * close_price if current_position != 0.0 else 0.0),
+                    open_positions=1 if current_position != 0.0 else 0,
                 )
                 if signal > 0 and risk_decision.allow_entry:
                     current_position = 1.0
@@ -362,6 +364,8 @@ class SimpleBacktester:
         current_bar: Any | None = None,
         bar_index: int | None = None,
         signal: float | int | str | None = None,
+        current_notional: float = 0.0,
+        open_positions: int = 0,
     ) -> RiskDecision:
         if self.risk_manager is None:
             return RiskDecision(allow_entry=True, position_size=1.0)
@@ -380,6 +384,8 @@ class SimpleBacktester:
             current_bar=current_bar,
             bar_index=bar_index,
             signal_side=signal_side,
+            current_notional=current_notional,
+            open_positions=open_positions,
         )
 
 

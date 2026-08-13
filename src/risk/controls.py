@@ -24,6 +24,11 @@ class RiskControlConfig:
     max_quote_age_seconds: int = 900
     inventory_skew_threshold: float = 0.5
     inventory_penalty_factor: float = 0.5
+    max_notional_per_trade: float = 1000.0
+    max_total_notional: float = 5000.0
+    max_open_positions: int = 3
+    hard_stop_drawdown_pct: float = 0.02
+    hard_stop_cooldown_bars: int = 5
 
 
 @dataclass(slots=True)
@@ -52,8 +57,15 @@ class RiskManager:
         bar_index: int | None = None,
         signal_side: str | None = None,
         inventory_skew: float = 0.0,
+        current_notional: float = 0.0,
+        open_positions: int = 0,
+        hard_stop_active: bool = False,
+        cooldown_bars_remaining: int = 0,
     ) -> RiskDecision:
         """Return whether a new position should be allowed and how large it should be."""
+        if hard_stop_active:
+            return RiskDecision(allow_entry=False, position_size=0.0, reason="hard_stop")
+
         if current_position != 0.0:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="position_open")
 
@@ -73,6 +85,12 @@ class RiskManager:
         if drawdown > self.config.max_drawdown_pct:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="drawdown_limit")
 
+        if drawdown > self.config.hard_stop_drawdown_pct:
+            return RiskDecision(allow_entry=False, position_size=0.0, reason="hard_stop_drawdown")
+
+        if open_positions >= self.config.max_open_positions:
+            return RiskDecision(allow_entry=False, position_size=0.0, reason="position_limit")
+
         volatility_pct = self._estimate_volatility(bars)
         if volatility_pct > self.config.max_volatility_pct:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="volatility_limit")
@@ -84,6 +102,11 @@ class RiskManager:
                 signal_side=signal_side,
                 inventory_skew=inventory_skew,
             )
+            position_size = self._apply_position_caps(
+                position_size=position_size,
+                current_notional=current_notional,
+                equity=equity,
+            )
             return RiskDecision(allow_entry=True, position_size=max(0.0, min(self.config.max_position_size, position_size)))
 
         base_position_size = min(self.config.max_position_size, self.config.risk_per_trade_pct / volatility_pct)
@@ -93,6 +116,11 @@ class RiskManager:
             position_size=position_size,
             signal_side=signal_side,
             inventory_skew=inventory_skew,
+        )
+        position_size = self._apply_position_caps(
+            position_size=position_size,
+            current_notional=current_notional,
+            equity=equity,
         )
         return RiskDecision(allow_entry=True, position_size=max(0.0, min(self.config.max_position_size, position_size)))
 
@@ -165,6 +193,27 @@ class RiskManager:
         skew_ratio = (normalized_skew - self.config.inventory_skew_threshold) / max(1e-9, 1.0 - self.config.inventory_skew_threshold)
         penalty = min(1.0, skew_ratio * self.config.inventory_penalty_factor)
         return max(0.0, position_size * (1.0 - penalty))
+
+    def _apply_position_caps(self, *, position_size: float, current_notional: float, equity: float) -> float:
+        if position_size <= 0.0:
+            return 0.0
+
+        max_trade_notional = max(0.0, self.config.max_notional_per_trade)
+        if current_notional + max_trade_notional <= 0.0:
+            return position_size
+
+        if max_trade_notional > 0.0 and current_notional > max_trade_notional:
+            return 0.0
+
+        available_capacity = max(0.0, self.config.max_total_notional - current_notional)
+        if self.config.max_total_notional > 0.0 and available_capacity <= 0.0:
+            return 0.0
+
+        if self.config.max_total_notional > 0.0:
+            max_allowed = min(position_size, available_capacity / max(1.0, equity))
+            return max(0.0, max_allowed)
+
+        return position_size
 
     def _estimate_slippage_pct(self, bar: Any) -> float:
         close = _get_close(bar)
