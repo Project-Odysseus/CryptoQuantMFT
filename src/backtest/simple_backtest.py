@@ -1,13 +1,27 @@
-"""A lightweight vectorized-style backtester for simple signal research."""
+"""A lightweight, strategy-driven backtester for OHLC-like market data."""
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
+from datetime import datetime
+from typing import Any
 
-from src.signals import OrderBookSignalEngine, VolatilityTrendFilter
-from src.storage.bar_aggregator import OHLCVBar
-from src.storage.order_book import OrderBookSnapshot
+
+StrategyFn = Callable[[Sequence[Any], int, Any], float | int | str | None]
+
+
+@dataclass(slots=True)
+class TradeRecord:
+    """A single executed trade from the backtest loop."""
+
+    timestamp: datetime | None
+    side: str
+    entry_price: float
+    exit_price: float
+    size: float
+    return_pct: float
+    equity_after_trade: float
 
 
 @dataclass(slots=True)
@@ -20,71 +34,207 @@ class BacktestResult:
     trades: int
     final_equity: float
     equity_series: list[float] = field(default_factory=list)
+    timestamps: list[datetime] = field(default_factory=list)
     trade_prices: list[float] = field(default_factory=list)
+    trade_timestamps: list[datetime] = field(default_factory=list)
+    trade_returns: list[float] = field(default_factory=list)
+    trade_sizes: list[float] = field(default_factory=list)
+    trade_records: list[TradeRecord] = field(default_factory=list)
 
 
 class SimpleBacktester:
-    """Run a trivial signal-driven backtest over OHLCV bars."""
+    """Run a user-supplied strategy over any OHLC-like series."""
 
-    def __init__(self, signal_name: str = "trend") -> None:
-        self.signal_name = signal_name
+    def __init__(
+        self,
+        strategy: StrategyFn | None = None,
+        *,
+        initial_equity: float = 100.0,
+        threshold: float = 0.02,
+    ) -> None:
+        self.strategy = strategy or self._default_strategy
+        if initial_equity <= 0:
+            raise ValueError("initial_equity must be positive")
+        if threshold <= 0:
+            raise ValueError("threshold must be positive")
 
-    def run(self, bars: Sequence[OHLCVBar]) -> BacktestResult:
-        """Backtest a simple signal strategy over a sequence of bars."""
+        self.initial_equity = initial_equity
+        self.threshold = threshold
+
+    def run(self, bars: Sequence[Any]) -> BacktestResult:
+        """Backtest a strategy over a sequence of OHLC-like bars."""
         if len(bars) < 2:
             raise ValueError("At least two bars are required")
 
-        equity = 100.0
+        equity = self.initial_equity
         peak_equity = equity
-        trades = 0
+        trade_count = 0
         wins = 0
         equity_series: list[float] = [equity]
+        timestamps: list[datetime] = [_get_timestamp(bars[0])]
         trade_prices: list[float] = []
+        trade_timestamps: list[datetime] = []
+        trade_returns: list[float] = []
+        trade_sizes: list[float] = []
+        trade_records: list[TradeRecord] = []
 
-        filter_signal = VolatilityTrendFilter(lookback=3, atr_multiplier=1.0)
-        order_book_engine = OrderBookSignalEngine(depth_levels=3)
+        entry_price: float | None = None
+        entry_timestamp: datetime | None = None
+        current_position = 0.0
+        entry_size = 1.0
 
         for index in range(1, len(bars)):
-            signal = filter_signal.compute(list(bars[: index + 1]))
-            previous_bar = bars[index - 1]
+            history = list(bars[: index + 1])
             current_bar = bars[index]
+            signal_value = self.strategy(history, index, current_bar)
+            signal = _normalize_signal(signal_value)
+            close_price = _get_close(current_bar)
+            timestamp = _get_timestamp(current_bar)
 
-            snapshot = OrderBookSnapshot(
-                bids=[(previous_bar.close, 1.0), (previous_bar.close - 0.1, 0.5)],
-                asks=[(previous_bar.close + 0.1, 0.7), (previous_bar.close + 0.2, 0.3)],
-            )
-            obi_signal = order_book_engine.compute_obi(snapshot)
-            volume_signal = order_book_engine.compute_volume_delta(snapshot)
-
-            trend_signal = signal.direction
-            if trend_signal == "up" and obi_signal.value > 0 and volume_signal.value > 0 and current_bar.close > previous_bar.close:
-                if equity > 0:
-                    trades += 1
-                    if current_bar.close > previous_bar.close:
+            if current_position == 0.0 and signal > 0:
+                current_position = 1.0
+                entry_price = close_price
+                entry_timestamp = timestamp
+                entry_size = 1.0
+            elif current_position == 0.0 and signal < 0:
+                current_position = -1.0
+                entry_price = close_price
+                entry_timestamp = timestamp
+                entry_size = 1.0
+            elif current_position > 0.0 and signal <= 0:
+                if entry_price is not None:
+                    return_pct = (close_price - entry_price) / entry_price
+                    trade_count += 1
+                    if return_pct > 0:
                         wins += 1
-                    equity *= 1 + (current_bar.close - previous_bar.close) / previous_bar.close
-                    trade_prices.append(current_bar.close)
-            elif trend_signal == "down" and obi_signal.value < 0 and volume_signal.value < 0 and current_bar.close < previous_bar.close:
-                if equity > 0:
-                    trades += 1
-                    if current_bar.close < previous_bar.close:
+                    equity *= 1 + entry_size * return_pct
+                    trade_prices.append(close_price)
+                    trade_timestamps.append(timestamp)
+                    trade_returns.append(return_pct)
+                    trade_sizes.append(entry_size)
+                    trade_records.append(
+                        TradeRecord(
+                            timestamp=timestamp,
+                            side="long",
+                            entry_price=entry_price,
+                            exit_price=close_price,
+                            size=entry_size,
+                            return_pct=return_pct,
+                            equity_after_trade=equity,
+                        )
+                    )
+                current_position = 0.0
+                entry_price = None
+                entry_timestamp = None
+            elif current_position < 0.0 and signal >= 0:
+                if entry_price is not None:
+                    return_pct = (entry_price - close_price) / entry_price
+                    trade_count += 1
+                    if return_pct > 0:
                         wins += 1
-                    equity *= 1 + (current_bar.close - previous_bar.close) / previous_bar.close
-                    trade_prices.append(current_bar.close)
+                    equity *= 1 + entry_size * return_pct
+                    trade_prices.append(close_price)
+                    trade_timestamps.append(timestamp)
+                    trade_returns.append(return_pct)
+                    trade_sizes.append(entry_size)
+                    trade_records.append(
+                        TradeRecord(
+                            timestamp=timestamp,
+                            side="short",
+                            entry_price=entry_price,
+                            exit_price=close_price,
+                            size=entry_size,
+                            return_pct=return_pct,
+                            equity_after_trade=equity,
+                        )
+                    )
+                current_position = 0.0
+                entry_price = None
+                entry_timestamp = None
 
             peak_equity = max(peak_equity, equity)
             equity_series.append(equity)
+            timestamps.append(timestamp)
 
         drawdown = 0.0
         if equity_series:
             drawdown = max((peak_equity - value) / peak_equity if peak_equity > 0 else 0.0 for value in equity_series)
 
         return BacktestResult(
-            total_return=round(equity / 100.0 - 1.0, 10),
-            win_rate=round(wins / trades, 10) if trades else 0.0,
+            total_return=round(equity / self.initial_equity - 1.0, 10),
+            win_rate=round(wins / trade_count, 10) if trade_count else 0.0,
             max_drawdown=round(drawdown, 10),
-            trades=trades,
+            trades=trade_count,
             final_equity=round(equity, 10),
             equity_series=equity_series,
+            timestamps=timestamps,
             trade_prices=trade_prices,
+            trade_timestamps=trade_timestamps,
+            trade_returns=trade_returns,
+            trade_sizes=trade_sizes,
+            trade_records=trade_records,
         )
+
+    def _default_strategy(self, history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
+        if len(history) < 2:
+            return 0
+
+        previous_bar = history[-2]
+        current_close = _get_close(current_bar)
+        previous_close = _get_close(previous_bar)
+        if previous_close <= 0:
+            return 0
+
+        return_pct = (current_close - previous_close) / previous_close
+        if return_pct > self.threshold:
+            return 1
+        if return_pct < -self.threshold:
+            return -1
+        return 0
+
+
+def moving_average_crossover_strategy(short_window: int = 3, long_window: int = 6) -> StrategyFn:
+    """Create a simple moving-average crossover strategy for any OHLC-like series."""
+
+    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
+        if len(history) < max(short_window, long_window):
+            return 0
+        closes = [_get_close(bar) for bar in history[-long_window:]]
+        short_ma = sum(closes[-short_window:]) / short_window
+        long_ma = sum(closes) / len(closes)
+        if short_ma > long_ma:
+            return 1
+        if short_ma < long_ma:
+            return -1
+        return 0
+
+    return strategy
+
+
+def _normalize_signal(raw_signal: float | int | str | None) -> float:
+    if raw_signal is None:
+        return 0.0
+    if isinstance(raw_signal, str):
+        normalized = raw_signal.strip().lower()
+        if normalized in {"buy", "long", "1", "true", "enter"}:
+            return 1.0
+        if normalized in {"sell", "short", "-1", "false", "exit"}:
+            return -1.0
+        return 0.0
+    return float(raw_signal)
+
+
+def _get_close(bar: Any) -> float:
+    if hasattr(bar, "close"):
+        return float(bar.close)
+    if isinstance(bar, dict):
+        return float(bar["close"])
+    raise TypeError("bars must expose a close attribute or be dictionaries with a close key")
+
+
+def _get_timestamp(bar: Any) -> datetime:
+    if hasattr(bar, "timestamp"):
+        return bar.timestamp
+    if isinstance(bar, dict):
+        return bar["timestamp"]
+    raise TypeError("bars must expose a timestamp attribute or be dictionaries with a timestamp key")
