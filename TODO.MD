@@ -70,10 +70,10 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] Generate equity-curve and trade plots against time using recorded timestamps
   - [x] Add a simple strategy-selection interface so a user can choose a strategy by name/config rather than only by passing a Python callable
   - [x] Add richer risk controls such as volatility-adjusted sizing and max-drawdown guards
-- [ ] **Tier 2: Event-Driven L2 Tick Simulator**
-  - [ ] Build a simple event loop that processes time-ordered L2 snapshots sequentially (eliminating look-ahead bias)
-  - [ ] Implement a lightweight fill simulator that matches orders against recorded book depth and order flow
-  - [ ] Inject simple artificial network latency delays between signal trigger and fill execution
+- [x] **Tier 2: Event-Driven L2 Tick Simulator**
+  - [x] Build a simple event loop that processes time-ordered L2 snapshots sequentially (eliminating look-ahead bias)
+  - [x] Implement a lightweight fill simulator that matches orders against recorded book depth and order flow
+  - [x] Inject simple artificial network latency delays between signal trigger and fill execution
   - [ ] Improve later with more realistic execution details: partial fills, queue position effects, adverse selection, and order-book slippage modeling
 - [x] **Fee & Cost Modeling**
   - [x] Implement a simple first-pass fee model with approximate Maker/Taker fees for Firi and Kraken

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Sequence
 
@@ -23,6 +23,17 @@ class EventDrivenTrade:
 
 
 @dataclass(slots=True)
+class PendingOrder:
+    """A queued order waiting for its fill event to arrive."""
+
+    side: str
+    size: float
+    remaining_size: float
+    ready_index: int
+    is_exit: bool = False
+
+
+@dataclass(slots=True)
 class EventDrivenSimulator:
     """Execute a simple signal stream against a sequence of order book snapshots."""
 
@@ -31,6 +42,11 @@ class EventDrivenSimulator:
     initial_equity: float = 100.0
     position_size: float = 1.0
     cost_model: CostModel | None = None
+    queue_position_penalty: float = 0.0
+    impact_penalty: float = 0.0
+    adverse_selection_penalty: float = 0.0
+    _last_snapshot: OrderBookSnapshot | None = field(default=None, init=False, repr=False)
+    _previous_mid_price: float | None = field(default=None, init=False, repr=False)
 
     def __init__(
         self,
@@ -39,12 +55,18 @@ class EventDrivenSimulator:
         initial_equity: float = 100.0,
         position_size: float = 1.0,
         cost_model: CostModel | None = None,
+        queue_position_penalty: float = 0.0,
+        impact_penalty: float = 0.0,
+        adverse_selection_penalty: float = 0.0,
     ) -> None:
         self.latency_ms = latency_ms
         self.max_slippage = max_slippage
         self.initial_equity = initial_equity
         self.position_size = position_size
         self.cost_model = cost_model or build_default_cost_model("mock")
+        self.queue_position_penalty = queue_position_penalty
+        self.impact_penalty = impact_penalty
+        self.adverse_selection_penalty = adverse_selection_penalty
 
     def run(self, snapshots: Sequence[OrderBookSnapshot], signals: Sequence[float]) -> tuple[list[EventDrivenTrade], list[float]]:
         """Simulate fills over a stream of snapshots and signals."""
@@ -53,64 +75,263 @@ class EventDrivenSimulator:
         if not snapshots:
             return [], []
 
-        equity = self.initial_equity
+        cash = float(self.initial_equity)
+        position_size = 0.0
+        avg_entry_price: float | None = None
         trades: list[EventDrivenTrade] = []
-        equity_curve: list[float] = [equity]
-        position = 0.0
-        entry_price: float | None = None
-        entry_timestamp: datetime | None = None
+        equity_curve: list[float] = [float(self.initial_equity)]
+        pending_orders: list[PendingOrder] = []
+        self._previous_mid_price = None
 
         for index, snapshot in enumerate(snapshots):
             signal = signals[index]
             if snapshot.timestamp is None:
                 snapshot.timestamp = datetime.now()
 
-            if signal > 0 and position <= 0:
-                price = self._fill_price(snapshot, side="buy")
-                position = self.position_size
-                entry_price = price
-                entry_timestamp = snapshot.timestamp
-            elif signal < 0 and position >= 0:
-                price = self._fill_price(snapshot, side="sell")
-                position = -self.position_size
-                entry_price = price
-                entry_timestamp = snapshot.timestamp
-            elif position != 0 and signal == 0:
-                if entry_price is None or entry_timestamp is None:
-                    continue
-                exit_price = self._fill_price(snapshot, side="sell" if position > 0 else "buy")
-                pnl = (exit_price - entry_price) / entry_price if position > 0 else (entry_price - exit_price) / entry_price
-                equity *= 1 + pnl
-                trades.append(
-                    EventDrivenTrade(
-                        timestamp=snapshot.timestamp,
-                        side="long" if position > 0 else "short",
-                        price=exit_price,
-                        size=self.position_size,
-                        latency_ms=self.latency_ms,
-                        cost=round(exit_price - self._base_price(snapshot, side="sell" if position > 0 else "buy"), 10),
+            previous_mid_price = self._previous_mid_price
+            self._last_snapshot = snapshot
+            self._previous_mid_price = self._mid_price(snapshot)
+            cash, position_size, avg_entry_price = self._process_pending_orders(
+                index,
+                snapshot,
+                pending_orders,
+                cash,
+                position_size,
+                avg_entry_price,
+                trades,
+                previous_mid_price,
+            )
+
+            new_order: PendingOrder | None = None
+            if not pending_orders:
+                if position_size != 0.0 and signal == 0.0:
+                    new_order = PendingOrder(
+                        side="sell" if position_size > 0.0 else "buy",
+                        size=abs(position_size),
+                        remaining_size=abs(position_size),
+                        ready_index=index,
+                        is_exit=True,
                     )
-                )
-                position = 0.0
-                entry_price = None
-                entry_timestamp = None
-            equity_curve.append(equity)
+                elif signal > 0 and position_size <= 0.0:
+                    new_order = PendingOrder(
+                        side="buy",
+                        size=self.position_size,
+                        remaining_size=self.position_size,
+                        ready_index=index + self._latency_steps,
+                    )
+                elif signal < 0 and position_size >= 0.0:
+                    new_order = PendingOrder(
+                        side="sell",
+                        size=self.position_size,
+                        remaining_size=self.position_size,
+                        ready_index=index + self._latency_steps,
+                    )
+
+            if new_order is not None:
+                if new_order.ready_index <= index:
+                    cash, position_size, avg_entry_price = self._process_order(
+                        snapshot,
+                        new_order,
+                        cash,
+                        position_size,
+                        avg_entry_price,
+                        trades,
+                        previous_mid_price,
+                    )
+                else:
+                    pending_orders.append(new_order)
+
+            equity_curve.append(cash + (position_size * self._mid_price(snapshot)))
 
         return trades, equity_curve
 
-    def _fill_price(self, snapshot: OrderBookSnapshot, *, side: str) -> float:
-        base_price = self._base_price(snapshot, side=side)
-        if self.cost_model is None:
-            return base_price
+    def _process_pending_orders(
+        self,
+        index: int,
+        snapshot: OrderBookSnapshot,
+        pending_orders: list[PendingOrder],
+        cash: float,
+        position_size: float,
+        avg_entry_price: float | None,
+        trades: list[EventDrivenTrade],
+        previous_mid_price: float | None,
+    ) -> tuple[float, float, float | None]:
+        for order in list(pending_orders):
+            if order.ready_index > index:
+                continue
+            cash, position_size, avg_entry_price = self._process_order(
+                snapshot,
+                order,
+                cash,
+                position_size,
+                avg_entry_price,
+                trades,
+                previous_mid_price,
+            )
+            if order.remaining_size <= 0.0:
+                pending_orders.remove(order)
 
-        price_with_fees = self.cost_model.apply_trade_cost(base_price, side=side, role="taker", size=self.position_size)
+        return cash, position_size, avg_entry_price
+
+    def _process_order(
+        self,
+        snapshot: OrderBookSnapshot,
+        order: PendingOrder,
+        cash: float,
+        position_size: float,
+        avg_entry_price: float | None,
+        trades: list[EventDrivenTrade],
+        previous_mid_price: float | None,
+    ) -> tuple[float, float, float | None]:
+        fill_qty, avg_price = self._fill_quantity(
+            snapshot,
+            side=order.side,
+            size=order.remaining_size,
+            previous_mid_price=previous_mid_price,
+        )
+        if fill_qty <= 0.0:
+            return cash, position_size, avg_entry_price
+
+        gross_fill_price = avg_price
+        execution_price = self._apply_cost(gross_fill_price, side=order.side, size=fill_qty)
+        cost = abs(execution_price - gross_fill_price) * fill_qty
+
+        if order.side == "buy":
+            cash -= execution_price * fill_qty
+            position_size += fill_qty
+            avg_entry_price = self._update_average_price(
+                current_position=position_size,
+                average_price=avg_entry_price,
+                fill_size=fill_qty,
+                fill_price=execution_price,
+            )
+        else:
+            cash += execution_price * fill_qty
+            position_size -= fill_qty
+            if position_size <= 0.0:
+                avg_entry_price = None
+
+        order.remaining_size -= fill_qty
+
+        trades.append(
+            EventDrivenTrade(
+                timestamp=snapshot.timestamp or datetime.now(),
+                side="buy" if order.side == "buy" else "sell",
+                price=execution_price,
+                size=fill_qty,
+                latency_ms=self.latency_ms,
+                cost=cost,
+            )
+        )
+
+        return cash, position_size, avg_entry_price
+
+    def _fill_quantity(
+        self,
+        snapshot: OrderBookSnapshot,
+        *,
+        side: str,
+        size: float,
+        previous_mid_price: float | None,
+    ) -> tuple[float, float]:
+        if size <= 0.0:
+            return 0.0, 0.0
+
+        levels = snapshot.asks if side == "buy" else snapshot.bids
+        if not levels:
+            return 0.0, 0.0
+
+        remaining_size = size
+        total_value = 0.0
+        total_filled = 0.0
+        for level_index, (price, volume) in enumerate(levels):
+            if remaining_size <= 0.0:
+                break
+
+            effective_price = self._adjusted_fill_price(
+                price,
+                side=side,
+                level_index=level_index,
+                remaining_size=remaining_size,
+                volume=volume,
+                snapshot=snapshot,
+                previous_mid_price=previous_mid_price,
+            )
+            if not self._price_within_slippage(effective_price, side=side):
+                break
+
+            fill_qty = min(remaining_size, volume)
+            total_value += fill_qty * effective_price
+            total_filled += fill_qty
+            remaining_size -= fill_qty
+
+        if total_filled <= 0.0:
+            return 0.0, 0.0
+        return total_filled, total_value / total_filled
+
+    def _adjusted_fill_price(
+        self,
+        price: float,
+        *,
+        side: str,
+        level_index: int,
+        remaining_size: float,
+        volume: float,
+        snapshot: OrderBookSnapshot,
+        previous_mid_price: float | None,
+    ) -> float:
+        scale = max(abs(price), 1.0)
+        queue_penalty = level_index * self.queue_position_penalty * scale
+        liquidity_penalty = (remaining_size / max(volume, 1.0)) * self.impact_penalty * scale
+        penalty = queue_penalty + liquidity_penalty
+
+        if previous_mid_price is not None and previous_mid_price > 0.0:
+            current_mid_price = self._mid_price(snapshot)
+            price_change = current_mid_price - previous_mid_price
+            if side == "buy" and price_change > 0.0:
+                penalty += abs(price_change / previous_mid_price) * self.adverse_selection_penalty * scale
+            elif side == "sell" and price_change < 0.0:
+                penalty += abs(price_change / previous_mid_price) * self.adverse_selection_penalty * scale
+
+        if side == "buy":
+            return price + penalty
+        return price - penalty
+
+    def _price_within_slippage(self, price: float, *, side: str) -> bool:
+        if side == "buy":
+            best_ask = self._best_price("ask")
+            return price <= best_ask * (1 + self.max_slippage)
+        if side == "sell":
+            best_bid = self._best_price("bid")
+            return price >= best_bid * (1 - self.max_slippage)
+        return False
+
+    def _best_price(self, side: str) -> float:
+        if side == "ask":
+            return self._last_snapshot.asks[0][0] if getattr(self, "_last_snapshot", None) and self._last_snapshot.asks else 0.0
+        if side == "bid":
+            return self._last_snapshot.bids[0][0] if getattr(self, "_last_snapshot", None) and self._last_snapshot.bids else 0.0
+        return 0.0
+
+    def _apply_cost(self, price: float, *, side: str, size: float) -> float:
+        if self.cost_model is None:
+            return price
+        price_with_fees = self.cost_model.apply_trade_cost(price, side=side, role="taker", size=size)
         return self.cost_model.apply_fx_cost(price_with_fees, side=side, size=1.0)
 
-    def _base_price(self, snapshot: OrderBookSnapshot, *, side: str) -> float:
-        if side == "buy":
-            best_ask = snapshot.asks[0][0] if snapshot.asks else 0.0
-            return best_ask * (1 + self.max_slippage)
-        if side == "sell":
-            best_bid = snapshot.bids[0][0] if snapshot.bids else 0.0
-            return best_bid * (1 - self.max_slippage)
-        raise ValueError("side must be buy or sell")
+    def _mid_price(self, snapshot: OrderBookSnapshot) -> float:
+        if not snapshot.bids or not snapshot.asks:
+            return 0.0
+        return (snapshot.bids[0][0] + snapshot.asks[0][0]) / 2.0
+
+    def _update_average_price(self, *, current_position: float, average_price: float | None, fill_size: float, fill_price: float) -> float:
+        if current_position <= 0.0:
+            return None
+        if average_price is None:
+            return fill_price
+        total_position = current_position
+        return ((average_price * (total_position - fill_size)) + (fill_price * fill_size)) / total_position
+
+    @property
+    def _latency_steps(self) -> int:
+        return max(0, self.latency_ms // 100)
