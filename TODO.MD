@@ -167,7 +167,7 @@ This phase captures the remaining work needed to move from a prototype backtest/
 - [x] **Runtime Orchestration**
   - [x] Implement a single live-runtime loop that wires market data ingestion, signal generation, risk gates, execution routing, persistence, and monitoring together
   - [x] Support explicit runtime modes: `paper`, `live_dry_run`, and `live`
-  - [ ] Add startup health checks and graceful shutdown handling for reconnects and unexpected process exits
+  - [x] Add startup health checks and graceful shutdown handling for reconnects and unexpected process exits
   - [ ] Add a watchdog that can restart the runtime if the main loop stalls or the data feed dies
 - [ ] **Exchange Execution Adapters**
   - [ ] Add authenticated order submission / cancellation adapters for Kraken and Firi
