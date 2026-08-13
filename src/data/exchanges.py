@@ -226,9 +226,6 @@ class KrakenConnector(ExchangeConnector):
         self.api_secret = api_secret or settings.kraken_secret
 
     async def connect(self) -> None:
-        if not self.api_key or not self.api_secret:
-            raise RuntimeError("Kraken API credentials are not configured")
-
         payload = self._request_json("GET", "https://api.kraken.com/0/public/Time")
         if not isinstance(payload, dict):
             raise RuntimeError("Unexpected Kraken time payload")
