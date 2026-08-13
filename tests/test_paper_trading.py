@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from src.execution import PaperTradingEngine
 from src.risk.controls import RiskControlConfig, RiskManager
@@ -107,3 +108,29 @@ def test_paper_trading_engine_can_cancel_unfilled_orders() -> None:
 
     assert result.orders[0].status == "CANCELED"
     assert len(result.trades) == 0
+
+
+def test_paper_trading_engine_skips_zero_size_orders() -> None:
+    """Zero-size risk decisions should not create paper-trading orders."""
+    class ZeroSizeRiskManager:
+        def evaluate(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(allow_entry=True, position_size=0.0)
+
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        )
+    ]
+
+    result = PaperTradingEngine(risk_manager=ZeroSizeRiskManager()).run(bars, [1.0])
+
+    assert result.orders == []
+    assert result.trades == []

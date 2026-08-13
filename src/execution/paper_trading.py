@@ -126,16 +126,24 @@ class PaperTradingEngine:
 
             if not active_orders and signal > 0 and position_size <= 0.0:
                 risk_decision = self._evaluate_risk(bars=list(bars[: index + 1]), equity=cash + (position_size * price if position_size else 0.0), peak_equity=peak_equity)
-                if risk_decision.allow_entry:
-                    order = self._create_order(timestamp=timestamp, side="buy", size=max(0.0, min(self.default_order_size, risk_decision.position_size)))
-                    active_orders.append(order)
-                    orders.append(order)
+                if not risk_decision.allow_entry:
+                    pass
+                else:
+                    order_size = max(0.0, min(self.default_order_size, risk_decision.position_size))
+                    if order_size > 0.0:
+                        order = self._create_order(timestamp=timestamp, side="buy", size=order_size)
+                        active_orders.append(order)
+                        orders.append(order)
             elif not active_orders and signal < 0 and position_size >= 0.0:
                 risk_decision = self._evaluate_risk(bars=list(bars[: index + 1]), equity=cash + (position_size * price if position_size else 0.0), peak_equity=peak_equity)
-                if risk_decision.allow_entry:
-                    order = self._create_order(timestamp=timestamp, side="sell", size=max(0.0, min(self.default_order_size, risk_decision.position_size)))
-                    active_orders.append(order)
-                    orders.append(order)
+                if not risk_decision.allow_entry:
+                    pass
+                else:
+                    order_size = max(0.0, min(self.default_order_size, risk_decision.position_size))
+                    if order_size > 0.0:
+                        order = self._create_order(timestamp=timestamp, side="sell", size=order_size)
+                        active_orders.append(order)
+                        orders.append(order)
 
             for order in list(active_orders):
                 if order.status == "PENDING_SUBMIT":
