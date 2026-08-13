@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from src.backtest.costs import CostModel
+from src.risk.controls import RiskDecision, RiskManager
 
 
 StrategyFn = Callable[[Sequence[Any], int, Any], float | int | str | None]
@@ -56,6 +57,7 @@ class SimpleBacktester:
         initial_equity: float = 100.0,
         threshold: float = 0.02,
         cost_model: CostModel | None = None,
+        risk_manager: RiskManager | None = None,
     ) -> None:
         self.strategy = strategy or self._default_strategy
         if initial_equity <= 0:
@@ -66,6 +68,7 @@ class SimpleBacktester:
         self.initial_equity = initial_equity
         self.threshold = threshold
         self.cost_model = cost_model
+        self.risk_manager = risk_manager
 
     def run(self, bars: Sequence[Any]) -> BacktestResult:
         """Backtest a strategy over a sequence of OHLC-like bars."""
@@ -152,16 +155,78 @@ class SimpleBacktester:
                 current_position = 0.0
                 entry_price = None
                 entry_timestamp = None
-            elif current_position == 0.0 and signal > 0:
-                current_position = 1.0
-                entry_price = self._apply_cost(close_price, side="buy", cost_model=cost_model)
-                entry_timestamp = timestamp
-                entry_size = 1.0
-            elif current_position == 0.0 and signal < 0:
-                current_position = -1.0
-                entry_price = self._apply_cost(close_price, side="sell", cost_model=cost_model)
-                entry_timestamp = timestamp
-                entry_size = 1.0
+            elif current_position == 0.0:
+                risk_decision = self._evaluate_risk(history=history, equity=equity, peak_equity=peak_equity)
+                if signal > 0 and risk_decision.allow_entry:
+                    current_position = 1.0
+                    entry_price = self._apply_cost(close_price, side="buy", cost_model=cost_model)
+                    entry_timestamp = timestamp
+                    entry_size = risk_decision.position_size
+                elif signal < 0 and risk_decision.allow_entry:
+                    current_position = -1.0
+                    entry_price = self._apply_cost(close_price, side="sell", cost_model=cost_model)
+                    entry_timestamp = timestamp
+                    entry_size = risk_decision.position_size
+                else:
+                    entry_price = None
+                    entry_timestamp = None
+                    entry_size = 1.0
+            elif current_position > 0.0 and signal <= 0:
+                if entry_price is not None:
+                    exit_price = self._apply_cost(close_price, side="sell", cost_model=cost_model)
+                    return_pct = (exit_price - entry_price) / entry_price
+                    trade_count += 1
+                    if return_pct > 0:
+                        wins += 1
+                    equity *= 1 + entry_size * return_pct
+                    trade_prices.append(exit_price)
+                    trade_timestamps.append(timestamp)
+                    trade_returns.append(return_pct)
+                    trade_sizes.append(entry_size)
+                    trade_costs.append(abs(exit_price - close_price) + abs(entry_price - close_price))
+                    trade_records.append(
+                        TradeRecord(
+                            timestamp=timestamp,
+                            side="long",
+                            entry_price=entry_price,
+                            exit_price=exit_price,
+                            size=entry_size,
+                            return_pct=return_pct,
+                            equity_after_trade=equity,
+                            cost=abs(exit_price - close_price) + abs(entry_price - close_price),
+                        )
+                    )
+                current_position = 0.0
+                entry_price = None
+                entry_timestamp = None
+            elif current_position < 0.0 and signal >= 0:
+                if entry_price is not None:
+                    exit_price = self._apply_cost(close_price, side="buy", cost_model=cost_model)
+                    return_pct = (entry_price - exit_price) / entry_price
+                    trade_count += 1
+                    if return_pct > 0:
+                        wins += 1
+                    equity *= 1 + entry_size * return_pct
+                    trade_prices.append(exit_price)
+                    trade_timestamps.append(timestamp)
+                    trade_returns.append(return_pct)
+                    trade_sizes.append(entry_size)
+                    trade_costs.append(abs(exit_price - close_price) + abs(entry_price - close_price))
+                    trade_records.append(
+                        TradeRecord(
+                            timestamp=timestamp,
+                            side="short",
+                            entry_price=entry_price,
+                            exit_price=exit_price,
+                            size=entry_size,
+                            return_pct=return_pct,
+                            equity_after_trade=equity,
+                            cost=abs(exit_price - close_price) + abs(entry_price - close_price),
+                        )
+                    )
+                current_position = 0.0
+                entry_price = None
+                entry_timestamp = None
             elif current_position > 0.0 and signal <= 0:
                 if entry_price is not None:
                     exit_price = self._apply_cost(close_price, side="sell", cost_model=cost_model)
@@ -265,6 +330,11 @@ class SimpleBacktester:
             return price
         price_with_fees = cost_model.apply_trade_cost(price, side=side, role="taker", size=1.0)
         return cost_model.apply_fx_cost(price_with_fees, side=side, size=1.0)
+
+    def _evaluate_risk(self, *, history: Sequence[Any], equity: float, peak_equity: float) -> RiskDecision:
+        if self.risk_manager is None:
+            return RiskDecision(allow_entry=True, position_size=1.0)
+        return self.risk_manager.evaluate(bars=history, equity=equity, peak_equity=peak_equity)
 
 
 def moving_average_crossover_strategy(short_window: int = 3, long_window: int = 6) -> StrategyFn:

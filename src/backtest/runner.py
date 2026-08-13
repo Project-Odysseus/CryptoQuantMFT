@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
 from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, moving_average_crossover_strategy
+from src.risk.controls import RiskControlConfig, RiskManager
 
 
 @dataclass(slots=True)
@@ -21,6 +22,11 @@ class BacktestConfig:
     taker_fee: float = 0.0
     maker_fee: float = 0.0
     fx_spread_bps: float = 0.0
+    max_drawdown_pct: float = 0.25
+    max_volatility_pct: float = 0.10
+    risk_per_trade_pct: float = 0.02
+    max_position_size: float = 1.0
+    volatility_window: int = 10
 
 
 @dataclass(slots=True)
@@ -76,7 +82,22 @@ def run_backtest(bars: Sequence[Any], config: BacktestConfig | None = None, regi
     if resolved_config.include_costs:
         cost_model = build_cost_model(resolved_config)
 
-    backtester = SimpleBacktester(strategy=strategy, initial_equity=resolved_config.initial_equity, threshold=resolved_config.threshold, cost_model=cost_model)
+    risk_manager = RiskManager(
+        RiskControlConfig(
+            max_drawdown_pct=resolved_config.max_drawdown_pct,
+            max_volatility_pct=resolved_config.max_volatility_pct,
+            risk_per_trade_pct=resolved_config.risk_per_trade_pct,
+            max_position_size=resolved_config.max_position_size,
+            volatility_window=resolved_config.volatility_window,
+        )
+    )
+    backtester = SimpleBacktester(
+        strategy=strategy,
+        initial_equity=resolved_config.initial_equity,
+        threshold=resolved_config.threshold,
+        cost_model=cost_model,
+        risk_manager=risk_manager,
+    )
     return backtester.run(list(bars))
 
 
