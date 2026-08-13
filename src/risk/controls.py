@@ -19,6 +19,9 @@ class RiskControlConfig:
     volatility_window: int = 10
     kelly_fraction: float = 0.5
     kelly_window: int = 20
+    max_slippage_pct: float = 0.03
+    max_spread_pct: float = 0.03
+    max_quote_age_seconds: int = 900
 
 
 @dataclass(slots=True)
@@ -36,10 +39,31 @@ class RiskManager:
     def __init__(self, config: RiskControlConfig | None = None) -> None:
         self.config = config or RiskControlConfig()
 
-    def evaluate(self, *, bars: Sequence[Any], equity: float, peak_equity: float, current_position: float = 0.0) -> RiskDecision:
+    def evaluate(
+        self,
+        *,
+        bars: Sequence[Any],
+        equity: float,
+        peak_equity: float,
+        current_position: float = 0.0,
+        current_bar: Any | None = None,
+        bar_index: int | None = None,
+    ) -> RiskDecision:
         """Return whether a new position should be allowed and how large it should be."""
         if current_position != 0.0:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="position_open")
+
+        if current_bar is not None:
+            slippage_pct = self._estimate_slippage_pct(current_bar)
+            if slippage_pct > self.config.max_slippage_pct:
+                return RiskDecision(allow_entry=False, position_size=0.0, reason="slippage_limit")
+
+            spread_pct = self._estimate_spread_pct(current_bar)
+            if spread_pct > self.config.max_spread_pct:
+                return RiskDecision(allow_entry=False, position_size=0.0, reason="spread_limit")
+
+            if self._is_stale_quote(current_bar=current_bar, bars=bars, bar_index=bar_index):
+                return RiskDecision(allow_entry=False, position_size=0.0, reason="stale_quote")
 
         drawdown = 0.0 if peak_equity <= 0.0 else max(0.0, (peak_equity - equity) / peak_equity)
         if drawdown > self.config.max_drawdown_pct:
@@ -111,6 +135,35 @@ class RiskManager:
 
         return max(0.0, min(1.0, kelly_fraction * self.config.kelly_fraction))
 
+    def _estimate_slippage_pct(self, bar: Any) -> float:
+        close = _get_close(bar)
+        if close <= 0.0:
+            return 0.0
+        return abs(close - _get_open(bar)) / close
+
+    def _estimate_spread_pct(self, bar: Any) -> float:
+        close = _get_close(bar)
+        if close <= 0.0:
+            return 0.0
+        return abs(_get_high(bar) - _get_low(bar)) / close
+
+    def _is_stale_quote(self, *, current_bar: Any, bars: Sequence[Any], bar_index: int | None) -> bool:
+        if self.config.max_quote_age_seconds <= 0:
+            return False
+        if not bars:
+            return False
+
+        resolved_index = len(bars) - 1 if bar_index is None else bar_index
+        if resolved_index <= 0 or resolved_index >= len(bars):
+            return False
+
+        current_timestamp = _get_timestamp(current_bar)
+        previous_timestamp = _get_timestamp(bars[resolved_index - 1])
+        if current_timestamp is None or previous_timestamp is None:
+            return False
+
+        return (current_timestamp - previous_timestamp).total_seconds() > self.config.max_quote_age_seconds
+
 
 def _get_close(bar: Any) -> float:
     if hasattr(bar, "close"):
@@ -118,3 +171,35 @@ def _get_close(bar: Any) -> float:
     if isinstance(bar, dict):
         return float(bar["close"])
     raise TypeError("bars must expose a close attribute or be dictionaries with a close key")
+
+
+def _get_open(bar: Any) -> float:
+    if hasattr(bar, "open"):
+        return float(bar.open)
+    if isinstance(bar, dict):
+        return float(bar["open"])
+    raise TypeError("bars must expose an open attribute or be dictionaries with an open key")
+
+
+def _get_high(bar: Any) -> float:
+    if hasattr(bar, "high"):
+        return float(bar.high)
+    if isinstance(bar, dict):
+        return float(bar["high"])
+    raise TypeError("bars must expose a high attribute or be dictionaries with a high key")
+
+
+def _get_low(bar: Any) -> float:
+    if hasattr(bar, "low"):
+        return float(bar.low)
+    if isinstance(bar, dict):
+        return float(bar["low"])
+    raise TypeError("bars must expose a low attribute or be dictionaries with a low key")
+
+
+def _get_timestamp(bar: Any) -> Any | None:
+    if hasattr(bar, "timestamp"):
+        return getattr(bar, "timestamp")
+    if isinstance(bar, dict):
+        return bar.get("timestamp")
+    return None

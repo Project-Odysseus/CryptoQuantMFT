@@ -125,7 +125,14 @@ class PaperTradingEngine:
             timestamp = _get_timestamp(bar)
 
             if not active_orders and signal > 0 and position_size <= 0.0:
-                risk_decision = self._evaluate_risk(bars=list(bars[: index + 1]), equity=cash + (position_size * price if position_size else 0.0), peak_equity=peak_equity)
+                risk_decision = self._evaluate_risk(
+                    bars=list(bars[: index + 1]),
+                    equity=cash + (position_size * price if position_size else 0.0),
+                    peak_equity=peak_equity,
+                    current_position=position_size,
+                    current_bar=bar,
+                    bar_index=index,
+                )
                 if not risk_decision.allow_entry:
                     pass
                 else:
@@ -135,7 +142,14 @@ class PaperTradingEngine:
                         active_orders.append(order)
                         orders.append(order)
             elif not active_orders and signal < 0 and position_size >= 0.0:
-                risk_decision = self._evaluate_risk(bars=list(bars[: index + 1]), equity=cash + (position_size * price if position_size else 0.0), peak_equity=peak_equity)
+                risk_decision = self._evaluate_risk(
+                    bars=list(bars[: index + 1]),
+                    equity=cash + (position_size * price if position_size else 0.0),
+                    peak_equity=peak_equity,
+                    current_position=position_size,
+                    current_bar=bar,
+                    bar_index=index,
+                )
                 if not risk_decision.allow_entry:
                     pass
                 else:
@@ -250,10 +264,26 @@ class PaperTradingEngine:
         self._order_counter += 1
         return PaperOrder(id=f"order-{self._order_counter}", timestamp=timestamp, side=side, size=size)
 
-    def _evaluate_risk(self, *, bars: Sequence[Any], equity: float, peak_equity: float) -> Any:
+    def _evaluate_risk(
+        self,
+        *,
+        bars: Sequence[Any],
+        equity: float,
+        peak_equity: float,
+        current_position: float = 0.0,
+        current_bar: Any | None = None,
+        bar_index: int | None = None,
+    ) -> Any:
         if self.risk_manager is None:
             return type("RiskDecision", (), {"allow_entry": True, "position_size": self.default_order_size})()
-        return self.risk_manager.evaluate(bars=bars, equity=equity, peak_equity=peak_equity)
+        return self.risk_manager.evaluate(
+            bars=bars,
+            equity=equity,
+            peak_equity=peak_equity,
+            current_position=current_position,
+            current_bar=current_bar,
+            bar_index=bar_index,
+        )
 
     def _apply_cost(self, price: float, *, side: str, size: float) -> float:
         if self.cost_model is None:
