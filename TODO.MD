@@ -107,6 +107,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] Build a lightweight paper-trading execution engine that accepts signals and records simulated fills
   - [x] Implement a simple order state machine for `PENDING_SUBMIT` $\rightarrow$ `OPEN` $\rightarrow$ `PARTIALLY_FILLED` $\rightarrow$ `FILLED` / `CANCELED`
   - [x] Record simulated trades, fees, and portfolio updates locally for strategy evaluation
+  - [x] Apply the existing backtest risk controls (drawdown, volatility, and Kelly sizing) to paper-trading entries
 - [ ] **Phase 6B: Production Routing & OMS Hardening**
   - [ ] Implement **Maker-First Strategy:** Place Post-Only limit orders at bid/ask to capture lower fees/rebates
   - [ ] Implement Order Timeout Guard: If Post-Only order remains unfilled after $T$ seconds and signal alpha remains high, dynamically route as a Taker order

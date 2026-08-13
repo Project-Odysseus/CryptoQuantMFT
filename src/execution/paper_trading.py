@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
+from src.risk.controls import RiskManager
 
 
 @dataclass(slots=True)
@@ -79,6 +80,7 @@ class PaperTradingEngine:
         partial_fill_fraction: float = 1.0,
         max_order_lifetime_bars: int = 2,
         cost_model: CostModel | None = None,
+        risk_manager: RiskManager | None = None,
     ) -> None:
         if initial_cash <= 0:
             raise ValueError("initial_cash must be positive")
@@ -94,6 +96,7 @@ class PaperTradingEngine:
         self.partial_fill_fraction = partial_fill_fraction
         self.max_order_lifetime_bars = max_order_lifetime_bars
         self.cost_model = cost_model or build_default_cost_model("mock")
+        self.risk_manager = risk_manager
         self._order_counter = 0
 
     def run(self, bars: Sequence[Any], signals: Sequence[float | int | str | None]) -> PaperTradingResult:
@@ -106,6 +109,7 @@ class PaperTradingEngine:
         cash = self.initial_cash
         position_size = 0.0
         avg_entry_price: float | None = None
+        peak_equity = self.initial_cash
         orders: list[PaperOrder] = []
         trades: list[PaperTrade] = []
         equity_curve: list[float] = []
@@ -118,13 +122,17 @@ class PaperTradingEngine:
             timestamp = _get_timestamp(bar)
 
             if not active_orders and signal > 0 and position_size <= 0.0:
-                order = self._create_order(timestamp=timestamp, side="buy", size=self.default_order_size)
-                active_orders.append(order)
-                orders.append(order)
+                risk_decision = self._evaluate_risk(bars=list(bars[: index + 1]), equity=cash + (position_size * price if position_size else 0.0), peak_equity=peak_equity)
+                if risk_decision.allow_entry:
+                    order = self._create_order(timestamp=timestamp, side="buy", size=max(0.0, min(self.default_order_size, risk_decision.position_size)))
+                    active_orders.append(order)
+                    orders.append(order)
             elif not active_orders and signal < 0 and position_size >= 0.0:
-                order = self._create_order(timestamp=timestamp, side="sell", size=self.default_order_size)
-                active_orders.append(order)
-                orders.append(order)
+                risk_decision = self._evaluate_risk(bars=list(bars[: index + 1]), equity=cash + (position_size * price if position_size else 0.0), peak_equity=peak_equity)
+                if risk_decision.allow_entry:
+                    order = self._create_order(timestamp=timestamp, side="sell", size=max(0.0, min(self.default_order_size, risk_decision.position_size)))
+                    active_orders.append(order)
+                    orders.append(order)
 
             for order in list(active_orders):
                 if order.status == "PENDING_SUBMIT":
@@ -192,6 +200,7 @@ class PaperTradingEngine:
                     )
 
             equity = cash + (position_size * price if position_size else 0.0)
+            peak_equity = max(peak_equity, equity)
             equity_curve.append(equity)
             portfolio_history.append(
                 PortfolioSnapshot(
@@ -208,6 +217,11 @@ class PaperTradingEngine:
     def _create_order(self, *, timestamp: datetime, side: str, size: float) -> PaperOrder:
         self._order_counter += 1
         return PaperOrder(id=f"order-{self._order_counter}", timestamp=timestamp, side=side, size=size)
+
+    def _evaluate_risk(self, *, bars: Sequence[Any], equity: float, peak_equity: float) -> Any:
+        if self.risk_manager is None:
+            return type("RiskDecision", (), {"allow_entry": True, "position_size": self.default_order_size})()
+        return self.risk_manager.evaluate(bars=bars, equity=equity, peak_equity=peak_equity)
 
     def _apply_cost(self, price: float, *, side: str, size: float) -> float:
         if self.cost_model is None:
