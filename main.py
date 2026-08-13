@@ -90,10 +90,14 @@ def run_demo_backtest(output_dir: str | Path = "plots", bars: list[OHLCVBar] | N
     )
 
     logger.info(
-        "demo_backtest_complete total_return={} trades={} final_equity={} equity_plot={} trade_plot={}",
+        "demo_backtest_complete total_return={} trades={} final_equity={} sharpe={} sortino={} max_drawdown={} profit_factor={} equity_plot={} trade_plot={}",
         result.total_return,
         result.trades,
         result.final_equity,
+        result.metrics.sharpe_ratio,
+        result.metrics.sortino_ratio,
+        result.metrics.max_drawdown,
+        result.metrics.profit_factor,
         equity_path,
         trade_path,
     )
@@ -134,11 +138,13 @@ def main() -> None:
         if args.compare_costs:
             comparison = compare_backtests(bars, config=config)
             logger.info(
-                "demo_backtest_compare strategy={} baseline_return={} cost_return={} equity_delta={} bars={}",
+                "demo_backtest_compare strategy={} baseline_return={} cost_return={} equity_delta={} baseline_sharpe={} cost_sharpe={} bars={}",
                 config.strategy_name,
                 comparison.baseline.total_return,
                 comparison.with_costs.total_return,
                 comparison.equity_delta,
+                comparison.baseline.metrics.sharpe_ratio,
+                comparison.with_costs.metrics.sharpe_ratio,
                 len(bars),
             )
         else:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from src.backtest.analytics import PerformanceMetrics, build_performance_metrics
 from src.backtest.costs import CostModel, build_default_cost_model
 from src.backtest.plotting import StrategyPlotter
 from src.backtest.runner import BacktestConfig, BacktestComparison, StrategyRegistry, build_cost_model, compare_backtests, run_backtest
@@ -16,6 +17,8 @@ __all__ = [
     "EventDrivenSimulator",
     "EventDrivenTrade",
     "CostModel",
+    "PerformanceMetrics",
+    "build_performance_metrics",
     "build_default_cost_model",
     "BacktestConfig",
     "BacktestComparison",
