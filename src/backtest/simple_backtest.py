@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from src.backtest.analytics import PerformanceMetrics, build_performance_metrics
 from src.backtest.costs import CostModel
 from src.risk.controls import RiskDecision, RiskManager
 
@@ -45,6 +46,7 @@ class BacktestResult:
     trade_sizes: list[float] = field(default_factory=list)
     trade_records: list[TradeRecord] = field(default_factory=list)
     trade_costs: list[float] = field(default_factory=list)
+    metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)
 
 
 class SimpleBacktester:
@@ -292,9 +294,19 @@ class SimpleBacktester:
         if equity_series:
             drawdown = max((peak_equity - value) / peak_equity if peak_equity > 0 else 0.0 for value in equity_series)
 
+        total_return = round(equity / self.initial_equity - 1.0, 10)
+        win_rate = round(wins / trade_count, 10) if trade_count else 0.0
+        metrics = build_performance_metrics(
+            equity_series=equity_series,
+            trade_returns=trade_returns,
+            total_return=total_return,
+            max_drawdown=drawdown,
+            win_rate=win_rate,
+        )
+
         return BacktestResult(
-            total_return=round(equity / self.initial_equity - 1.0, 10),
-            win_rate=round(wins / trade_count, 10) if trade_count else 0.0,
+            total_return=total_return,
+            win_rate=win_rate,
             max_drawdown=round(drawdown, 10),
             trades=trade_count,
             final_equity=round(equity, 10),
@@ -306,6 +318,7 @@ class SimpleBacktester:
             trade_sizes=trade_sizes,
             trade_records=trade_records,
             trade_costs=trade_costs,
+            metrics=metrics,
         )
 
     def _default_strategy(self, history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:

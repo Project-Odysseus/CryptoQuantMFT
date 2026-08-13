@@ -81,7 +81,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] Model FX conversion spread costs (EUR/NOK) in a lightweight way
   - [ ] Improve later with exchange-specific fee schedules, tiered maker rebates, partial-fill fee handling, and more realistic FX spread modeling
 - [ ] **Quantitative Performance Analytics**
-  - [ ] Generate statistics: Sharpe Ratio, Sortino Ratio, Max Drawdown, Calmar Ratio, Win/Loss Ratio, Profit Factor, Expectancy
+  - [x] Generate a first-pass analytics layer: Sharpe Ratio, Sortino Ratio, Max Drawdown, Calmar Ratio, Win/Loss Ratio, Profit Factor, and Expectancy
   - [ ] Build Out-of-Sample (OOS) testing framework and Walk-Forward Optimization (WFO) to eliminate overfitting
 
 ---
@@ -92,7 +92,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [ ] **Spread Guard:** Block entry if current bid-ask spread exceeds historical $95^{\text{th}}$ percentile
   - [ ] **Stale Quote Guard:** Disallow order placement if WS feed latency exceeds $X$ milliseconds
 - [ ] **Position Sizing & Capital Allocation**
-  - [ ] Implement Volatility-Adjusted Sizing (Half-Kelly Criterion or Fixed Fractional Risk)
+  - [x] Implement Volatility-Adjusted Sizing with a fractional Kelly sizing layer
   - [ ] Implement Dynamic Inventory Risk Manager: penalize buy signals if portfolio inventory is heavily long-skewed on one exchange
 - [ ] **Post-Trade & Portfolio Risk Controls**
   - [ ] **Circuit Breakers:** Implement daily Max Drawdown limit (e.g., hard stop at -2% account equity drop in 24 hours)
@@ -104,9 +104,9 @@ A production-grade, event-driven quantitative trading system in Python designed 
 
 ## Phase 6: OMS & Smart Order Router (Maker-First Execution)
 - [ ] **Phase 6A: Paper-Trading Execution Skeleton**
-  - [ ] Build a lightweight paper-trading execution engine that accepts signals and records simulated fills
-  - [ ] Implement a simple order state machine for `PENDING_SUBMIT` $\rightarrow$ `OPEN` $\rightarrow$ `PARTIALLY_FILLED` $\rightarrow$ `FILLED` / `CANCELED`
-  - [ ] Record simulated trades, fees, and portfolio updates locally for strategy evaluation
+  - [x] Build a lightweight paper-trading execution engine that accepts signals and records simulated fills
+  - [x] Implement a simple order state machine for `PENDING_SUBMIT` $\rightarrow$ `OPEN` $\rightarrow$ `PARTIALLY_FILLED` $\rightarrow$ `FILLED` / `CANCELED`
+  - [x] Record simulated trades, fees, and portfolio updates locally for strategy evaluation
 - [ ] **Phase 6B: Production Routing & OMS Hardening**
   - [ ] Implement **Maker-First Strategy:** Place Post-Only limit orders at bid/ask to capture lower fees/rebates
   - [ ] Implement Order Timeout Guard: If Post-Only order remains unfilled after $T$ seconds and signal alpha remains high, dynamically route as a Taker order

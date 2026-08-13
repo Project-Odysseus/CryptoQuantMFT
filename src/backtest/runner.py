@@ -27,6 +27,8 @@ class BacktestConfig:
     risk_per_trade_pct: float = 0.02
     max_position_size: float = 1.0
     volatility_window: int = 10
+    kelly_fraction: float = 0.5
+    kelly_window: int = 20
 
 
 @dataclass(slots=True)
@@ -89,6 +91,8 @@ def run_backtest(bars: Sequence[Any], config: BacktestConfig | None = None, regi
             risk_per_trade_pct=resolved_config.risk_per_trade_pct,
             max_position_size=resolved_config.max_position_size,
             volatility_window=resolved_config.volatility_window,
+            kelly_fraction=resolved_config.kelly_fraction,
+            kelly_window=resolved_config.kelly_window,
         )
     )
     backtester = SimpleBacktester(

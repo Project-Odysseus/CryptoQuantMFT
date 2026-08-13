@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import statistics
 from dataclasses import dataclass
 from typing import Any, Sequence
+
+import numpy as np
 
 
 @dataclass(slots=True)
@@ -16,6 +17,8 @@ class RiskControlConfig:
     risk_per_trade_pct: float = 0.02
     max_position_size: float = 1.0
     volatility_window: int = 10
+    kelly_fraction: float = 0.5
+    kelly_window: int = 20
 
 
 @dataclass(slots=True)
@@ -49,8 +52,10 @@ class RiskManager:
         if volatility_pct <= 0.0:
             return RiskDecision(allow_entry=True, position_size=self.config.max_position_size)
 
-        position_size = min(self.config.max_position_size, self.config.risk_per_trade_pct / volatility_pct)
-        return RiskDecision(allow_entry=True, position_size=max(0.0, position_size))
+        base_position_size = min(self.config.max_position_size, self.config.risk_per_trade_pct / volatility_pct)
+        kelly_multiplier = self._estimate_kelly_multiplier(bars)
+        position_size = base_position_size * kelly_multiplier
+        return RiskDecision(allow_entry=True, position_size=max(0.0, min(self.config.max_position_size, position_size)))
 
     def _estimate_volatility(self, bars: Sequence[Any]) -> float:
         if len(bars) < 2:
@@ -71,7 +76,40 @@ class RiskManager:
         if not returns:
             return 0.0
 
-        return float(statistics.pstdev(returns))
+        return float(np.std(returns, ddof=0))
+
+    def _estimate_kelly_multiplier(self, bars: Sequence[Any]) -> float:
+        if len(bars) < 2:
+            return 1.0
+
+        closes = [_get_close(bar) for bar in bars[-self.config.kelly_window :]]
+        returns = []
+        for index in range(1, len(closes)):
+            previous_close = closes[index - 1]
+            current_close = closes[index]
+            if previous_close <= 0.0:
+                continue
+            returns.append((current_close - previous_close) / previous_close)
+
+        if len(returns) < 2:
+            return 1.0 if any(value > 0.0 for value in returns) else 0.0
+
+        positive_returns = [value for value in returns if value > 0.0]
+        negative_returns = [abs(value) for value in returns if value < 0.0]
+        if not positive_returns or not negative_returns:
+            return 1.0 if positive_returns else 0.0
+
+        win_rate = len(positive_returns) / len(returns)
+        avg_win = float(np.mean(positive_returns))
+        avg_loss = float(np.mean(negative_returns))
+        if avg_loss <= 0.0:
+            return 1.0 if avg_win > 0.0 else 0.0
+
+        win_loss_ratio = avg_win / avg_loss
+        kelly_fraction = (win_rate * win_loss_ratio - (1.0 - win_rate)) / win_loss_ratio
+        kelly_fraction = max(0.0, min(1.0, kelly_fraction))
+
+        return max(0.0, min(1.0, kelly_fraction * self.config.kelly_fraction))
 
 
 def _get_close(bar: Any) -> float:
