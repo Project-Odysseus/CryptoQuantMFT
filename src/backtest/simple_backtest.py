@@ -100,7 +100,59 @@ class SimpleBacktester:
             close_price = _get_close(current_bar)
             timestamp = _get_timestamp(current_bar)
 
-            if current_position == 0.0 and signal > 0:
+            if index == len(bars) - 1 and current_position != 0.0:
+                if current_position > 0.0:
+                    exit_price = self._apply_cost(close_price, side="sell", cost_model=cost_model)
+                    return_pct = (exit_price - entry_price) / entry_price if entry_price is not None else 0.0
+                    trade_count += 1
+                    if return_pct > 0:
+                        wins += 1
+                    equity *= 1 + entry_size * return_pct
+                    trade_prices.append(exit_price)
+                    trade_timestamps.append(timestamp)
+                    trade_returns.append(return_pct)
+                    trade_sizes.append(entry_size)
+                    trade_costs.append(abs(exit_price - close_price) + abs(entry_price - close_price) if entry_price is not None else 0.0)
+                    trade_records.append(
+                        TradeRecord(
+                            timestamp=timestamp,
+                            side="long",
+                            entry_price=entry_price if entry_price is not None else close_price,
+                            exit_price=exit_price,
+                            size=entry_size,
+                            return_pct=return_pct,
+                            equity_after_trade=equity,
+                            cost=abs(exit_price - close_price) + abs(entry_price - close_price) if entry_price is not None else 0.0,
+                        )
+                    )
+                else:
+                    exit_price = self._apply_cost(close_price, side="buy", cost_model=cost_model)
+                    return_pct = (entry_price - exit_price) / entry_price if entry_price is not None else 0.0
+                    trade_count += 1
+                    if return_pct > 0:
+                        wins += 1
+                    equity *= 1 + entry_size * return_pct
+                    trade_prices.append(exit_price)
+                    trade_timestamps.append(timestamp)
+                    trade_returns.append(return_pct)
+                    trade_sizes.append(entry_size)
+                    trade_costs.append(abs(exit_price - close_price) + abs(entry_price - close_price) if entry_price is not None else 0.0)
+                    trade_records.append(
+                        TradeRecord(
+                            timestamp=timestamp,
+                            side="short",
+                            entry_price=entry_price if entry_price is not None else close_price,
+                            exit_price=exit_price,
+                            size=entry_size,
+                            return_pct=return_pct,
+                            equity_after_trade=equity,
+                            cost=abs(exit_price - close_price) + abs(entry_price - close_price) if entry_price is not None else 0.0,
+                        )
+                    )
+                current_position = 0.0
+                entry_price = None
+                entry_timestamp = None
+            elif current_position == 0.0 and signal > 0:
                 current_position = 1.0
                 entry_price = self._apply_cost(close_price, side="buy", cost_model=cost_model)
                 entry_timestamp = timestamp

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config import settings
-from src.backtest import SimpleBacktester, StrategyPlotter, moving_average_crossover_strategy
+from src.backtest import BacktestConfig, StrategyPlotter, compare_backtests, run_backtest
 from src.data.exchanges import FiriConnector, KrakenConnector
 from src.data.pipeline import MarketDataPipeline
 from src.storage.bar_aggregator import OHLCVBar
@@ -64,9 +64,8 @@ def build_demo_bars() -> list[OHLCVBar]:
 def run_demo_backtest(output_dir: str | Path = "plots") -> None:
     """Run a small synthetic backtest and generate equity/trade plots."""
     bars = build_demo_bars()
-    strategy = moving_average_crossover_strategy(short_window=3, long_window=6)
-    backtester = SimpleBacktester(strategy=strategy)
-    result = backtester.run(bars)
+    config = BacktestConfig(strategy_name="moving_average_crossover", include_costs=False)
+    result = run_backtest(bars, config=config)
 
     plotter = StrategyPlotter(output_dir=output_dir)
     equity_path = plotter.plot_equity_curve(
@@ -99,6 +98,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="CryptoQuantMFT runtime")
     parser.add_argument("--demo-backtest", action="store_true", help="Run a synthetic backtest and save plots")
     parser.add_argument("--plot-output-dir", default="plots", help="Directory for generated plots")
+    parser.add_argument("--strategy", default="moving_average_crossover", help="Name of the strategy to run")
+    parser.add_argument("--include-costs", action="store_true", help="Apply the fee and FX cost model")
+    parser.add_argument("--compare-costs", action="store_true", help="Compare baseline and cost-adjusted backtests")
+    parser.add_argument("--taker-fee", type=float, default=0.4, help="Approximate taker fee as a percentage")
+    parser.add_argument("--maker-fee", type=float, default=0.25, help="Approximate maker fee as a percentage")
+    parser.add_argument("--fx-spread-bps", type=float, default=10.0, help="Approximate FX spread in bps")
     args = parser.parse_args()
 
     logger.info("CryptoQuantMFT startup complete")
@@ -106,7 +111,32 @@ def main() -> None:
     logger.info("log_level={}", settings.log_level)
 
     if args.demo_backtest:
-        run_demo_backtest(output_dir=args.plot_output_dir)
+        config = BacktestConfig(
+            strategy_name=args.strategy,
+            include_costs=args.include_costs,
+            taker_fee=args.taker_fee,
+            maker_fee=args.maker_fee,
+            fx_spread_bps=args.fx_spread_bps,
+        )
+        if args.compare_costs:
+            comparison = compare_backtests(build_demo_bars(), config=config)
+            logger.info(
+                "demo_backtest_compare strategy={} baseline_return={} cost_return={} equity_delta={}",
+                config.strategy_name,
+                comparison.baseline.total_return,
+                comparison.with_costs.total_return,
+                comparison.equity_delta,
+            )
+        else:
+            result = run_backtest(build_demo_bars(), config=config)
+            logger.info(
+                "demo_backtest_complete strategy={} include_costs={} total_return={} trades={} final_equity={}",
+                config.strategy_name,
+                config.include_costs,
+                result.total_return,
+                result.trades,
+                result.final_equity,
+            )
         return
 
     asyncio.run(run_pipeline())

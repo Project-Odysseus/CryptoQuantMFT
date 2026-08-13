@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
@@ -21,6 +21,16 @@ class BacktestConfig:
     taker_fee: float = 0.0
     maker_fee: float = 0.0
     fx_spread_bps: float = 0.0
+
+
+@dataclass(slots=True)
+class BacktestComparison:
+    """Compare a baseline backtest against a cost-adjusted backtest."""
+
+    baseline: BacktestResult
+    with_costs: BacktestResult
+    equity_delta: float
+    return_delta: float
 
 
 class StrategyRegistry:
@@ -60,11 +70,7 @@ def run_backtest(bars: Sequence[Any], config: BacktestConfig | None = None, regi
     resolved_config = config or BacktestConfig()
     resolved_registry = registry or StrategyRegistry()
 
-    strategy_factory = resolved_registry.get(resolved_config.strategy_name)
-    strategy = strategy_factory() if callable(strategy_factory) and not isinstance(strategy_factory, str) else None
-
-    if strategy is None:
-        raise TypeError("Strategy registry entries must resolve to a callable")
+    strategy = _resolve_strategy(resolved_config, resolved_registry)
 
     cost_model = None
     if resolved_config.include_costs:
@@ -72,3 +78,31 @@ def run_backtest(bars: Sequence[Any], config: BacktestConfig | None = None, regi
 
     backtester = SimpleBacktester(strategy=strategy, initial_equity=resolved_config.initial_equity, threshold=resolved_config.threshold, cost_model=cost_model)
     return backtester.run(list(bars))
+
+
+def compare_backtests(bars: Sequence[Any], config: BacktestConfig | None = None, registry: StrategyRegistry | None = None) -> BacktestComparison:
+    """Compare a baseline run against the same strategy with costs enabled."""
+    resolved_config = config or BacktestConfig()
+    baseline_config = replace(resolved_config, include_costs=False)
+    cost_config = replace(resolved_config, include_costs=True)
+
+    baseline = run_backtest(bars, baseline_config, registry)
+    with_costs = run_backtest(bars, cost_config, registry)
+
+    return BacktestComparison(
+        baseline=baseline,
+        with_costs=with_costs,
+        equity_delta=with_costs.final_equity - baseline.final_equity,
+        return_delta=with_costs.total_return - baseline.total_return,
+    )
+
+
+def _resolve_strategy(config: BacktestConfig, registry: StrategyRegistry) -> Any:
+    """Resolve a configured strategy name into a callable."""
+    strategy_factory = registry.get(config.strategy_name)
+    strategy = strategy_factory() if callable(strategy_factory) and not isinstance(strategy_factory, str) else None
+
+    if strategy is None:
+        raise TypeError("Strategy registry entries must resolve to a callable")
+
+    return strategy
