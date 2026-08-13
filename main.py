@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config import settings
-from src.backtest import BacktestConfig, StrategyPlotter, compare_backtests, run_backtest
+from src.backtest import BacktestConfig, StrategyPlotter, compare_backtests, run_backtest, moving_average_crossover_strategy
 from src.data.exchanges import FiriConnector, KrakenConnector
+from src.execution import PaperTradingEngine
 from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
 from src.storage.bar_aggregator import OHLCVBar
@@ -103,6 +104,29 @@ def run_demo_backtest(output_dir: str | Path = "plots", bars: list[OHLCVBar] | N
     )
 
 
+def run_paper_trading(bars: list[OHLCVBar], signals: list[float | int | str | None] | None = None) -> None:
+    """Run the paper-trading engine over bars and signals."""
+    if signals is None:
+        strategy = moving_average_crossover_strategy(short_window=3, long_window=6)
+        signals = []
+        for index in range(len(bars)):
+            history = list(bars[: index + 1])
+            signals.append(strategy(history, index, bars[index]))
+
+    engine = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=3)
+    result = engine.run(bars, signals)
+    final_equity = result.portfolio_history[-1].equity if result.portfolio_history else 1000.0
+
+    logger.info(
+        "paper_trading_complete orders={} trades={} final_equity={} final_cash={} final_position={}",
+        len(result.orders),
+        len(result.trades),
+        final_equity,
+        result.portfolio_history[-1].cash if result.portfolio_history else 1000.0,
+        result.portfolio_history[-1].position_size if result.portfolio_history else 0.0,
+    )
+
+
 def main() -> None:
     """Initialize the runtime and run either the data pipeline or a demo backtest."""
     parser = argparse.ArgumentParser(description="CryptoQuantMFT runtime")
@@ -111,6 +135,7 @@ def main() -> None:
     parser.add_argument("--strategy", default="moving_average_crossover", help="Name of the strategy to run")
     parser.add_argument("--include-costs", action="store_true", help="Apply the fee and FX cost model")
     parser.add_argument("--compare-costs", action="store_true", help="Compare baseline and cost-adjusted backtests")
+    parser.add_argument("--paper-trading", action="store_true", help="Run the paper-trading engine over bars and signals")
     parser.add_argument("--use-kraken-data", action="store_true", help="Backtest on recent Kraken OHLCV bars instead of synthetic demo bars")
     parser.add_argument("--kraken-symbol", default="BTC/EUR", help="Kraken symbol to fetch, e.g. BTC/EUR")
     parser.add_argument("--kraken-bars", type=int, default=200, help="Number of Kraken OHLCV bars to fetch")
@@ -127,6 +152,10 @@ def main() -> None:
         bars = build_demo_bars()
         if args.use_kraken_data:
             bars = build_kraken_bars(symbol=args.kraken_symbol, count=args.kraken_bars)
+
+        if args.paper_trading:
+            run_paper_trading(bars)
+            return
 
         config = BacktestConfig(
             strategy_name=args.strategy,
