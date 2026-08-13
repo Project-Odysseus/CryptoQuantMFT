@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from src.backtest.costs import CostModel, build_default_cost_model
+
 
 StrategyFn = Callable[[Sequence[Any], int, Any], float | int | str | None]
 
@@ -22,6 +24,7 @@ class TradeRecord:
     size: float
     return_pct: float
     equity_after_trade: float
+    cost: float = 0.0
 
 
 @dataclass(slots=True)
@@ -40,6 +43,7 @@ class BacktestResult:
     trade_returns: list[float] = field(default_factory=list)
     trade_sizes: list[float] = field(default_factory=list)
     trade_records: list[TradeRecord] = field(default_factory=list)
+    trade_costs: list[float] = field(default_factory=list)
 
 
 class SimpleBacktester:
@@ -51,6 +55,7 @@ class SimpleBacktester:
         *,
         initial_equity: float = 100.0,
         threshold: float = 0.02,
+        cost_model: CostModel | None = None,
     ) -> None:
         self.strategy = strategy or self._default_strategy
         if initial_equity <= 0:
@@ -60,6 +65,7 @@ class SimpleBacktester:
 
         self.initial_equity = initial_equity
         self.threshold = threshold
+        self.cost_model = cost_model
 
     def run(self, bars: Sequence[Any]) -> BacktestResult:
         """Backtest a strategy over a sequence of OHLC-like bars."""
@@ -77,11 +83,14 @@ class SimpleBacktester:
         trade_returns: list[float] = []
         trade_sizes: list[float] = []
         trade_records: list[TradeRecord] = []
+        trade_costs: list[float] = []
 
         entry_price: float | None = None
         entry_timestamp: datetime | None = None
         current_position = 0.0
         entry_size = 1.0
+
+        cost_model = self.cost_model or build_default_cost_model(_get_exchange(bars[0]))
 
         for index in range(1, len(bars)):
             history = list(bars[: index + 1])
@@ -93,34 +102,37 @@ class SimpleBacktester:
 
             if current_position == 0.0 and signal > 0:
                 current_position = 1.0
-                entry_price = close_price
+                entry_price = self._apply_cost(close_price, side="buy", cost_model=cost_model)
                 entry_timestamp = timestamp
                 entry_size = 1.0
             elif current_position == 0.0 and signal < 0:
                 current_position = -1.0
-                entry_price = close_price
+                entry_price = self._apply_cost(close_price, side="sell", cost_model=cost_model)
                 entry_timestamp = timestamp
                 entry_size = 1.0
             elif current_position > 0.0 and signal <= 0:
                 if entry_price is not None:
-                    return_pct = (close_price - entry_price) / entry_price
+                    exit_price = self._apply_cost(close_price, side="sell", cost_model=cost_model)
+                    return_pct = (exit_price - entry_price) / entry_price
                     trade_count += 1
                     if return_pct > 0:
                         wins += 1
                     equity *= 1 + entry_size * return_pct
-                    trade_prices.append(close_price)
+                    trade_prices.append(exit_price)
                     trade_timestamps.append(timestamp)
                     trade_returns.append(return_pct)
                     trade_sizes.append(entry_size)
+                    trade_costs.append(abs(exit_price - close_price) + abs(entry_price - close_price))
                     trade_records.append(
                         TradeRecord(
                             timestamp=timestamp,
                             side="long",
                             entry_price=entry_price,
-                            exit_price=close_price,
+                            exit_price=exit_price,
                             size=entry_size,
                             return_pct=return_pct,
                             equity_after_trade=equity,
+                            cost=abs(exit_price - close_price) + abs(entry_price - close_price),
                         )
                     )
                 current_position = 0.0
@@ -128,24 +140,27 @@ class SimpleBacktester:
                 entry_timestamp = None
             elif current_position < 0.0 and signal >= 0:
                 if entry_price is not None:
-                    return_pct = (entry_price - close_price) / entry_price
+                    exit_price = self._apply_cost(close_price, side="buy", cost_model=cost_model)
+                    return_pct = (entry_price - exit_price) / entry_price
                     trade_count += 1
                     if return_pct > 0:
                         wins += 1
                     equity *= 1 + entry_size * return_pct
-                    trade_prices.append(close_price)
+                    trade_prices.append(exit_price)
                     trade_timestamps.append(timestamp)
                     trade_returns.append(return_pct)
                     trade_sizes.append(entry_size)
+                    trade_costs.append(abs(exit_price - close_price) + abs(entry_price - close_price))
                     trade_records.append(
                         TradeRecord(
                             timestamp=timestamp,
                             side="short",
                             entry_price=entry_price,
-                            exit_price=close_price,
+                            exit_price=exit_price,
                             size=entry_size,
                             return_pct=return_pct,
                             equity_after_trade=equity,
+                            cost=abs(exit_price - close_price) + abs(entry_price - close_price),
                         )
                     )
                 current_position = 0.0
@@ -173,6 +188,7 @@ class SimpleBacktester:
             trade_returns=trade_returns,
             trade_sizes=trade_sizes,
             trade_records=trade_records,
+            trade_costs=trade_costs,
         )
 
     def _default_strategy(self, history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
@@ -191,6 +207,10 @@ class SimpleBacktester:
         if return_pct < -self.threshold:
             return -1
         return 0
+
+    def _apply_cost(self, price: float, *, side: str, cost_model: CostModel) -> float:
+        price_with_fees = cost_model.apply_trade_cost(price, side=side, role="taker", size=1.0)
+        return cost_model.apply_fx_cost(price_with_fees, side=side, size=1.0)
 
 
 def moving_average_crossover_strategy(short_window: int = 3, long_window: int = 6) -> StrategyFn:
@@ -238,3 +258,13 @@ def _get_timestamp(bar: Any) -> datetime:
     if isinstance(bar, dict):
         return bar["timestamp"]
     raise TypeError("bars must expose a timestamp attribute or be dictionaries with a timestamp key")
+
+
+def _get_exchange(bar: Any) -> str:
+    if hasattr(bar, "exchange"):
+        return str(bar.exchange)
+    if isinstance(bar, dict):
+        exchange = bar.get("exchange")
+        if exchange is not None:
+            return str(exchange)
+    return "mock"

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
 
+from src.backtest.costs import CostModel, build_default_cost_model
 from src.storage.order_book import OrderBookSnapshot
 
 
@@ -18,6 +19,7 @@ class EventDrivenTrade:
     price: float
     size: float
     latency_ms: int
+    cost: float = 0.0
 
 
 @dataclass(slots=True)
@@ -28,6 +30,7 @@ class EventDrivenSimulator:
     max_slippage: float = 0.01
     initial_equity: float = 100.0
     position_size: float = 1.0
+    cost_model: CostModel | None = None
 
     def __init__(
         self,
@@ -35,11 +38,13 @@ class EventDrivenSimulator:
         max_slippage: float = 0.01,
         initial_equity: float = 100.0,
         position_size: float = 1.0,
+        cost_model: CostModel | None = None,
     ) -> None:
         self.latency_ms = latency_ms
         self.max_slippage = max_slippage
         self.initial_equity = initial_equity
         self.position_size = position_size
+        self.cost_model = cost_model or build_default_cost_model("mock")
 
     def run(self, snapshots: Sequence[OrderBookSnapshot], signals: Sequence[float]) -> tuple[list[EventDrivenTrade], list[float]]:
         """Simulate fills over a stream of snapshots and signals."""
@@ -83,6 +88,7 @@ class EventDrivenSimulator:
                         price=exit_price,
                         size=self.position_size,
                         latency_ms=self.latency_ms,
+                        cost=round(exit_price - self._base_price(snapshot, side="sell" if position > 0 else "buy"), 10),
                     )
                 )
                 position = 0.0
@@ -93,6 +99,14 @@ class EventDrivenSimulator:
         return trades, equity_curve
 
     def _fill_price(self, snapshot: OrderBookSnapshot, *, side: str) -> float:
+        base_price = self._base_price(snapshot, side=side)
+        if self.cost_model is None:
+            return base_price
+
+        price_with_fees = self.cost_model.apply_trade_cost(base_price, side=side, role="taker", size=self.position_size)
+        return self.cost_model.apply_fx_cost(price_with_fees, side=side, size=1.0)
+
+    def _base_price(self, snapshot: OrderBookSnapshot, *, side: str) -> float:
         if side == "buy":
             best_ask = snapshot.asks[0][0] if snapshot.asks else 0.0
             return best_ask * (1 + self.max_slippage)
