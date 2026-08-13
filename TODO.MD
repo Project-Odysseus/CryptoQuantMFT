@@ -93,7 +93,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] **Stale Quote Guard:** Disallow entries when the quote cadence is older than the configured threshold
 - [ ] **Position Sizing & Capital Allocation**
   - [x] Implement Volatility-Adjusted Sizing with a fractional Kelly sizing layer
-  - [ ] Implement Dynamic Inventory Risk Manager: penalize buy signals if portfolio inventory is heavily long-skewed on one exchange
+  - [x] Implement Dynamic Inventory Risk Manager: penalize buy signals if portfolio inventory is heavily long-skewed on one exchange
 - [ ] **Post-Trade & Portfolio Risk Controls**
   - [ ] **Circuit Breakers:** Implement daily Max Drawdown limit (e.g., hard stop at -2% account equity drop in 24 hours)
   - [ ] **Time Stops:** Automatically liquidate/exit mean-reversion positions if $Z$-score fails to revert within $N$ half-lives

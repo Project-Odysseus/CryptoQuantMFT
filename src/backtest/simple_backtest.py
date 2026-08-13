@@ -165,6 +165,7 @@ class SimpleBacktester:
                     current_position=current_position,
                     current_bar=current_bar,
                     bar_index=index,
+                    signal=signal_value,
                 )
                 if signal > 0 and risk_decision.allow_entry:
                     current_position = 1.0
@@ -360,9 +361,17 @@ class SimpleBacktester:
         current_position: float = 0.0,
         current_bar: Any | None = None,
         bar_index: int | None = None,
+        signal: float | int | str | None = None,
     ) -> RiskDecision:
         if self.risk_manager is None:
             return RiskDecision(allow_entry=True, position_size=1.0)
+
+        if signal is None:
+            signal_side = None
+        else:
+            normalized_signal = _normalize_signal(signal)
+            signal_side = "buy" if normalized_signal > 0 else "sell" if normalized_signal < 0 else None
+
         return self.risk_manager.evaluate(
             bars=history,
             equity=equity,
@@ -370,6 +379,7 @@ class SimpleBacktester:
             current_position=current_position,
             current_bar=current_bar,
             bar_index=bar_index,
+            signal_side=signal_side,
         )
 
 
