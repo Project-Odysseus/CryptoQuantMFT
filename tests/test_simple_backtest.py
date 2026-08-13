@@ -81,15 +81,28 @@ def test_simple_backtester_supports_user_supplied_strategy() -> None:
             close=105.0,
             volume=10.0,
         ),
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc),
+            open=105.0,
+            high=106.0,
+            low=104.0,
+            close=106.0,
+            volume=10.0,
+        ),
     ]
 
-    strategy = moving_average_crossover_strategy(short_window=1, long_window=2)
+    def strategy(history: list[OHLCVBar], index: int, current_bar: OHLCVBar) -> int:
+        return 1 if index >= 1 else 0
+
     result = SimpleBacktester(strategy=strategy, initial_equity=100.0).run(bars)
 
-    assert result.trades == 0
-    assert result.trade_returns == []
-    assert result.final_equity == 100.0
-    assert result.win_rate == 0.0
+    assert result.trades == 1
+    assert len(result.trade_returns) == 1
+    assert result.final_equity > 100.0
+    assert result.win_rate == 1.0
 
 
 def test_simple_backtester_uses_cost_model_for_trade_pnl() -> None:
