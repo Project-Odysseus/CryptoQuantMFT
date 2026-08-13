@@ -87,10 +87,10 @@ A production-grade, event-driven quantitative trading system in Python designed 
 ---
 
 ## Phase 4: Risk Management & Dynamic Position Sizing
-- [ ] **Pre-Trade Risk Engine (Gatekeeper)**
-  - [ ] **Slippage & VWAP Check:** Reject trades where L2 book depth is insufficient to execute without exceeding max allowed slippage
-  - [ ] **Spread Guard:** Block entry if current bid-ask spread exceeds historical $95^{\text{th}}$ percentile
-  - [ ] **Stale Quote Guard:** Disallow order placement if WS feed latency exceeds $X$ milliseconds
+- [x] **Pre-Trade Risk Engine (Gatekeeper)**
+  - [x] **Slippage Check:** Reject entries when the current bar’s implied slippage exceeds the configured threshold
+  - [x] **Spread Guard:** Block entries when the current bar’s spread exceeds the configured threshold
+  - [x] **Stale Quote Guard:** Disallow entries when the quote cadence is older than the configured threshold
 - [ ] **Position Sizing & Capital Allocation**
   - [x] Implement Volatility-Adjusted Sizing with a fractional Kelly sizing layer
   - [ ] Implement Dynamic Inventory Risk Manager: penalize buy signals if portfolio inventory is heavily long-skewed on one exchange

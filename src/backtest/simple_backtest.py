@@ -158,7 +158,14 @@ class SimpleBacktester:
                 entry_price = None
                 entry_timestamp = None
             elif current_position == 0.0:
-                risk_decision = self._evaluate_risk(history=history, equity=equity, peak_equity=peak_equity)
+                risk_decision = self._evaluate_risk(
+                    history=history,
+                    equity=equity,
+                    peak_equity=peak_equity,
+                    current_position=current_position,
+                    current_bar=current_bar,
+                    bar_index=index,
+                )
                 if signal > 0 and risk_decision.allow_entry:
                     current_position = 1.0
                     entry_price = self._apply_cost(close_price, side="buy", cost_model=cost_model)
@@ -344,10 +351,26 @@ class SimpleBacktester:
         price_with_fees = cost_model.apply_trade_cost(price, side=side, role="taker", size=1.0)
         return cost_model.apply_fx_cost(price_with_fees, side=side, size=1.0)
 
-    def _evaluate_risk(self, *, history: Sequence[Any], equity: float, peak_equity: float) -> RiskDecision:
+    def _evaluate_risk(
+        self,
+        *,
+        history: Sequence[Any],
+        equity: float,
+        peak_equity: float,
+        current_position: float = 0.0,
+        current_bar: Any | None = None,
+        bar_index: int | None = None,
+    ) -> RiskDecision:
         if self.risk_manager is None:
             return RiskDecision(allow_entry=True, position_size=1.0)
-        return self.risk_manager.evaluate(bars=history, equity=equity, peak_equity=peak_equity)
+        return self.risk_manager.evaluate(
+            bars=history,
+            equity=equity,
+            peak_equity=peak_equity,
+            current_position=current_position,
+            current_bar=current_bar,
+            bar_index=bar_index,
+        )
 
 
 def moving_average_crossover_strategy(short_window: int = 3, long_window: int = 6) -> StrategyFn:
