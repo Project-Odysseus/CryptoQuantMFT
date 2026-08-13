@@ -68,17 +68,17 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] Build a data-agnostic backtester that can run on any OHLC-like series (ticks, 1s, 1m, 5m, 1h)
   - [x] Support pluggable user-defined strategies instead of a single hard-coded signal loop
   - [x] Generate equity-curve and trade plots against time using recorded timestamps
-  - [ ] Add richer risk controls such as volatility-adjusted sizing and max-drawdown guards
-  - [ ] Add a simple strategy-selection interface so a user can choose a strategy by name/config rather than only by passing a Python callable
+  - [x] Add a simple strategy-selection interface so a user can choose a strategy by name/config rather than only by passing a Python callable
+  - [x] Add richer risk controls such as volatility-adjusted sizing and max-drawdown guards
 - [ ] **Tier 2: Event-Driven L2 Tick Simulator**
   - [ ] Build a simple event loop that processes time-ordered L2 snapshots sequentially (eliminating look-ahead bias)
   - [ ] Implement a lightweight fill simulator that matches orders against recorded book depth and order flow
   - [ ] Inject simple artificial network latency delays between signal trigger and fill execution
   - [ ] Improve later with more realistic execution details: partial fills, queue position effects, adverse selection, and order-book slippage modeling
-- [ ] **Fee & Cost Modeling**
-  - [ ] Implement a simple first-pass fee model with approximate Maker/Taker fees for Firi and Kraken
-  - [ ] Apply fees to simulated trades in the backtest and paper-trading flow
-  - [ ] Model FX conversion spread costs (EUR/NOK) in a lightweight way
+- [x] **Fee & Cost Modeling**
+  - [x] Implement a simple first-pass fee model with approximate Maker/Taker fees for Firi and Kraken
+  - [x] Apply fees to simulated trades in the backtest and paper-trading flow
+  - [x] Model FX conversion spread costs (EUR/NOK) in a lightweight way
   - [ ] Improve later with exchange-specific fee schedules, tiered maker rebates, partial-fill fee handling, and more realistic FX spread modeling
 - [ ] **Quantitative Performance Analytics**
   - [ ] Generate statistics: Sharpe Ratio, Sortino Ratio, Max Drawdown, Calmar Ratio, Win/Loss Ratio, Profit Factor, Expectancy
