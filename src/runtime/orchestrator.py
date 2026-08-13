@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
@@ -36,6 +37,37 @@ class RuntimeHealth:
     shutdown_requested: bool = False
     shutdown_reason: str | None = None
     connector_status: dict[str, str] = field(default_factory=dict)
+    watchdog_triggered: bool = False
+    watchdog_restarts_completed: int = 0
+
+
+class RuntimeWatchdogError(RuntimeError):
+    """Raised when the runtime exceeds its heartbeat timeout."""
+
+
+class RuntimeWatchdog:
+    """Track runtime and market-data heartbeats to detect stalls."""
+
+    def __init__(self, timeout_seconds: float) -> None:
+        self.timeout_seconds = timeout_seconds
+        self.last_cycle_at: float | None = None
+        self.last_data_at: float | None = None
+
+    def start(self) -> None:
+        self.last_cycle_at = time.monotonic()
+        self.last_data_at = self.last_cycle_at
+
+    def checkin_cycle(self) -> None:
+        self.last_cycle_at = time.monotonic()
+
+    def checkin_data(self) -> None:
+        self.last_data_at = time.monotonic()
+
+    def check(self) -> bool:
+        if self.last_cycle_at is None or self.last_data_at is None:
+            return False
+        now = time.monotonic()
+        return (now - self.last_cycle_at) > self.timeout_seconds or (now - self.last_data_at) > self.timeout_seconds
 
 
 class RuntimeOrchestrator:
@@ -49,6 +81,7 @@ class RuntimeOrchestrator:
         strategy: StrategyFn | None = None,
         mode: str = "paper",
         interval_seconds: float = 1.0,
+        watchdog_timeout_seconds: float = 5.0,
     ) -> None:
         if mode not in {"paper", "live_dry_run", "live"}:
             raise ValueError("mode must be one of: paper, live_dry_run, live")
@@ -65,11 +98,13 @@ class RuntimeOrchestrator:
         self.history: list[RuntimeCycleResult] = []
         self._bar_history: list[Any] = []
         self.health = RuntimeHealth()
+        self.watchdog = RuntimeWatchdog(watchdog_timeout_seconds)
 
     async def run_startup_checks(self) -> bool:
         """Validate that the configured connectors can fetch a snapshot before starting the loop."""
         self.health.startup_checks_passed = False
         self.health.connector_status = {}
+        self.watchdog.start()
         connectors = getattr(self.pipeline, "connectors", [])
         if not connectors:
             self._mark_unhealthy("no market-data connectors configured")
@@ -107,6 +142,11 @@ class RuntimeOrchestrator:
             self.request_shutdown(reason=f"pipeline_error:{exc}")
             raise
 
+        if snapshots:
+            self.watchdog.checkin_data()
+        if new_bars:
+            self.watchdog.checkin_data()
+
         self._bar_history.extend(new_bars)
         signals = self._build_signals(self._bar_history)
         if self.mode == "live":
@@ -133,6 +173,7 @@ class RuntimeOrchestrator:
         self.health.cycles_completed += 1
         self.health.healthy = True
         self.health.last_error = None
+        self.watchdog.checkin_cycle()
         return cycle
 
     async def run_loop(self, iterations: int = 3, *, interval_seconds: float | None = None) -> list[RuntimeCycleResult]:
@@ -140,15 +181,22 @@ class RuntimeOrchestrator:
         if iterations < 1:
             raise ValueError("iterations must be at least 1")
 
-        if not await self.run_startup_checks():
+        if not self.health.startup_checks_passed and not await self.run_startup_checks():
             return self.history
 
         for index in range(iterations):
             if self.health.shutdown_requested:
                 logger.warning("runtime_shutdown_requested reason={}", self.health.shutdown_reason)
                 break
+            if self.watchdog.check():
+                self.health.watchdog_triggered = True
+                self._mark_unhealthy("watchdog timeout exceeded")
+                self.request_shutdown(reason="watchdog_timeout")
+                raise RuntimeWatchdogError("watchdog timeout exceeded")
             try:
                 await self.run_once()
+            except RuntimeWatchdogError:
+                raise
             except (asyncio.CancelledError, KeyboardInterrupt) as exc:
                 self.request_shutdown(reason="interrupted")
                 logger.warning("runtime_interrupted error={}", exc)
@@ -180,6 +228,8 @@ class RuntimeOrchestrator:
             "shutdown_reason": self.health.shutdown_reason,
             "last_error": self.health.last_error,
             "connector_status": dict(self.health.connector_status),
+            "watchdog_triggered": self.health.watchdog_triggered,
+            "watchdog_restarts_completed": self.health.watchdog_restarts_completed,
         }
 
     def _build_signals(self, bars: Sequence[Any]) -> list[float]:

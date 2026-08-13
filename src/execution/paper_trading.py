@@ -83,6 +83,7 @@ class PaperTradingEngine:
         cost_model: CostModel | None = None,
         risk_manager: RiskManager | None = None,
         trade_logger: TradeLogger | None = None,
+        execution_adapter: Any | None = None,
     ) -> None:
         if initial_cash <= 0:
             raise ValueError("initial_cash must be positive")
@@ -100,6 +101,7 @@ class PaperTradingEngine:
         self.cost_model = cost_model or build_default_cost_model("mock")
         self.risk_manager = risk_manager
         self.trade_logger = trade_logger
+        self.execution_adapter = execution_adapter
         self._order_counter = 0
 
     def run(self, bars: Sequence[Any], signals: Sequence[float | int | str | None]) -> PaperTradingResult:
@@ -144,6 +146,17 @@ class PaperTradingEngine:
                         order = self._create_order(timestamp=timestamp, side="buy", size=order_size)
                         active_orders.append(order)
                         orders.append(order)
+                        cash, position_size, avg_entry_price = self._maybe_route_order(
+                            order=order,
+                            price=price,
+                            timestamp=timestamp,
+                            cash=cash,
+                            position_size=position_size,
+                            avg_entry_price=avg_entry_price,
+                            trades=trades,
+                        )
+                        if order.status in {"FILLED", "CANCELED"}:
+                            active_orders.remove(order)
             elif not active_orders and signal < 0 and position_size >= 0.0:
                 risk_decision = self._evaluate_risk(
                     bars=list(bars[: index + 1]),
@@ -164,6 +177,17 @@ class PaperTradingEngine:
                         order = self._create_order(timestamp=timestamp, side="sell", size=order_size)
                         active_orders.append(order)
                         orders.append(order)
+                        cash, position_size, avg_entry_price = self._maybe_route_order(
+                            order=order,
+                            price=price,
+                            timestamp=timestamp,
+                            cash=cash,
+                            position_size=position_size,
+                            avg_entry_price=avg_entry_price,
+                            trades=trades,
+                        )
+                        if order.status in {"FILLED", "CANCELED"}:
+                            active_orders.remove(order)
 
             for order in list(active_orders):
                 if order.status == "PENDING_SUBMIT":
@@ -269,6 +293,85 @@ class PaperTradingEngine:
     def _create_order(self, *, timestamp: datetime, side: str, size: float) -> PaperOrder:
         self._order_counter += 1
         return PaperOrder(id=f"order-{self._order_counter}", timestamp=timestamp, side=side, size=size)
+
+    def _maybe_route_order(
+        self,
+        *,
+        order: PaperOrder,
+        price: float,
+        timestamp: datetime,
+        cash: float,
+        position_size: float,
+        avg_entry_price: float | None,
+        trades: list[PaperTrade],
+    ) -> tuple[float, float, float | None]:
+        if self.execution_adapter is None:
+            return cash, position_size, avg_entry_price
+
+        report = self.execution_adapter.submit_order(
+            order_id=order.id,
+            side=order.side,
+            size=order.size,
+            price=price,
+            timestamp=timestamp,
+        )
+        if report.status not in {"FILLED", "PARTIALLY_FILLED"}:
+            order.status = "CANCELED"
+            return cash, position_size, avg_entry_price
+
+        fill_size = min(order.size, report.filled_size or order.size)
+        execution_price = report.fill_price or price
+        cost = report.fee
+        if order.side == "buy" and cash >= execution_price * fill_size:
+            cash -= execution_price * fill_size
+            position_size += fill_size
+            avg_entry_price = self._update_average_price(
+                current_position=position_size,
+                average_price=avg_entry_price,
+                fill_size=fill_size,
+                fill_price=execution_price,
+            )
+        elif order.side == "sell" and position_size >= fill_size:
+            cash += execution_price * fill_size
+            position_size -= fill_size
+            if position_size <= 0.0:
+                avg_entry_price = None
+            else:
+                avg_entry_price = avg_entry_price
+        else:
+            order.status = "CANCELED"
+            return cash, position_size, avg_entry_price
+
+        order.filled_size = fill_size
+        order.avg_fill_price = execution_price
+        order.fees += cost
+        order.status = "FILLED"
+        order.last_updated_at = timestamp
+        trades.append(
+            PaperTrade(
+                order_id=order.id,
+                timestamp=timestamp,
+                side=order.side,
+                price=execution_price,
+                size=fill_size,
+                fee=cost,
+                cost=cost,
+            )
+        )
+        if self.trade_logger is not None:
+            self.trade_logger.log_trade(
+                timestamp=timestamp,
+                source="paper_trading",
+                exchange=self.execution_adapter.name,
+                pair="BTC/NOK",
+                side=order.side,
+                price=execution_price,
+                size=fill_size,
+                fee=cost,
+                role_maker_taker="taker",
+                latency_ms=0,
+            )
+        return cash, position_size, avg_entry_price
 
     def _evaluate_risk(
         self,

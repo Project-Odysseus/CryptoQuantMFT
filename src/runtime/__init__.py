@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from src.runtime.orchestrator import RuntimeCycleResult, RuntimeOrchestrator
+from src.runtime.orchestrator import RuntimeCycleResult, RuntimeOrchestrator, RuntimeWatchdogError
 
-__all__ = ["RuntimeCycleResult", "RuntimeOrchestrator"]
+__all__ = ["RuntimeCycleResult", "RuntimeOrchestrator", "RuntimeWatchdogError"]

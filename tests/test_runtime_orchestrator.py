@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -49,3 +50,20 @@ async def test_runtime_orchestrator_marks_unhealthy_when_startup_checks_fail() -
     assert healthy is False
     assert orchestrator.health.healthy is False
     assert orchestrator.health.startup_checks_passed is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_orchestrator_raises_when_watchdog_times_out() -> None:
+    store = MarketStore(database_path="/tmp/cryptoquantmft-watchdog-test.db")
+    pipeline = MarketDataPipeline(store=store, interval_seconds=60)
+    pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))
+
+    orchestrator = RuntimeOrchestrator(pipeline=pipeline, mode="paper", watchdog_timeout_seconds=0.001)
+    await orchestrator.run_startup_checks()
+    orchestrator.watchdog.last_cycle_at = time.monotonic() - 10.0
+    orchestrator.watchdog.last_data_at = time.monotonic() - 10.0
+
+    with pytest.raises(RuntimeError, match="watchdog timeout exceeded"):
+        await orchestrator.run_loop(iterations=1, interval_seconds=0.0)
+
+    assert orchestrator.health.watchdog_triggered is True
