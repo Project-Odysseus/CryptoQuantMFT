@@ -44,35 +44,37 @@ A production-grade, event-driven quantitative trading system in Python designed 
 ---
 
 ## Phase 3: MFT Signal Research & Quantitative Feature Engineering
-- [ ] **Order Book Imbalance (OBI) Signals (Micro-Execution)**
-  - [ ] Calculate top-$N$ bid/ask volume imbalance ratio:
-    $$OBI_t = \frac{\sum_{i=1}^N V_{i,t}^{\text{bid}} - \sum_{i=1}^N V_{i,t}^{\text{ask}}}{\sum_{i=1}^N V_{i,t}^{\text{bid}} + \sum_{i=1}^N V_{i,t}^{\text{ask}}}$$
-  - [ ] Implement **Micro-Price Generator** weighting price by volume at top-of-book
-  - [ ] Build Volume Delta / Trade Flow Toxicity indicators (VPIN approximation)
-- [ ] **Lead-Lag Signal Engine**
-  - [ ] Implement rolling cross-correlation model between global markets (Kraken BTC/EUR in NOK) and local exchange (Firi BTC/NOK)
-  - [ ] Build momentum spillover detector (identifying global price movements $> X\sigma$ before local market adjustments)
-- [ ] **Cross-Exchange Statistical Arbitrage & Mean Reversion**
-  - [ ] Build Cointegration testing suite (Engle-Granger & Johansen tests) for adjusted exchange spreads
-  - [ ] Implement rolling $Z$-score calculator on the adjusted FX/fee spread over 5m, 15m, and 1h lookbacks:
+- [x] **MVP Signal Bundle (Single-Exchange, Order-Book Driven)**
+  - [x] Implement OBI / bid-ask imbalance signal
+  - [x] Implement micro-price signal
+  - [x] Implement volume-delta / flow-pressure signal
+  - [x] Implement ATR-style volatility and momentum trend filter
+- [ ] **Single-Exchange Mean Reversion & Regime Signals**
+  - [ ] Build rolling $Z$-score calculator on a single-exchange spread/price series over 5m, 15m, and 1h lookbacks:
     $$Z_t = \frac{\text{Spread}_t - \mu_{\text{rolling}}}{\sigma_{\text{rolling}}}$$
   - [ ] Implement Ornstein-Uhlenbeck (OU) process parameter estimation for mean-reversion speed ($\theta$) and signal half-life calculation
-- [ ] **Volatility Regime & Trend Filters**
-  - [ ] Implement Average True Range (ATR) ratio and ADX filters to disable mean-reversion entries during strong directional momentum
-  - [ ] Implement time-based signal decay functions to dynamically adjust position conviction as signal age increases
+- [ ] **Signal Validation Milestone**
+  - [x] Ensure each signal has a simple test and an example plot/output
+  - [x] Keep the signal stack lightweight and easy to reason about before expanding complexity
+  - [x] Keep the backtest engine strategy-driven so a user-selected signal can be run on any supported time frame
 - [ ] **Machine Learning Signal Aggregator**
-  - [ ] Train `xgboost` / `scikit-learn` classification model predicting $k$-step forward directional return using multi-timeframe OBI, $Z$-score, and Lead-Lag features
+  - [ ] Train `xgboost` / `scikit-learn` classification model predicting $k$-step forward directional return using multi-timeframe OBI, $Z$-score, and regime features
   - [ ] Implement Feature Importance and SHAP value analysis to filter uninformative signals
 
 ---
 
 ## Phase 5: Two-Tier Backtesting & Simulation Engine
-- [ ] **Tier 1: Fast Vectorized Backtester**
-  - [ ] Build Polars/VectorBT vectorized engine operating on 1m, 5m, and 1h OHLCV bars for rapid signal parameter exploration
+- [x] **Tier 1: Strategy-Driven Backtesting Loop**
+  - [x] Build a data-agnostic backtester that can run on any OHLC-like series (ticks, 1s, 1m, 5m, 1h)
+  - [x] Support pluggable user-defined strategies instead of a single hard-coded signal loop
+  - [x] Generate equity-curve and trade plots against time using recorded timestamps
+  - [ ] Add richer risk controls such as volatility-adjusted sizing and max-drawdown guards
+  - [ ] Add a simple strategy-selection interface so a user can choose a strategy by name/config rather than only by passing a Python callable
 - [ ] **Tier 2: Event-Driven L2 Tick Simulator**
-  - [ ] Build event loop processing time-ordered L2 snapshots sequentially (eliminating look-ahead bias)
-  - [ ] Implement realistic limit order fill simulator matching orders against recorded book depth and order flow
-  - [ ] Inject artificial network latency delays between signal trigger and fill execution
+  - [ ] Build a simple event loop that processes time-ordered L2 snapshots sequentially (eliminating look-ahead bias)
+  - [ ] Implement a lightweight fill simulator that matches orders against recorded book depth and order flow
+  - [ ] Inject simple artificial network latency delays between signal trigger and fill execution
+  - [ ] Improve later with more realistic execution details: partial fills, queue position effects, adverse selection, and order-book slippage modeling
 - [ ] **Fee & Cost Modeling**
   - [ ] Model exact Maker vs. Taker fee tiers for Firi and Kraken
   - [ ] Model FX conversion spread costs (EUR/NOK)

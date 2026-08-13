@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config import settings
-from src.backtest import SimpleBacktester, StrategyPlotter
-from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
+from src.backtest import SimpleBacktester, StrategyPlotter, moving_average_crossover_strategy
+from src.data.exchanges import FiriConnector, KrakenConnector
 from src.data.pipeline import MarketDataPipeline
 from src.storage.bar_aggregator import OHLCVBar
 from src.storage.market_store import MarketStore
@@ -21,12 +21,10 @@ async def run_pipeline(iterations: int = 3, interval_seconds: float = 1.0) -> No
     store = MarketStore(database_path=settings.database_path)
     pipeline = MarketDataPipeline(store=store, interval_seconds=60)
 
-    pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))
+    pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
 
     if settings.firi_api_key:
         pipeline.add_connector(FiriConnector(symbol="BTC/NOK"))
-    if settings.kraken_api_key and settings.kraken_secret:
-        pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
 
     for index in range(iterations):
         snapshots = await pipeline.run_once()
@@ -66,12 +64,25 @@ def build_demo_bars() -> list[OHLCVBar]:
 def run_demo_backtest(output_dir: str | Path = "plots") -> None:
     """Run a small synthetic backtest and generate equity/trade plots."""
     bars = build_demo_bars()
-    backtester = SimpleBacktester()
+    strategy = moving_average_crossover_strategy(short_window=3, long_window=6)
+    backtester = SimpleBacktester(strategy=strategy)
     result = backtester.run(bars)
 
     plotter = StrategyPlotter(output_dir=output_dir)
-    equity_path = plotter.plot_equity_curve(result.equity_series, title="Demo Signal Equity Curve")
-    trade_path = plotter.plot_equity_and_trades(result.equity_series, result.trade_prices, title="Demo Signal Equity and Trades")
+    equity_path = plotter.plot_equity_curve(
+        result.equity_series,
+        timestamps=result.timestamps,
+        title="Demo Signal Equity Curve",
+    )
+    trade_path = plotter.plot_equity_and_trades(
+        result.equity_series,
+        result.trade_prices,
+        timestamps=result.timestamps,
+        trade_timestamps=result.trade_timestamps,
+        price_series=[bar.close for bar in bars],
+        price_timestamps=[bar.timestamp for bar in bars],
+        title="Demo Signal Equity and Trades",
+    )
 
     logger.info(
         "demo_backtest_complete total_return={} trades={} final_equity={} equity_plot={} trade_plot={}",

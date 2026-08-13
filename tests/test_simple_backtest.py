@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from src.backtest import SimpleBacktester
+from src.backtest import SimpleBacktester, moving_average_crossover_strategy
 from src.storage.bar_aggregator import OHLCVBar
 
 
@@ -53,3 +53,39 @@ def test_simple_backtester_runs_on_ohlcv_bars() -> None:
     assert result.win_rate == 0.0
     assert result.max_drawdown == 0.0
     assert result.final_equity == 100.0
+
+
+def test_simple_backtester_supports_user_supplied_strategy() -> None:
+    """The backtester should accept a strategy callback and record its trades."""
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        ),
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+            open=100.0,
+            high=105.0,
+            low=100.0,
+            close=105.0,
+            volume=10.0,
+        ),
+    ]
+
+    strategy = moving_average_crossover_strategy(short_window=1, long_window=2)
+    result = SimpleBacktester(strategy=strategy, initial_equity=100.0).run(bars)
+
+    assert result.trades == 0
+    assert result.trade_returns == []
+    assert result.final_equity == 100.0
+    assert result.win_rate == 0.0
