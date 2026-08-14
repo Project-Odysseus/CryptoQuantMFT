@@ -174,6 +174,16 @@ This phase captures the remaining work needed to move from a prototype backtest/
   - [x] Support testnet / sandbox mode for safer validation before using real capital
   - [ ] Add order-book and fill reconciliation logic so local order state can be matched to exchange state
   - [ ] Add replay / recovery support so missed fills and rejected orders can be reconciled after reconnects
+  - [ ] Add a reconciliation checklist for pre-run validation:
+    - [ ] Confirm local order IDs match exchange order IDs
+    - [ ] Confirm local filled size matches exchange filled size
+    - [ ] Confirm local average fill price matches exchange reported price
+    - [ ] Confirm local fees match exchange fees
+  - [ ] Add account state tracking for the current session:
+    - [ ] Track cash balances by currency and exchange
+    - [ ] Track open positions and position value by symbol
+    - [ ] Track unsettled orders and their current status
+    - [ ] Surface reconciliation status in the runtime health dashboard
 - [ ] **Operational Safety & Risk Controls**
   - [ ] Add account balance and inventory reconciliation against exchange state
   - [ ] Add hard stop / circuit-breaker logic for daily drawdown, API failures, or stale market data
