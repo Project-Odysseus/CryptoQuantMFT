@@ -133,6 +133,7 @@ class RuntimeOrchestrator:
         self.health.startup_checks_passed = False
         self.health.connector_status = {}
         self.watchdog.start()
+        self._emit_startup_banner()
         if self.trade_logger is not None:
             self.trade_logger.log_event(
                 timestamp=datetime.now(timezone.utc),
@@ -252,6 +253,7 @@ class RuntimeOrchestrator:
         self.health.healthy = True
         self.health.last_error = None
         self.watchdog.checkin_cycle()
+        self._emit_cycle_health_snapshot(cycle)
         if self.trade_logger is not None:
             self.trade_logger.log_event(
                 timestamp=datetime.now(timezone.utc),
@@ -355,6 +357,79 @@ class RuntimeOrchestrator:
             "circuit_breaker": self.circuit_breaker.snapshot(),
             "kill_switch": self.kill_switch_controller.get_state(),
         }
+
+    def _emit_startup_banner(self) -> None:
+        """Emit a startup banner for the active runtime configuration."""
+        summary = self._build_startup_summary()
+        logger.info("runtime_startup_banner\n{}", summary)
+        if self.trade_logger is not None:
+            self.trade_logger.log_event(
+                timestamp=datetime.now(timezone.utc),
+                level="INFO",
+                event_type="runtime_startup_banner",
+                message="runtime startup banner",
+                source="runtime",
+                metadata={"summary": summary},
+            )
+
+    def _emit_cycle_health_snapshot(self, cycle: RuntimeCycleResult) -> None:
+        """Emit a compact health snapshot after each runtime cycle."""
+        summary = self._build_cycle_summary(cycle)
+        logger.info("runtime_health_snapshot\n{}", summary)
+        if self.trade_logger is not None:
+            self.trade_logger.log_event(
+                timestamp=datetime.now(timezone.utc),
+                level="INFO",
+                event_type="runtime_health_snapshot",
+                message="runtime health snapshot",
+                source="runtime",
+                metadata={"summary": summary, "cycle": self.health.cycles_completed},
+            )
+
+    def _build_startup_summary(self) -> str:
+        """Build a human-readable summary of the runtime configuration."""
+        health_report = self.get_health_report()
+        account_state = health_report["account_state"]
+        kill_switch_state = health_report["kill_switch"]
+        risk_manager = getattr(getattr(self.execution_engine, "risk_manager", None), "config", None)
+
+        lines = [
+            "=== Runtime startup summary ===",
+            f"mode: {self.mode}",
+            f"strategy: {self.strategy_name}",
+            f"strategy_params: {self.strategy_params}",
+            f"exchange: {account_state.get('exchange') or 'unknown'}",
+            f"connectors: {len(getattr(self.pipeline, 'connectors', []))}",
+            f"risk_limits: max_drawdown={getattr(risk_manager, 'max_drawdown_pct', 'n/a')} volatility={getattr(risk_manager, 'max_volatility_pct', 'n/a')} risk_per_trade={getattr(risk_manager, 'risk_per_trade_pct', 'n/a')} max_position={getattr(risk_manager, 'max_position_size', 'n/a')}",
+            f"kill_switch: active={kill_switch_state.get('active', False)} reason={kill_switch_state.get('reason') or 'none'}",
+        ]
+        return "\n".join(lines)
+
+    def _build_cycle_summary(self, cycle: RuntimeCycleResult) -> str:
+        """Build a compact health summary for the latest runtime cycle."""
+        health_report = self.get_health_report()
+        account_state = health_report["account_state"]
+        execution_result = getattr(cycle, "execution_result", None)
+        no_trade_summary = self._build_no_trade_summary(getattr(execution_result, "entry_decisions", None))
+        portfolio_history = getattr(execution_result, "portfolio_history", None) or []
+        final_equity = portfolio_history[-1].equity if portfolio_history else 1000.0
+        trades = list(getattr(execution_result, "trades", []) or [])
+        orders = list(getattr(execution_result, "orders", []) or [])
+
+        lines = [
+            "=== Runtime health snapshot ===",
+            f"cycle: {self.health.cycles_completed}",
+            f"mode: {self.mode}",
+            f"healthy: {health_report['healthy']}",
+            f"strategy: {self.strategy_name}",
+            f"signals: {len(cycle.signals)} bars: {len(cycle.bars)} trades: {len(trades)} orders: {len(orders)}",
+            f"equity: {final_equity:.4f} cash: {account_state.get('balances', {}).get('USD', 0.0):.4f}",
+            f"reconciliation: {account_state.get('reconciliation_status', 'unknown')}",
+            f"circuit_breaker: active={health_report['circuit_breaker']['active']} reason={health_report['circuit_breaker']['reason'] or 'none'}",
+            f"kill_switch: active={health_report['kill_switch']['active']} reason={health_report['kill_switch']['reason'] or 'none'}",
+            f"no_trade_reason: {no_trade_summary.get('reason', 'none')}",
+        ]
+        return "\n".join(lines)
 
     def get_operational_report(self, *, limit: int = 10) -> dict[str, Any]:
         """Return a consolidated operational report for the current runtime session."""
