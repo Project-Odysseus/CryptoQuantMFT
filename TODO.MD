@@ -134,7 +134,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
 - [ ] **Performance Analytics & Review Script**
   - [ ] Script to plot cumulative equity curve vs. Buy-and-Hold Bitcoin benchmark
   - [ ] Calculate trade duration distribution, execution slippage vs. expected VWAP, and alpha decay over time
-  - [ ] Add a simple health dashboard output for runtime status, open orders, and live data freshness
+  - [x] Add a simple health dashboard output for runtime status, open orders, and live data freshness
 - [ ] **Telemetry & Alerting System**
   - [ ] Integrate Telegram/Discord webhook bot for instant notifications:
     - [ ] Executed Trades (Asset, Side, Price, Role, PnL)
