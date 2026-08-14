@@ -106,7 +106,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [ ] **Time Stops:** Automatically liquidate/exit mean-reversion positions if $Z$-score fails to revert within $N$ half-lives
   - [ ] **Volatility-Based Stops:** ATR-driven trailing stop-loss logic
   - [ ] **Counterparty Risk:** Monitor and alert on asset balance distribution between Firi (NOK) and Kraken (EUR/BTC)
-  - [ ] Add a hard stop path that can neutralize the portfolio if live data or execution quality degrades
+  - [x] Add a hard stop path that can neutralize the portfolio if live data or execution quality degrades
 
 ---
 
@@ -147,8 +147,8 @@ A production-grade, event-driven quantitative trading system in Python designed 
 
 ## Phase 8: Production Deployment & System Safety
 - [ ] **Emergency Infrastructure ("Panic Button")**
-  - [ ] Build standalone `kill_switch.py` script: immediately cancels all open orders and liquidates active positions to base currency (NOK/EUR)
-  - [ ] Add a safe command-line entrypoint that can be triggered manually or by the monitoring layer
+  - [x] Build standalone `kill_switch.py` script: immediately cancels all open orders and liquidates active positions to base currency (NOK/EUR)
+  - [x] Add a safe command-line entrypoint that can be triggered manually or by the monitoring layer
 - [ ] **Containerization & Hosting**
   - [ ] Write `Dockerfile` and `docker-compose.yml` for unified runtime environment
   - [ ] Deploy to cloud VPS (Hetzner / DigitalOcean) physically close to exchange server regions
@@ -186,8 +186,8 @@ This phase captures the remaining work needed to move from a prototype backtest/
     - [ ] Surface reconciliation status in the runtime health dashboard
 - [ ] **Operational Safety & Risk Controls**
   - [ ] Add account balance and inventory reconciliation against exchange state
-  - [ ] Add hard stop / circuit-breaker logic for daily drawdown, API failures, or stale market data
-  - [ ] Add a kill-switch command path that can cancel open orders and force liquidation/neutralization quickly
+  - [x] Add hard stop / circuit-breaker logic for daily drawdown, API failures, or stale market data
+  - [x] Add a kill-switch command path that can cancel open orders and force liquidation/neutralization quickly
   - [ ] Add per-exchange position limits, max notional, and max open-order caps
 - [ ] **Monitoring & Telemetry**
   - [ ] Add heartbeat monitoring for the strategy loop, market-data feed, and exchange connectivity

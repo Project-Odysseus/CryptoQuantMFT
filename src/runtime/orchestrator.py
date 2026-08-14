@@ -11,7 +11,8 @@ from typing import Any, Callable, Sequence
 from src.backtest.simple_backtest import moving_average_crossover_strategy
 from src.execution.paper_trading import PaperTradingEngine
 from src.execution.reconciliation import SessionAccountStateTracker
-from src.risk.controls import RiskManager
+from src.risk.controls import CircuitBreaker, RiskManager
+from src.risk.kill_switch import KillSwitchController
 from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
 
@@ -93,10 +94,14 @@ class RuntimeOrchestrator:
         self.mode = mode
         self.interval_seconds = interval_seconds
         self.strategy = strategy or moving_average_crossover_strategy(short_window=3, long_window=6)
+        self.circuit_breaker = CircuitBreaker()
+        self.kill_switch_controller = KillSwitchController(trade_logger=trade_logger)
         self.execution_engine = execution_engine or PaperTradingEngine(
             initial_cash=1000.0,
             default_order_size=1.0,
             risk_manager=RiskManager(),
+            circuit_breaker=self.circuit_breaker,
+            kill_switch_controller=self.kill_switch_controller,
         )
         self.last_cycle: RuntimeCycleResult | None = None
         self.history: list[RuntimeCycleResult] = []
@@ -105,6 +110,10 @@ class RuntimeOrchestrator:
         self.watchdog = RuntimeWatchdog(watchdog_timeout_seconds)
         self.trade_logger = trade_logger
         self.account_state_tracker = SessionAccountStateTracker(exchange_name="paper" if mode == "paper" else None)
+        if getattr(self.execution_engine, "circuit_breaker", None) is None:
+            self.execution_engine.circuit_breaker = self.circuit_breaker
+        if getattr(self.execution_engine, "kill_switch_controller", None) is None:
+            self.execution_engine.kill_switch_controller = self.kill_switch_controller
 
     async def run_startup_checks(self) -> bool:
         """Validate that the configured connectors can fetch a snapshot before starting the loop."""
@@ -135,6 +144,7 @@ class RuntimeOrchestrator:
                 self.health.connector_status[connector_name] = f"error:{exc}"
                 self._mark_unhealthy(f"{connector_name} health check failed: {exc}")
                 logger.warning("runtime_startup_failed connector={} error={}", connector_name, exc)
+                self.trigger_hard_stop(f"connector_error:{connector_name}", metadata={"error": str(exc)})
                 return False
             self.health.connector_status[connector_name] = "ok"
 
@@ -157,6 +167,11 @@ class RuntimeOrchestrator:
         """Fetch one batch of market data, derive signals, and execute them."""
         if self.health.shutdown_requested:
             raise RuntimeError("runtime shutdown requested")
+
+        if self.circuit_breaker.is_active() or self.kill_switch_controller.is_active():
+            self._mark_unhealthy("circuit breaker active")
+            self.request_shutdown(reason="circuit_breaker_active")
+            raise RuntimeError("circuit breaker active")
 
         try:
             snapshots = await self.pipeline.run_once()
@@ -282,6 +297,31 @@ class RuntimeOrchestrator:
                 metadata={"mode": self.mode},
             )
 
+    def trigger_hard_stop(self, reason: str, *, metadata: dict[str, Any] | None = None) -> None:
+        """Activate the circuit breaker and request a shutdown."""
+        self.circuit_breaker.activate(reason, **(metadata or {}))
+        self._mark_unhealthy(f"hard_stop:{reason}")
+        self.request_shutdown(reason=f"hard_stop:{reason}")
+        if self.trade_logger is not None:
+            self.trade_logger.log_event(
+                timestamp=datetime.now(timezone.utc),
+                level="WARNING",
+                event_type="hard_stop",
+                message=reason,
+                source="runtime",
+                metadata={"mode": self.mode, **(metadata or {})},
+            )
+
+    def activate_kill_switch(self, reason: str) -> dict[str, Any]:
+        """Activate the kill switch and cancel any open orders through the execution adapter."""
+        state = self.kill_switch_controller.activate(
+            reason,
+            execution_adapter=getattr(self.execution_engine, "execution_adapter", None),
+            trade_logger=self.trade_logger,
+        )
+        self.trigger_hard_stop(reason, metadata={"kill_switch": True, "state": state})
+        return state
+
     def _mark_unhealthy(self, message: str) -> None:
         self.health.healthy = False
         self.health.last_error = message
@@ -299,6 +339,8 @@ class RuntimeOrchestrator:
             "watchdog_triggered": self.health.watchdog_triggered,
             "watchdog_restarts_completed": self.health.watchdog_restarts_completed,
             "account_state": self.account_state_tracker.get_summary(),
+            "circuit_breaker": self.circuit_breaker.snapshot(),
+            "kill_switch": self.kill_switch_controller.get_state(),
         }
 
     def _build_signals(self, bars: Sequence[Any]) -> list[float]:
