@@ -385,6 +385,31 @@ def print_trade_report(limit: int = 10) -> None:
             )
 
 
+def print_health_dashboard(limit: int = 10) -> None:
+    """Print a compact health dashboard for the current runtime state."""
+    logger_store = TradeLogger(database_path=settings.database_path)
+    events = logger_store.list_events(limit=limit)
+
+    latest_event = events[0] if events else None
+    latest_trade = logger_store.list_trades(limit=1)[0] if logger_store.list_trades(limit=1) else None
+    latest_snapshot = logger_store.list_equity_snapshots(limit=1)[0] if logger_store.list_equity_snapshots(limit=1) else None
+
+    print("Runtime health dashboard")
+    print("-" * 28)
+    print(f"Last event: {latest_event['timestamp'] if latest_event else 'none'}")
+    print(f"Last event type: {latest_event['event_type'] if latest_event else 'none'}")
+    print(f"Last trade: {latest_trade['timestamp'] if latest_trade else 'none'}")
+    print(f"Last equity snapshot: {latest_snapshot['timestamp'] if latest_snapshot else 'none'}")
+    if latest_snapshot:
+        print(f"Current equity: {latest_snapshot['equity']:.4f} | cash: {latest_snapshot['cash']:.4f} | position: {latest_snapshot['position_size']:.4f}")
+    print("Recent operational events:")
+    if not events:
+        print("  (none)")
+    else:
+        for event in events[:5]:
+            print(f"  - [{event['level']}] {event['event_type']}: {event['message']}")
+
+
 def main() -> None:
     """Initialize the runtime and run either the data pipeline or a demo backtest."""
     parser = argparse.ArgumentParser(description="CryptoQuantMFT runtime")
@@ -402,6 +427,7 @@ def main() -> None:
     parser.add_argument("--fx-spread-bps", type=float, default=10.0, help="Approximate FX spread in bps")
     parser.add_argument("--report", action="store_true", help="Print recent trades, equity snapshots, and operational events from the SQLite logger")
     parser.add_argument("--report-limit", type=int, default=10, help="Number of recent rows to print in the report")
+    parser.add_argument("--dashboard", action="store_true", help="Print a compact health dashboard based on recent runtime events and portfolio snapshots")
     parser.add_argument("--l2-simulator", action="store_true", help="Run the lightweight event-driven L2 simulator over synthetic snapshots")
     parser.add_argument("--walk-forward", action="store_true", help="Run a simple walk-forward evaluation over the selected bars")
     parser.add_argument("--walk-forward-train-window", type=int, default=40, help="Number of bars to use as the warmup/training window")
@@ -418,6 +444,10 @@ def main() -> None:
     logger.info("CryptoQuantMFT startup complete")
     logger.info("database_path={}", settings.database_path)
     logger.info("log_level={}", settings.log_level)
+
+    if args.dashboard:
+        print_health_dashboard(limit=args.report_limit)
+        return
 
     if args.report:
         print_trade_report(limit=args.report_limit)
