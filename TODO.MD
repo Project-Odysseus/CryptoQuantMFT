@@ -170,7 +170,7 @@ This phase captures the remaining work needed to move from a prototype backtest/
   - [x] Add startup health checks and graceful shutdown handling for reconnects and unexpected process exits
   - [x] Add a watchdog that can restart the runtime if the main loop stalls or the data feed dies
 - [ ] **Exchange Execution Adapters**
-  - [ ] Add authenticated order submission / cancellation adapters for Kraken and Firi
+  - [x] Add authenticated order submission / cancellation adapters for Kraken and Firi
   - [x] Support testnet / sandbox mode for safer validation before using real capital
   - [ ] Add order-book and fill reconciliation logic so local order state can be matched to exchange state
   - [ ] Add replay / recovery support so missed fills and rejected orders can be reconciled after reconnects
