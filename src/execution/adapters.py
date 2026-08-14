@@ -54,6 +54,9 @@ class ExecutionAdapter:
 
     def __init__(self) -> None:
         self._orders: dict[str, ExecutionOrder] = {}
+        self._balances: dict[str, float] = {}
+        self._positions: dict[str, float] = {}
+        self._base_currency = "USD"
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
         raise NotImplementedError
@@ -77,6 +80,10 @@ class ExecutionAdapter:
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
 
+        previous_fill_size = order.filled_size or 0.0
+        previous_fee = order.fee or 0.0
+        previous_status = order.status
+
         if remote_status is not None:
             order.status = remote_status
             order.remote_status = remote_status
@@ -86,6 +93,28 @@ class ExecutionAdapter:
             order.fill_price = remote_fill_price
         if remote_fee is not None:
             order.fee = remote_fee
+
+        if remote_status in {"FILLED", "PARTIALLY_FILLED"} and previous_status not in {"FILLED", "PARTIALLY_FILLED"}:
+            self._apply_fill_to_account_state(
+                order=order,
+                filled_size=remote_filled_size if remote_filled_size is not None else order.size,
+                fill_price=remote_fill_price if remote_fill_price is not None else order.price,
+                fee=remote_fee if remote_fee is not None else 0.0,
+                previous_fill_size=previous_fill_size,
+                previous_fee=previous_fee,
+            )
+        elif remote_status in {"FILLED", "PARTIALLY_FILLED"}:
+            filled_delta = (remote_filled_size or 0.0) - previous_fill_size
+            fee_delta = (remote_fee or 0.0) - previous_fee
+            if filled_delta > 0.0 or fee_delta > 0.0:
+                self._apply_fill_to_account_state(
+                    order=order,
+                    filled_size=filled_delta,
+                    fill_price=remote_fill_price if remote_fill_price is not None else order.price,
+                    fee=fee_delta,
+                    previous_fill_size=0.0,
+                    previous_fee=0.0,
+                )
 
         order.reconciled = True
         return ExecutionReport(
@@ -97,8 +126,46 @@ class ExecutionAdapter:
             message="order state reconciled",
         )
 
+    def get_account_snapshot(self) -> dict[str, Any]:
+        return {
+            "balances": dict(self._balances),
+            "positions": dict(self._positions),
+        }
+
     def list_orders(self) -> list[ExecutionOrder]:
         return list(self._orders.values())
+
+    def _apply_fill_to_account_state(
+        self,
+        *,
+        order: ExecutionOrder,
+        filled_size: float | None,
+        fill_price: float | None,
+        fee: float | None,
+        previous_fill_size: float,
+        previous_fee: float,
+    ) -> None:
+        if filled_size is None or filled_size <= 0.0:
+            return
+
+        base_currency = self._base_currency
+        self._balances.setdefault(base_currency, 0.0)
+        if order.side == "buy":
+            fill_delta = filled_size - previous_fill_size
+            if fill_delta <= 0.0:
+                return
+            price = float(fill_price or order.price or 0.0)
+            fee_delta = max(0.0, (fee or 0.0) - previous_fee)
+            self._balances[base_currency] = self._balances.get(base_currency, 0.0) - (fill_delta * price) - fee_delta
+            self._positions["BTC"] = self._positions.get("BTC", 0.0) + fill_delta
+        elif order.side == "sell":
+            fill_delta = filled_size - previous_fill_size
+            if fill_delta <= 0.0:
+                return
+            price = float(fill_price or order.price or 0.0)
+            fee_delta = max(0.0, (fee or 0.0) - previous_fee)
+            self._balances[base_currency] = self._balances.get(base_currency, 0.0) + (fill_delta * price) - fee_delta
+            self._positions["BTC"] = max(0.0, self._positions.get("BTC", 0.0) - fill_delta)
 
 
 class SandboxExecutionAdapter(ExecutionAdapter):
@@ -110,6 +177,9 @@ class SandboxExecutionAdapter(ExecutionAdapter):
         super().__init__()
         self.exchange_name = exchange_name
         self.fee_rate = fee_rate
+        self._base_currency = "EUR" if exchange_name == "kraken" else "NOK" if exchange_name == "firi" else "USD"
+        self._balances = {self._base_currency: 1000.0}
+        self._positions = {}
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
         if size <= 0:
@@ -131,6 +201,14 @@ class SandboxExecutionAdapter(ExecutionAdapter):
             exchange=self.exchange_name,
         )
         self._orders[order_id] = order
+        self._apply_fill_to_account_state(
+            order=order,
+            filled_size=filled_size,
+            fill_price=execution_price,
+            fee=fee,
+            previous_fill_size=0.0,
+            previous_fee=0.0,
+        )
         return ExecutionReport(
             order_id=order_id,
             status="FILLED",

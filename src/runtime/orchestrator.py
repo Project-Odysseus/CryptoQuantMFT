@@ -10,6 +10,7 @@ from typing import Any, Callable, Sequence
 
 from src.backtest.simple_backtest import moving_average_crossover_strategy
 from src.execution.paper_trading import PaperTradingEngine
+from src.execution.reconciliation import SessionAccountStateTracker
 from src.risk.controls import RiskManager
 from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
@@ -103,6 +104,7 @@ class RuntimeOrchestrator:
         self.health = RuntimeHealth()
         self.watchdog = RuntimeWatchdog(watchdog_timeout_seconds)
         self.trade_logger = trade_logger
+        self.account_state_tracker = SessionAccountStateTracker(exchange_name="paper" if mode == "paper" else None)
 
     async def run_startup_checks(self) -> bool:
         """Validate that the configured connectors can fetch a snapshot before starting the loop."""
@@ -201,6 +203,14 @@ class RuntimeOrchestrator:
                 )
             raise
 
+        adapter = getattr(self.execution_engine, "execution_adapter", None)
+        exchange_name = getattr(adapter, "exchange_name", None)
+        self.account_state_tracker.update_from_runtime(
+            execution_result=execution_result,
+            adapter=adapter,
+            exchange_name=exchange_name or ("paper" if self.mode == "paper" else None),
+        )
+
         cycle = RuntimeCycleResult(
             mode=self.mode,
             snapshots=snapshots,
@@ -288,6 +298,7 @@ class RuntimeOrchestrator:
             "connector_status": dict(self.health.connector_status),
             "watchdog_triggered": self.health.watchdog_triggered,
             "watchdog_restarts_completed": self.health.watchdog_restarts_completed,
+            "account_state": self.account_state_tracker.get_summary(),
         }
 
     def _build_signals(self, bars: Sequence[Any]) -> list[float]:

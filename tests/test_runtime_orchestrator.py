@@ -29,6 +29,20 @@ async def test_runtime_orchestrator_runs_cycle_and_collects_results() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_orchestrator_includes_account_state_in_health_report() -> None:
+    store = MarketStore(database_path="/tmp/cryptoquantmft-runtime-health-test.db")
+    pipeline = MarketDataPipeline(store=store, interval_seconds=60)
+    pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))
+
+    orchestrator = RuntimeOrchestrator(pipeline=pipeline, mode="paper")
+    await orchestrator.run_once()
+    health_report = orchestrator.get_health_report()
+
+    assert health_report["account_state"]["balances"]
+    assert "positions" in health_report["account_state"]
+
+
+@pytest.mark.asyncio
 async def test_runtime_orchestrator_marks_unhealthy_when_startup_checks_fail() -> None:
     class FailingConnector:
         name = "failing"
