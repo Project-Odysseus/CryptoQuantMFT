@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Sequence
 
 from src.backtest.simple_backtest import moving_average_crossover_strategy
 from src.execution.paper_trading import PaperTradingEngine
 from src.risk.controls import RiskManager
+from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
 
 StrategyFn = Callable[[Sequence[Any], int, Any], float | int | str | None]
@@ -82,6 +84,7 @@ class RuntimeOrchestrator:
         mode: str = "paper",
         interval_seconds: float = 1.0,
         watchdog_timeout_seconds: float = 5.0,
+        trade_logger: TradeLogger | None = None,
     ) -> None:
         if mode not in {"paper", "live_dry_run", "live"}:
             raise ValueError("mode must be one of: paper, live_dry_run, live")
@@ -99,12 +102,22 @@ class RuntimeOrchestrator:
         self._bar_history: list[Any] = []
         self.health = RuntimeHealth()
         self.watchdog = RuntimeWatchdog(watchdog_timeout_seconds)
+        self.trade_logger = trade_logger
 
     async def run_startup_checks(self) -> bool:
         """Validate that the configured connectors can fetch a snapshot before starting the loop."""
         self.health.startup_checks_passed = False
         self.health.connector_status = {}
         self.watchdog.start()
+        if self.trade_logger is not None:
+            self.trade_logger.log_event(
+                timestamp=datetime.now(timezone.utc),
+                level="INFO",
+                event_type="runtime_startup",
+                message="starting runtime startup checks",
+                source="runtime",
+                metadata={"mode": self.mode, "connectors": len(getattr(self.pipeline, "connectors", []))},
+            )
         connectors = getattr(self.pipeline, "connectors", [])
         if not connectors:
             self._mark_unhealthy("no market-data connectors configured")
@@ -126,6 +139,15 @@ class RuntimeOrchestrator:
         self.health.startup_checks_passed = True
         self.health.healthy = True
         self.health.last_error = None
+        if self.trade_logger is not None:
+            self.trade_logger.log_event(
+                timestamp=datetime.now(timezone.utc),
+                level="INFO",
+                event_type="runtime_ready",
+                message="runtime startup checks passed",
+                source="runtime",
+                metadata={"mode": self.mode, "connectors": len(connectors)},
+            )
         logger.info("runtime_startup_checks_passed connectors={}", len(connectors))
         return True
 
@@ -140,6 +162,15 @@ class RuntimeOrchestrator:
         except Exception as exc:
             self._mark_unhealthy(f"pipeline cycle failed: {exc}")
             self.request_shutdown(reason=f"pipeline_error:{exc}")
+            if self.trade_logger is not None:
+                self.trade_logger.log_event(
+                    timestamp=datetime.now(timezone.utc),
+                    level="ERROR",
+                    event_type="pipeline_error",
+                    message=str(exc),
+                    source="runtime",
+                    metadata={"mode": self.mode},
+                )
             raise
 
         if snapshots:
@@ -159,6 +190,15 @@ class RuntimeOrchestrator:
         except Exception as exc:
             self._mark_unhealthy(f"execution cycle failed: {exc}")
             self.request_shutdown(reason=f"execution_error:{exc}")
+            if self.trade_logger is not None:
+                self.trade_logger.log_event(
+                    timestamp=datetime.now(timezone.utc),
+                    level="ERROR",
+                    event_type="execution_error",
+                    message=str(exc),
+                    source="runtime",
+                    metadata={"mode": self.mode},
+                )
             raise
 
         cycle = RuntimeCycleResult(
@@ -174,6 +214,15 @@ class RuntimeOrchestrator:
         self.health.healthy = True
         self.health.last_error = None
         self.watchdog.checkin_cycle()
+        if self.trade_logger is not None:
+            self.trade_logger.log_event(
+                timestamp=datetime.now(timezone.utc),
+                level="INFO",
+                event_type="runtime_cycle_completed",
+                message="runtime cycle completed",
+                source="runtime",
+                metadata={"mode": self.mode, "cycle": self.health.cycles_completed},
+            )
         return cycle
 
     async def run_loop(self, iterations: int = 3, *, interval_seconds: float | None = None) -> list[RuntimeCycleResult]:
@@ -213,6 +262,15 @@ class RuntimeOrchestrator:
         """Request a graceful shutdown for the runtime loop."""
         self.health.shutdown_requested = True
         self.health.shutdown_reason = reason or "requested"
+        if self.trade_logger is not None:
+            self.trade_logger.log_event(
+                timestamp=datetime.now(timezone.utc),
+                level="INFO",
+                event_type="runtime_shutdown",
+                message=reason or "requested",
+                source="runtime",
+                metadata={"mode": self.mode},
+            )
 
     def _mark_unhealthy(self, message: str) -> None:
         self.health.healthy = False

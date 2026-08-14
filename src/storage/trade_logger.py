@@ -1,4 +1,4 @@
-"""Simple SQLite-backed trade and equity logger for backtests and paper trading."""
+"""Simple SQLite-backed trade, equity, and operational event logger for backtests and paper trading."""
 
 from __future__ import annotations
 
@@ -48,6 +48,19 @@ class TradeLogger:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS operational_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    metadata TEXT
+                )
+                """
+            )
             connection.commit()
 
     def log_trade(self, *, timestamp: datetime, source: str, exchange: str, pair: str, side: str, price: float, size: float, fee: float, role_maker_taker: str = "taker", latency_ms: int = 0) -> int:
@@ -79,6 +92,32 @@ class TradeLogger:
                     fee,
                     role_maker_taker,
                     latency_ms,
+                ),
+            )
+            connection.commit()
+        return int(cursor.lastrowid)
+
+    def log_event(self, *, timestamp: datetime, level: str, event_type: str, message: str, source: str, metadata: dict[str, Any] | None = None) -> int:
+        """Persist a single operational event."""
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO operational_events (
+                    timestamp,
+                    level,
+                    event_type,
+                    message,
+                    source,
+                    metadata
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    timestamp.isoformat(),
+                    level,
+                    event_type,
+                    message,
+                    source,
+                    str(metadata or {}),
                 ),
             )
             connection.commit()
@@ -157,4 +196,28 @@ class TradeLogger:
                 "position_size": position_size,
             }
             for timestamp, source, equity, cash, position_size in rows
+        ]
+
+    def list_events(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """Return persisted operational events in reverse chronological order."""
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            if limit is None:
+                rows = connection.execute(
+                    "SELECT timestamp, level, event_type, message, source, metadata FROM operational_events ORDER BY id DESC"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT timestamp, level, event_type, message, source, metadata FROM operational_events ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        return [
+            {
+                "timestamp": timestamp,
+                "level": level,
+                "event_type": event_type,
+                "message": message,
+                "source": source,
+                "metadata": metadata,
+            }
+            for timestamp, level, event_type, message, source, metadata in rows
         ]
