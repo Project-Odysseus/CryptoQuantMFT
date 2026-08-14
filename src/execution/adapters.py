@@ -266,12 +266,15 @@ class ExecutionRouter:
     def _build_adapter(self, mode: str, *, exchange: str | None = None) -> ExecutionAdapter | None:
         if mode in {"paper", None}:
             return None
+        normalized_exchange = (exchange or "").strip().lower()
         if mode == "live_dry_run":
+            if normalized_exchange in {"kraken", "firi"}:
+                return SandboxExecutionAdapter(exchange_name=normalized_exchange)
             return SandboxExecutionAdapter(exchange_name="sandbox")
         if mode == "live":
-            if exchange == "kraken":
+            if normalized_exchange == "kraken":
                 return KrakenExecutionAdapter()
-            if exchange == "firi":
+            if normalized_exchange == "firi":
                 return FiriExecutionAdapter()
             return LiveExecutionAdapter(exchange_name="live")
         raise ValueError(f"unsupported runtime mode: {mode}")

@@ -60,3 +60,11 @@ def test_execution_router_builds_exchange_specific_adapter() -> None:
 
     assert router.adapter is not None
     assert router.adapter.name == "kraken"
+
+
+def test_execution_router_uses_sandbox_adapter_for_dry_run_exchange() -> None:
+    router = ExecutionRouter(mode="live_dry_run", exchange="firi")
+
+    assert router.adapter is not None
+    assert router.adapter.name == "sandbox"
+    assert router.adapter.exchange_name == "firi"

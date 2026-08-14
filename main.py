@@ -52,6 +52,7 @@ def build_runtime_orchestrator(
     interval_seconds: float,
     use_mock_connector: bool,
     watchdog_timeout_seconds: float,
+    exchange: str | None = None,
 ) -> tuple[RuntimeOrchestrator, MarketDataPipeline]:
     """Build the runtime orchestrator and its market-data pipeline for a run."""
     store = MarketStore(database_path=settings.database_path)
@@ -76,7 +77,7 @@ def build_runtime_orchestrator(
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
-    execution_router = ExecutionRouter(mode=mode)
+    execution_router = ExecutionRouter(mode=mode, exchange=exchange)
     engine = PaperTradingEngine(
         initial_cash=1000.0,
         default_order_size=1.0,
@@ -106,6 +107,7 @@ async def run_runtime_orchestrator(
     use_mock_connector: bool = False,
     watchdog_timeout_seconds: float = 5.0,
     watchdog_restarts: int = 0,
+    exchange: str | None = None,
 ) -> None:
     """Run the runtime orchestrator over a simple market-data pipeline."""
     restart_attempts = max(0, watchdog_restarts) + 1
@@ -117,6 +119,7 @@ async def run_runtime_orchestrator(
             interval_seconds=interval_seconds,
             use_mock_connector=use_mock_connector,
             watchdog_timeout_seconds=watchdog_timeout_seconds,
+            exchange=exchange,
         )
         loop = asyncio.get_running_loop()
 
@@ -436,6 +439,7 @@ def main() -> None:
     parser.add_argument("--runtime", choices=["paper", "live_dry_run", "live"], help="Run the runtime orchestrator with the requested mode")
     parser.add_argument("--runtime-iterations", type=int, default=3, help="Number of runtime cycles to execute")
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
+    parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi"], default="auto", help="Exchange routing target for the runtime execution adapter")
     parser.add_argument("--use-mock-connector", action="store_true", help="Use the mock exchange connector for the runtime loop")
     parser.add_argument("--watchdog-timeout", type=float, default=5.0, help="Seconds without a completed cycle or fresh data before the watchdog triggers")
     parser.add_argument("--watchdog-restarts", type=int, default=0, help="Number of times to restart the runtime after a watchdog timeout")
@@ -495,6 +499,7 @@ def main() -> None:
                 use_mock_connector=args.use_mock_connector,
                 watchdog_timeout_seconds=args.watchdog_timeout,
                 watchdog_restarts=args.watchdog_restarts,
+                exchange=None if args.execution_exchange == "auto" else args.execution_exchange,
             )
         )
         return
