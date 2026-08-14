@@ -130,7 +130,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] Implement an initial SQLite logger for trades and equity snapshots
   - [x] Add a CLI report command to print recent trades and equity snapshots from the logger
   - [ ] Design a fuller relational schema for signals, errors, and richer portfolio columns
-  - [ ] Add operational event rows for startup, reconnects, order rejects, and risk events
+  - [x] Add operational event rows for startup, reconnects, order rejects, and risk events
 - [ ] **Performance Analytics & Review Script**
   - [ ] Script to plot cumulative equity curve vs. Buy-and-Hold Bitcoin benchmark
   - [ ] Calculate trade duration distribution, execution slippage vs. expected VWAP, and alpha decay over time
@@ -183,7 +183,7 @@ This phase captures the remaining work needed to move from a prototype backtest/
   - [ ] Add heartbeat monitoring for the strategy loop, market-data feed, and exchange connectivity
   - [ ] Add alerts for stale quotes, order failures, API rate-limit issues, and unexpected risk events
   - [ ] Persist richer operational telemetry (startups, reconnects, order rejects, fill misses, runtime health)
-  - [ ] Add a simple live status endpoint or CLI report for current system health
+  - [x] Add a simple live status endpoint or CLI report for current system health
 - [ ] **Deployment & Reliability**
   - [ ] Containerize the runtime and add a production-friendly service definition for restart/recovery
   - [ ] Add log rotation, backup strategy, and state recovery for local databases and runtime checkpoints

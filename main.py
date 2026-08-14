@@ -93,6 +93,7 @@ def build_runtime_orchestrator(
         mode=mode,
         interval_seconds=interval_seconds,
         watchdog_timeout_seconds=watchdog_timeout_seconds,
+        trade_logger=trade_logger,
     )
     return orchestrator, pipeline
 
@@ -350,10 +351,11 @@ def run_paper_trading(bars: list[OHLCVBar], signals: list[float | int | str | No
 
 
 def print_trade_report(limit: int = 10) -> None:
-    """Print the most recent trades and equity snapshots from the SQLite logger."""
-    logger = TradeLogger(database_path="data/trades.db")
+    """Print the most recent trades, equity snapshots, and operational events from the SQLite logger."""
+    logger = TradeLogger(database_path=settings.database_path)
     trades = logger.list_trades(limit=limit)
     snapshots = logger.list_equity_snapshots(limit=limit)
+    events = logger.list_events(limit=limit)
 
     print(f"Recent trades (last {len(trades)}):")
     if not trades:
@@ -373,6 +375,15 @@ def print_trade_report(limit: int = 10) -> None:
                 f"  {snapshot['timestamp']} | equity={snapshot['equity']:.4f} cash={snapshot['cash']:.4f} position={snapshot['position_size']:.4f}"
             )
 
+    print(f"\nRecent operational events (last {len(events)}):")
+    if not events:
+        print("  (none)")
+    else:
+        for event in events:
+            print(
+                f"  {event['timestamp']} | [{event['level']}] {event['event_type']} | {event['message']}"
+            )
+
 
 def main() -> None:
     """Initialize the runtime and run either the data pipeline or a demo backtest."""
@@ -389,7 +400,7 @@ def main() -> None:
     parser.add_argument("--taker-fee", type=float, default=0.4, help="Approximate taker fee as a percentage")
     parser.add_argument("--maker-fee", type=float, default=0.25, help="Approximate maker fee as a percentage")
     parser.add_argument("--fx-spread-bps", type=float, default=10.0, help="Approximate FX spread in bps")
-    parser.add_argument("--report", action="store_true", help="Print recent trades and equity snapshots from the SQLite logger")
+    parser.add_argument("--report", action="store_true", help="Print recent trades, equity snapshots, and operational events from the SQLite logger")
     parser.add_argument("--report-limit", type=int, default=10, help="Number of recent rows to print in the report")
     parser.add_argument("--l2-simulator", action="store_true", help="Run the lightweight event-driven L2 simulator over synthetic snapshots")
     parser.add_argument("--walk-forward", action="store_true", help="Run a simple walk-forward evaluation over the selected bars")
