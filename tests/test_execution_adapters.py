@@ -5,9 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from src.execution.adapters import ExecutionRouter, FiriExecutionAdapter, KrakenExecutionAdapter
+from src.execution.reconciliation import SessionAccountStateTracker
 
 
 def test_kraken_adapter_tracks_local_order_state() -> None:
+    """Test test kraken adapter tracks local order state."""
     adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
 
     report = adapter.submit_order(
@@ -33,6 +35,7 @@ def test_kraken_adapter_tracks_local_order_state() -> None:
 
 
 def test_firi_adapter_tracks_local_order_state() -> None:
+    """Test test firi adapter tracks local order state."""
     adapter = FiriExecutionAdapter(api_key="firi-key")
 
     report = adapter.submit_order(
@@ -56,6 +59,7 @@ def test_firi_adapter_tracks_local_order_state() -> None:
 
 
 def test_adapter_reconciles_account_state_against_remote_snapshot() -> None:
+    """Test test adapter reconciles account state against remote snapshot."""
     adapter = FiriExecutionAdapter(api_key="firi-key")
     adapter._balances = {"NOK": 1000.0}
     adapter._positions = {"BTC": 0.0}
@@ -71,7 +75,63 @@ def test_adapter_reconciles_account_state_against_remote_snapshot() -> None:
     assert adapter.get_account_snapshot()["balances"]["NOK"] == 950.0
 
 
+def test_adapter_recover_execution_state_reconciles_orders_and_account_snapshot() -> None:
+    """Test test adapter can recover remote order and account state after reconnects."""
+    adapter = FiriExecutionAdapter(api_key="firi-key")
+    report = adapter.submit_order(
+        order_id="firi-recovery",
+        side="buy",
+        size=0.25,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+    )
+
+    summary = adapter.recover_execution_state(
+        remote_snapshot={"balances": {"NOK": 850.0}, "positions": {"BTC": 0.25}},
+        remote_orders=[
+            {
+                "order_id": report.order_id,
+                "side": "buy",
+                "size": 0.25,
+                "status": "FILLED",
+                "filled_size": 0.25,
+                "fill_price": 100.0,
+                "fee": 0.25,
+            }
+        ],
+    )
+
+    assert summary["recovered_order_ids"] == [report.order_id]
+    assert summary["recovery_status"] == "reconciled"
+    assert adapter.get_account_snapshot()["balances"]["NOK"] == 850.0
+    assert adapter.get_account_snapshot()["positions"]["BTC"] == 0.25
+    assert adapter._orders[report.order_id].status == "FILLED"
+
+
+def test_session_account_state_tracker_surfaces_recovery_summary() -> None:
+    """Test test tracker exposes the recovery summary after adapter recovery."""
+    adapter = FiriExecutionAdapter(api_key="firi-key")
+    tracker = SessionAccountStateTracker(exchange_name="firi", base_currency="NOK")
+
+    adapter.submit_order(
+        order_id="firi-tracker",
+        side="buy",
+        size=0.25,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+    )
+    summary = tracker.recover_execution_state(
+        adapter,
+        remote_snapshot={"balances": {"NOK": 950.0}, "positions": {"BTC": 0.0}},
+    )
+
+    assert summary["recovered_order_count"] == 1
+    assert tracker.get_summary()["recovery_summary"]["recovered_order_count"] == 1
+    assert tracker.get_summary()["account_reconciliation"]["remote_balances"]["NOK"] == 950.0
+
+
 def test_execution_router_builds_exchange_specific_adapter() -> None:
+    """Test test execution router builds exchange specific adapter."""
     router = ExecutionRouter(mode="live", exchange="kraken")
 
     assert router.adapter is not None
@@ -79,6 +139,7 @@ def test_execution_router_builds_exchange_specific_adapter() -> None:
 
 
 def test_execution_router_uses_sandbox_adapter_for_dry_run_exchange() -> None:
+    """Test test execution router uses sandbox adapter for dry run exchange."""
     router = ExecutionRouter(mode="live_dry_run", exchange="firi")
 
     assert router.adapter is not None
@@ -87,10 +148,12 @@ def test_execution_router_uses_sandbox_adapter_for_dry_run_exchange() -> None:
 
 
 def test_kraken_adapter_uses_private_api_for_submit_and_status(monkeypatch) -> None:
+    """Test test kraken adapter uses private api for submit and status."""
     adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
     calls: list[tuple[str, dict[str, object]]] = []
 
     def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        """Perform the fake private request operation."""
         calls.append((endpoint, params))
         if endpoint == "AddOrder":
             return {"error": [], "result": {"txid": ["abc123"], "descr": {"order": "buy 0.25 BTC @ 100"}}}
@@ -116,10 +179,12 @@ def test_kraken_adapter_uses_private_api_for_submit_and_status(monkeypatch) -> N
 
 
 def test_firi_adapter_uses_rest_endpoints_for_submit_and_status(monkeypatch) -> None:
+    """Test test firi adapter uses rest endpoints for submit and status."""
     adapter = FiriExecutionAdapter(api_key="firi-key")
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def fake_request_json(self: FiriExecutionAdapter, method: str, url: str, **_: object) -> dict[str, object]:
+        """Perform the fake request json operation."""
         calls.append((method, url, _))
         if method == "POST" and url == "https://api.firi.com/v2/orders":
             return {"id": "firi-123", "status": "filled", "price": "101.0", "filled_size": "0.50", "fee": "0.50"}

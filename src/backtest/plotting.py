@@ -15,6 +15,7 @@ class StrategyPlotter:
     """Create simple matplotlib charts from backtest-style data."""
 
     def __init__(self, output_dir: str | Path | None = None) -> None:
+        """Initialize the object with its runtime state."""
         self.output_dir = Path(output_dir or "plots")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 

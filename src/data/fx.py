@@ -18,6 +18,7 @@ class FXRateCollector:
     """Fetch and cache FX rates from an upstream provider with fallback support."""
 
     def __init__(self, cache_path: str | Path | None = None) -> None:
+        """Initialize the object with its runtime state."""
         self.cache_path = Path(cache_path or "data/fx_rates.db")
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_schema()

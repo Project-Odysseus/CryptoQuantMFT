@@ -54,21 +54,26 @@ class RuntimeWatchdog:
     """Track runtime and market-data heartbeats to detect stalls."""
 
     def __init__(self, timeout_seconds: float) -> None:
+        """Initialize the object with its runtime state."""
         self.timeout_seconds = timeout_seconds
         self.last_cycle_at: float | None = None
         self.last_data_at: float | None = None
 
     def start(self) -> None:
+        """Start the watchdog heartbeats for the runtime loop."""
         self.last_cycle_at = time.monotonic()
         self.last_data_at = self.last_cycle_at
 
     def checkin_cycle(self) -> None:
+        """Record a successful runtime cycle heartbeat."""
         self.last_cycle_at = time.monotonic()
 
     def checkin_data(self) -> None:
+        """Record a successful market-data heartbeat."""
         self.last_data_at = time.monotonic()
 
     def check(self) -> bool:
+        """Check whether the runtime has exceeded its heartbeat timeout."""
         if self.last_cycle_at is None or self.last_data_at is None:
             return False
         now = time.monotonic()
@@ -90,6 +95,7 @@ class RuntimeOrchestrator:
         trade_logger: TradeLogger | None = None,
         kill_switch_state_file: str | Path | None = None,
     ) -> None:
+        """Initialize the object with its runtime state."""
         if mode not in {"paper", "live_dry_run", "live"}:
             raise ValueError("mode must be one of: paper, live_dry_run, live")
         self.pipeline = pipeline

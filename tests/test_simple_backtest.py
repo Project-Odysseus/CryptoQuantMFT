@@ -95,6 +95,7 @@ def test_simple_backtester_supports_user_supplied_strategy() -> None:
     ]
 
     def strategy(history: list[OHLCVBar], index: int, current_bar: OHLCVBar) -> int:
+        """Generate the signal strategy output for the current market context."""
         return 1 if index >= 1 else 0
 
     result = SimpleBacktester(strategy=strategy, initial_equity=100.0).run(bars)
@@ -109,6 +110,7 @@ def test_simple_backtester_uses_cost_model_for_trade_pnl() -> None:
     """The backtester should reduce equity when a cost model is supplied."""
 
     def strategy(history: list[OHLCVBar], index: int, current_bar: OHLCVBar) -> int:
+        """Generate the signal strategy output for the current market context."""
         if index == 1:
             return 1
         if index == 2:

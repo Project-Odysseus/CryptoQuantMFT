@@ -116,11 +116,11 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] Implement a simple order state machine for `PENDING_SUBMIT` $\rightarrow$ `OPEN` $\rightarrow$ `PARTIALLY_FILLED` $\rightarrow$ `FILLED` / `CANCELED`
   - [x] Record simulated trades, fees, and portfolio updates locally for strategy evaluation
   - [x] Apply the existing backtest risk controls (drawdown, volatility, and Kelly sizing) to paper-trading entries
-  - [ ] Add a simple reconciliation hook that compares local orders and fills with exchange-reported state before any live use
+  - [x] Add a simple reconciliation hook that compares local orders and fills with exchange-reported state before any live use
 - [ ] **Phase 6B: Production Routing & OMS Hardening**
   - [ ] Implement **Maker-First Strategy:** Place Post-Only limit orders at bid/ask to capture lower fees/rebates
   - [ ] Implement Order Timeout Guard: If Post-Only order remains unfilled after $T$ seconds and signal alpha remains high, dynamically route as a Taker order
-  - [ ] Build API reconnection recovery logic to reconcile local order state with exchange account state
+  - [x] Build API reconnection recovery logic to reconcile local order state with exchange account state
   - [x] Support testnet / sandbox routing so orders can be exercised without real capital
 
 ---
@@ -172,18 +172,18 @@ This phase captures the remaining work needed to move from a prototype backtest/
 - [ ] **Exchange Execution Adapters**
   - [x] Add authenticated order submission / cancellation adapters for Kraken and Firi
   - [x] Support testnet / sandbox mode for safer validation before using real capital
-  - [ ] Add order-book and fill reconciliation logic so local order state can be matched to exchange state
-  - [ ] Add replay / recovery support so missed fills and rejected orders can be reconciled after reconnects
+  - [x] Add order-book and fill reconciliation logic so local order state can be matched to exchange state
+  - [x] Add replay / recovery support so missed fills and rejected orders can be reconciled after reconnects
   - [ ] Add a reconciliation checklist for pre-run validation:
     - [ ] Confirm local order IDs match exchange order IDs
     - [ ] Confirm local filled size matches exchange filled size
     - [ ] Confirm local average fill price matches exchange reported price
     - [ ] Confirm local fees match exchange fees
-  - [ ] Add account state tracking for the current session:
-    - [ ] Track cash balances by currency and exchange
-    - [ ] Track open positions and position value by symbol
-    - [ ] Track unsettled orders and their current status
-    - [ ] Surface reconciliation status in the runtime health dashboard
+  - [x] Add account state tracking for the current session:
+    - [x] Track cash balances by currency and exchange
+    - [x] Track open positions and position value by symbol
+    - [x] Track unsettled orders and their current status
+    - [x] Surface reconciliation status in the runtime health dashboard
 - [ ] **Operational Safety & Risk Controls**
   - [ ] Add account balance and inventory reconciliation against exchange state
   - [x] Add hard stop / circuit-breaker logic for daily drawdown, API failures, or stale market data

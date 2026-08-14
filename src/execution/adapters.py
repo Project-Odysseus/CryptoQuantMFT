@@ -53,6 +53,7 @@ class ExecutionAdapter:
     name: str = "base"
 
     def __init__(self) -> None:
+        """Initialize the object with its runtime state."""
         self._orders: dict[str, ExecutionOrder] = {}
         self._balances: dict[str, float] = {}
         self._positions: dict[str, float] = {}
@@ -61,13 +62,29 @@ class ExecutionAdapter:
         self._remote_positions: dict[str, float] = {}
         self._account_reconciliation: dict[str, Any] = {}
 
+    def _coerce_float(self, value: Any) -> float | None:
+        """Convert a value to a float when possible."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        return None
+
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+        """Submit an order through the adapter and capture the execution result."""
         raise NotImplementedError
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
+        """Cancel an existing order and return the execution outcome."""
         raise NotImplementedError
 
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
+        """Return the latest status for the requested order."""
         raise NotImplementedError
 
     def reconcile_order_state(
@@ -79,6 +96,7 @@ class ExecutionAdapter:
         remote_fill_price: float | None = None,
         remote_fee: float | None = None,
     ) -> ExecutionReport:
+        """Reconcile the local order state against the remote execution state."""
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
@@ -130,6 +148,7 @@ class ExecutionAdapter:
         )
 
     def get_account_snapshot(self) -> dict[str, Any]:
+        """Return the current account balance and position snapshot."""
         return {
             "balances": dict(self._balances),
             "positions": dict(self._positions),
@@ -144,6 +163,7 @@ class ExecutionAdapter:
         balances: dict[str, Any] | None = None,
         positions: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Reconcile the local account state against the provided remote snapshot."""
         remote_balances = self._normalize_account_values(balances) if balances is not None else dict(self._remote_balances)
         remote_positions = self._normalize_account_values(positions) if positions is not None else dict(self._remote_positions)
 
@@ -180,7 +200,73 @@ class ExecutionAdapter:
         }
         return dict(self._account_reconciliation)
 
+    def recover_execution_state(
+        self,
+        *,
+        remote_snapshot: dict[str, Any] | None = None,
+        remote_orders: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Reconcile the adapter's account and orders against a recent remote snapshot after reconnects."""
+        recovered_order_ids: list[str] = []
+        if remote_orders:
+            for payload in remote_orders:
+                if not isinstance(payload, dict):
+                    continue
+                order_id = str(payload.get("order_id", "")).strip() or None
+                if not order_id:
+                    continue
+                order = self._orders.get(order_id)
+                if order is None:
+                    order = ExecutionOrder(
+                        order_id=order_id,
+                        side=str(payload.get("side", "unknown") or "unknown"),
+                        size=self._coerce_float(payload.get("size")) or 0.0,
+                        price=self._coerce_float(payload.get("price")),
+                        timestamp=datetime.now(),
+                        status=str(payload.get("status", "SUBMITTED") or "SUBMITTED").upper(),
+                        fill_price=self._coerce_float(payload.get("fill_price")),
+                        filled_size=self._coerce_float(payload.get("filled_size")),
+                        fee=self._coerce_float(payload.get("fee")) or 0.0,
+                        exchange=self.name,
+                    )
+                    self._orders[order_id] = order
+
+                self.reconcile_order_state(
+                    order_id=order_id,
+                    remote_status=str(payload.get("status", "")).upper() or None,
+                    remote_filled_size=self._coerce_float(payload.get("filled_size")),
+                    remote_fill_price=self._coerce_float(payload.get("fill_price")),
+                    remote_fee=self._coerce_float(payload.get("fee")),
+                )
+                recovered_order_ids.append(order_id)
+        else:
+            for order in list(self._orders.values()):
+                remote_report = self.get_order_status(order_id=order.order_id)
+                if getattr(remote_report, "status", None) in {"NOT_FOUND", None}:
+                    continue
+                self.reconcile_order_state(
+                    order_id=order.order_id,
+                    remote_status=getattr(remote_report, "status", None),
+                    remote_filled_size=getattr(remote_report, "filled_size", None),
+                    remote_fill_price=getattr(remote_report, "fill_price", None),
+                    remote_fee=getattr(remote_report, "fee", None),
+                )
+                recovered_order_ids.append(order.order_id)
+
+        account_summary = self.reconcile_account_state(
+            balances=remote_snapshot.get("balances") if remote_snapshot is not None else None,
+            positions=remote_snapshot.get("positions") if remote_snapshot is not None else None,
+        )
+
+        return {
+            "account_reconciliation": account_summary,
+            "recovered_order_ids": recovered_order_ids,
+            "recovered_order_count": len(recovered_order_ids),
+            "recovery_status": "reconciled" if recovered_order_ids else "idle",
+        }
+
     def list_orders(self) -> list[ExecutionOrder]:
+        """Return the tracked orders for this adapter."""
         return list(self._orders.values())
 
     def _normalize_account_values(self, values: dict[str, Any] | None) -> dict[str, float]:
@@ -233,6 +319,7 @@ class SandboxExecutionAdapter(ExecutionAdapter):
     name = "sandbox"
 
     def __init__(self, *, exchange_name: str = "sandbox", fee_rate: float = 0.001) -> None:
+        """Initialize the object with its runtime state."""
         super().__init__()
         self.exchange_name = exchange_name
         self.fee_rate = fee_rate
@@ -243,6 +330,7 @@ class SandboxExecutionAdapter(ExecutionAdapter):
         self._remote_positions = dict(self._positions)
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+        """Submit an order through the adapter and capture the execution result."""
         if size <= 0:
             return ExecutionReport(order_id=order_id, status="REJECTED", message="size must be positive")
 
@@ -280,6 +368,7 @@ class SandboxExecutionAdapter(ExecutionAdapter):
         )
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
+        """Cancel an existing order and return the execution outcome."""
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
@@ -289,6 +378,7 @@ class SandboxExecutionAdapter(ExecutionAdapter):
         return ExecutionReport(order_id=order_id, status="CANCELED", message="order canceled")
 
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
+        """Return the latest status for the requested order."""
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
@@ -306,6 +396,7 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
     """Base class for exchange-specific execution adapters with local reconciliation state."""
 
     def __init__(self, *, exchange_name: str, fee_rate: float = 0.001, api_key: str | None = None, api_secret: str | None = None) -> None:
+        """Initialize the object with its runtime state."""
         super().__init__()
         self.exchange_name = exchange_name
         self.fee_rate = fee_rate
@@ -358,6 +449,7 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
             raise RuntimeError(str(exc)) from exc
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+        """Submit an order through the adapter and capture the execution result."""
         if size <= 0:
             return ExecutionReport(order_id=order_id, status="REJECTED", message="size must be positive")
 
@@ -378,6 +470,7 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
         )
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
+        """Cancel an existing order and return the execution outcome."""
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
@@ -387,6 +480,7 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
         return ExecutionReport(order_id=order_id, status="CANCELED", message="order canceled")
 
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
+        """Return the latest status for the requested order."""
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
@@ -406,6 +500,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
     name = "kraken"
 
     def __init__(self, *, fee_rate: float = 0.001, api_key: str | None = None, api_secret: str | None = None) -> None:
+        """Initialize the object with its runtime state."""
         super().__init__(
             exchange_name="kraken",
             fee_rate=fee_rate,
@@ -414,6 +509,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         )
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+        """Submit an order through the adapter and capture the execution result."""
         if size <= 0:
             return ExecutionReport(order_id=order_id, status="REJECTED", message="size must be positive")
 
@@ -467,6 +563,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         return ExecutionReport(order_id=order_id, status="SUBMITTED", message="submitted to Kraken")
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
+        """Cancel an existing order and return the execution outcome."""
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
@@ -488,6 +585,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         return ExecutionReport(order_id=order_id, status="CANCELED", message="order canceled")
 
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
+        """Return the latest status for the requested order."""
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
@@ -592,6 +690,7 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
     name = "firi"
 
     def __init__(self, *, fee_rate: float = 0.001, api_key: str | None = None) -> None:
+        """Initialize the object with its runtime state."""
         super().__init__(
             exchange_name="firi",
             fee_rate=fee_rate,
@@ -600,6 +699,7 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
         )
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+        """Submit an order through the adapter and capture the execution result."""
         if size <= 0:
             return ExecutionReport(order_id=order_id, status="REJECTED", message="size must be positive")
 
@@ -661,6 +761,7 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
         )
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
+        """Cancel an existing order and return the execution outcome."""
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
@@ -686,6 +787,7 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
         return ExecutionReport(order_id=order_id, status="CANCELED", message="order canceled")
 
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
+        """Return the latest status for the requested order."""
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
@@ -756,16 +858,20 @@ class LiveExecutionAdapter(ExecutionAdapter):
     name = "live"
 
     def __init__(self, *, exchange_name: str = "live") -> None:
+        """Initialize the object with its runtime state."""
         super().__init__()
         self.exchange_name = exchange_name
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+        """Submit an order through the adapter and capture the execution result."""
         return ExecutionReport(order_id=order_id, status="REJECTED", message=f"Live execution for {self.exchange_name} is not implemented yet")
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
+        """Cancel an existing order and return the execution outcome."""
         return ExecutionReport(order_id=order_id, status="NOT_FOUND", message=f"Live execution for {self.exchange_name} is not implemented yet")
 
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
+        """Return the latest status for the requested order."""
         return ExecutionReport(order_id=order_id, status="NOT_FOUND", message=f"Live execution for {self.exchange_name} is not implemented yet")
 
 
@@ -773,6 +879,7 @@ class ExecutionRouter:
     """Select an adapter for the requested runtime mode."""
 
     def __init__(self, *, mode: str, adapter: ExecutionAdapter | None = None, exchange: str | None = None) -> None:
+        """Initialize the object with its runtime state."""
         self.mode = mode
         self.exchange = exchange
         self.adapter = adapter or self._build_adapter(mode, exchange=exchange)

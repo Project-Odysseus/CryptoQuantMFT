@@ -41,6 +41,7 @@ class ExchangeConnector(ABC):
         store: "MarketStore | None" = None,
         aggregator: "StreamingAggregator | None" = None,
     ) -> None:
+        """Initialize the object with its runtime state."""
         self.name = name
         self.symbol = symbol
         self._connected = False
@@ -115,17 +116,21 @@ class MockExchangeConnector(ExchangeConnector):
         store: "MarketStore | None" = None,
         aggregator: "StreamingAggregator | None" = None,
     ) -> None:
+        """Initialize the object with its runtime state."""
         super().__init__(name="mock", symbol=symbol, store=store, aggregator=aggregator)
         self._last_price = 100.0
         self._drift = 0.25
 
     async def connect(self) -> None:
+        """Connect the component to its backing source."""
         self._connected = True
 
     async def disconnect(self) -> None:
+        """Disconnect the component from its backing source."""
         self._connected = False
 
     async def fetch_snapshot(self) -> MarketTick:
+        """Fetch a fresh snapshot from the backing source."""
         if not self._connected:
             raise RuntimeError("connector is not connected")
 
@@ -158,10 +163,12 @@ class FiriConnector(ExchangeConnector):
         store: "MarketStore | None" = None,
         aggregator: "StreamingAggregator | None" = None,
     ) -> None:
+        """Initialize the object with its runtime state."""
         super().__init__(name="firi", symbol=symbol, store=store, aggregator=aggregator)
         self.api_key = api_key or settings.firi_api_key
 
     async def connect(self) -> None:
+        """Connect the component to its backing source."""
         if not self.api_key:
             raise RuntimeError("Firi API key is not configured")
 
@@ -175,9 +182,11 @@ class FiriConnector(ExchangeConnector):
         self._connected = True
 
     async def disconnect(self) -> None:
+        """Disconnect the component from its backing source."""
         self._connected = False
 
     async def fetch_snapshot(self) -> MarketTick:
+        """Fetch a fresh snapshot from the backing source."""
         if not self._connected:
             raise RuntimeError("connector is not connected")
 
@@ -226,20 +235,24 @@ class KrakenConnector(ExchangeConnector):
         store: "MarketStore | None" = None,
         aggregator: "StreamingAggregator | None" = None,
     ) -> None:
+        """Initialize the object with its runtime state."""
         super().__init__(name="kraken", symbol=symbol, store=store, aggregator=aggregator)
         self.api_key = api_key or settings.kraken_api_key
         self.api_secret = api_secret or settings.kraken_secret
 
     async def connect(self) -> None:
+        """Connect the component to its backing source."""
         payload = self._request_json("GET", "https://api.kraken.com/0/public/Time")
         if not isinstance(payload, dict):
             raise RuntimeError("Unexpected Kraken time payload")
         self._connected = True
 
     async def disconnect(self) -> None:
+        """Disconnect the component from its backing source."""
         self._connected = False
 
     async def fetch_snapshot(self) -> MarketTick:
+        """Fetch a fresh snapshot from the backing source."""
         if not self._connected:
             raise RuntimeError("connector is not connected")
 

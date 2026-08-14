@@ -22,6 +22,7 @@ class VolatilityTrendFilter:
     """Compute simple ATR-based volatility and momentum trend filters."""
 
     def __init__(self, lookback: int = 14, atr_multiplier: float = 2.0) -> None:
+        """Initialize the object with its runtime state."""
         self.lookback = lookback
         self.atr_multiplier = atr_multiplier
 

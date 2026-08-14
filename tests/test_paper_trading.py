@@ -113,7 +113,9 @@ def test_paper_trading_engine_can_cancel_unfilled_orders() -> None:
 def test_paper_trading_engine_skips_zero_size_orders() -> None:
     """Zero-size risk decisions should not create paper-trading orders."""
     class ZeroSizeRiskManager:
+        """Represent a ZeroSizeRiskManager."""
         def evaluate(self, **_: object) -> SimpleNamespace:
+            """Evaluate whether the current state allows a new trade entry."""
             return SimpleNamespace(allow_entry=True, position_size=0.0)
 
     bars = [

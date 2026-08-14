@@ -59,6 +59,7 @@ class EventDrivenSimulator:
         impact_penalty: float = 0.0,
         adverse_selection_penalty: float = 0.0,
     ) -> None:
+        """Initialize the object with its runtime state."""
         self.latency_ms = latency_ms
         self.max_slippage = max_slippage
         self.initial_equity = initial_equity

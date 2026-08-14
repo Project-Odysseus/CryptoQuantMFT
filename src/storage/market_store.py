@@ -16,6 +16,7 @@ class MarketStore:
     """Persist normalized market ticks in SQLite and parquet for quick reuse."""
 
     def __init__(self, database_path: str | Path | None = None, parquet_path: str | Path | None = None) -> None:
+        """Initialize the object with its runtime state."""
         self.database_path = Path(database_path or "data/market_snapshots.db")
         self.parquet_path = Path(parquet_path or self.database_path.with_suffix(".parquet"))
         self.database_path.parent.mkdir(parents=True, exist_ok=True)

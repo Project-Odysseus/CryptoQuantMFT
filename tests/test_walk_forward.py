@@ -7,6 +7,7 @@ from src.storage.bar_aggregator import OHLCVBar
 
 
 def test_evaluate_walk_forward_returns_fold_summaries() -> None:
+    """Test test evaluate walk forward returns fold summaries."""
     bars = []
     for index in range(20):
         close = 100.0 + index * 0.5

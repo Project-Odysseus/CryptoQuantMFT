@@ -70,6 +70,7 @@ async def test_firi_connector_parses_market_snapshot(monkeypatch: pytest.MonkeyP
     """FiriConnector should normalize the market payload into a MarketTick."""
 
     def fake_request_json(self: FiriConnector, method: str, url: str, **_: object) -> list[dict[str, object]]:
+        """Perform the fake request json operation."""
         return [{"id": "BTCNOK", "last": "123.45", "todays_volume": "1.23"}]
 
     monkeypatch.setattr(FiriConnector, "_request_json", fake_request_json)
@@ -89,6 +90,7 @@ async def test_kraken_connector_parses_market_snapshot(monkeypatch: pytest.Monke
     """KrakenConnector should normalize the ticker payload into a MarketTick."""
 
     def fake_request_json(self: KrakenConnector, method: str, url: str, **_: object) -> dict[str, object]:
+        """Perform the fake request json operation."""
         return {
             "error": [],
             "result": {

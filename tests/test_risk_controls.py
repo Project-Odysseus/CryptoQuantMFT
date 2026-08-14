@@ -246,17 +246,22 @@ def test_kill_switch_controller_cancels_open_orders(tmp_path) -> None:
     """The kill switch should cancel outstanding orders and record its state."""
 
     class DummyAdapter:
+        """Represent a DummyAdapter."""
         def __init__(self) -> None:
+            """Initialize the object with its runtime state."""
             self._orders = [SimpleNamespace(order_id="order-1", status="OPEN")]
 
         def list_orders(self) -> list[SimpleNamespace]:
+            """Return the tracked orders for this adapter."""
             return self._orders
 
         def cancel_order(self, *, order_id: str) -> SimpleNamespace:
+            """Cancel an existing order and return the execution outcome."""
             self._orders[0].status = "CANCELED"
             return SimpleNamespace(status="CANCELED")
 
         def get_account_snapshot(self) -> dict[str, object]:
+            """Return the current account balance and position snapshot."""
             return {"balances": {"USD": 1000.0}, "positions": {}}
 
     controller = KillSwitchController(state_file=tmp_path / "kill-switch.json")
@@ -270,6 +275,7 @@ def test_simple_backtester_respects_risk_manager() -> None:
     """The backtester should skip entries when the risk manager blocks them."""
 
     def strategy(history: list[OHLCVBar], index: int, current_bar: OHLCVBar) -> int:
+        """Generate the signal strategy output for the current market context."""
         if index == 1:
             return 1
         if index == 2:

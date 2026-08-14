@@ -17,7 +17,9 @@ def test_fetch_kraken_ohlcv_parses_rows() -> None:
     """The historical fetcher should parse Kraken OHLC rows into OHLCV bars."""
 
     class FakeResponse:
+        """Represent a FakeResponse."""
         def __init__(self, payload: str) -> None:
+            """Initialize the object with its runtime state."""
             self._payload = payload.encode("utf-8")
 
         def __enter__(self) -> "FakeResponse":
@@ -27,6 +29,7 @@ def test_fetch_kraken_ohlcv_parses_rows() -> None:
             return None
 
         def read(self) -> bytes:
+            """Perform the read operation."""
             return self._payload
 
     payload = {
