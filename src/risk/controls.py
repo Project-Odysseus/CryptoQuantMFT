@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Sequence
 
 import numpy as np
@@ -40,6 +41,46 @@ class RiskDecision:
     reason: str | None = None
 
 
+@dataclass(slots=True)
+class CircuitBreakerState:
+    """Simple persisted state for an emergency hard stop."""
+
+    active: bool = False
+    reason: str | None = None
+    triggered_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class CircuitBreaker:
+    """A lightweight hard-stop controller that can pause trading immediately."""
+
+    def __init__(self, *, state: CircuitBreakerState | None = None) -> None:
+        self.state = state or CircuitBreakerState()
+
+    def activate(self, reason: str, **metadata: Any) -> None:
+        self.state.active = True
+        self.state.reason = reason
+        self.state.triggered_at = datetime.now(timezone.utc)
+        self.state.metadata = dict(metadata)
+
+    def deactivate(self) -> None:
+        self.state.active = False
+        self.state.reason = None
+        self.state.triggered_at = None
+        self.state.metadata = {}
+
+    def is_active(self) -> bool:
+        return bool(self.state.active)
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "active": self.state.active,
+            "reason": self.state.reason,
+            "triggered_at": self.state.triggered_at.isoformat() if self.state.triggered_at else None,
+            "metadata": dict(self.state.metadata),
+        }
+
+
 class RiskManager:
     """Gate new entries using drawdown and volatility thresholds."""
 
@@ -61,10 +102,14 @@ class RiskManager:
         open_positions: int = 0,
         hard_stop_active: bool = False,
         cooldown_bars_remaining: int = 0,
+        circuit_breaker: CircuitBreaker | None = None,
     ) -> RiskDecision:
         """Return whether a new position should be allowed and how large it should be."""
         if hard_stop_active:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="hard_stop")
+
+        if circuit_breaker is not None and circuit_breaker.is_active():
+            return RiskDecision(allow_entry=False, position_size=0.0, reason="circuit_breaker")
 
         if current_position != 0.0:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="position_open")
@@ -86,6 +131,8 @@ class RiskManager:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="drawdown_limit")
 
         if drawdown > self.config.hard_stop_drawdown_pct:
+            if circuit_breaker is not None:
+                circuit_breaker.activate("hard_stop_drawdown", drawdown_pct=drawdown, threshold_pct=self.config.hard_stop_drawdown_pct)
             return RiskDecision(allow_entry=False, position_size=0.0, reason="hard_stop_drawdown")
 
         if open_positions >= self.config.max_open_positions:

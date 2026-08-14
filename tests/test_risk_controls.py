@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from src.backtest import SimpleBacktester
-from src.risk.controls import RiskControlConfig, RiskManager
+from src.risk.controls import CircuitBreaker, RiskControlConfig, RiskManager
+from src.risk.kill_switch import KillSwitchController
 from src.storage.bar_aggregator import OHLCVBar
 
 
@@ -214,6 +216,54 @@ def test_risk_manager_blocks_entries_on_stale_quotes() -> None:
 
     assert not decision.allow_entry
     assert decision.reason == "stale_quote"
+
+
+def test_risk_manager_triggers_circuit_breaker_on_hard_stop_drawdown() -> None:
+    """A drawdown breach should activate the hard-stop circuit breaker."""
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        )
+    ]
+    breaker = CircuitBreaker()
+    manager = RiskManager(RiskControlConfig(hard_stop_drawdown_pct=0.01))
+    decision = manager.evaluate(bars=bars, equity=98.0, peak_equity=100.0, circuit_breaker=breaker)
+
+    assert not decision.allow_entry
+    assert decision.reason == "hard_stop_drawdown"
+    assert breaker.is_active()
+
+
+def test_kill_switch_controller_cancels_open_orders(tmp_path) -> None:
+    """The kill switch should cancel outstanding orders and record its state."""
+
+    class DummyAdapter:
+        def __init__(self) -> None:
+            self._orders = [SimpleNamespace(order_id="order-1", status="OPEN")]
+
+        def list_orders(self) -> list[SimpleNamespace]:
+            return self._orders
+
+        def cancel_order(self, *, order_id: str) -> SimpleNamespace:
+            self._orders[0].status = "CANCELED"
+            return SimpleNamespace(status="CANCELED")
+
+        def get_account_snapshot(self) -> dict[str, object]:
+            return {"balances": {"USD": 1000.0}, "positions": {}}
+
+    controller = KillSwitchController(state_file=tmp_path / "kill-switch.json")
+    state = controller.activate("manual", execution_adapter=DummyAdapter())
+
+    assert state["active"] is True
+    assert state["orders_cancelled"][0]["status"] == "CANCELED"
 
 
 def test_simple_backtester_respects_risk_manager() -> None:

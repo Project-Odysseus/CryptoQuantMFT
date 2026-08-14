@@ -13,6 +13,7 @@ from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, 
 from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
 from src.execution import ExecutionRouter, PaperTradingEngine
 from src.risk.controls import RiskControlConfig, RiskManager
+from src.risk.kill_switch import KillSwitchController
 from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
 from src.runtime import RuntimeOrchestrator, RuntimeWatchdogError
@@ -443,6 +444,8 @@ def main() -> None:
     parser.add_argument("--use-mock-connector", action="store_true", help="Use the mock exchange connector for the runtime loop")
     parser.add_argument("--watchdog-timeout", type=float, default=5.0, help="Seconds without a completed cycle or fresh data before the watchdog triggers")
     parser.add_argument("--watchdog-restarts", type=int, default=0, help="Number of times to restart the runtime after a watchdog timeout")
+    parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
+    parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
     args = parser.parse_args()
 
     logger.info("CryptoQuantMFT startup complete")
@@ -455,6 +458,14 @@ def main() -> None:
 
     if args.report:
         print_trade_report(limit=args.report_limit)
+        return
+
+    if args.kill_switch:
+        controller = KillSwitchController(trade_logger=TradeLogger(database_path=settings.database_path))
+        state = controller.activate(args.kill_switch_reason)
+        print("Kill switch activated")
+        print(f"Reason: {state['reason']}")
+        print(f"Orders cancelled: {len(state['orders_cancelled'])}")
         return
 
     if args.l2_simulator:

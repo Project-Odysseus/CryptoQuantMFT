@@ -7,7 +7,8 @@ from datetime import datetime
 from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
-from src.risk.controls import RiskManager
+from src.risk.controls import CircuitBreaker, RiskManager
+from src.risk.kill_switch import KillSwitchController
 from src.storage.trade_logger import TradeLogger
 
 
@@ -84,6 +85,8 @@ class PaperTradingEngine:
         risk_manager: RiskManager | None = None,
         trade_logger: TradeLogger | None = None,
         execution_adapter: Any | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
+        kill_switch_controller: KillSwitchController | None = None,
     ) -> None:
         if initial_cash <= 0:
             raise ValueError("initial_cash must be positive")
@@ -102,6 +105,8 @@ class PaperTradingEngine:
         self.risk_manager = risk_manager
         self.trade_logger = trade_logger
         self.execution_adapter = execution_adapter
+        self.circuit_breaker = circuit_breaker
+        self.kill_switch_controller = kill_switch_controller
         self._order_counter = 0
 
     def run(self, bars: Sequence[Any], signals: Sequence[float | int | str | None]) -> PaperTradingResult:
@@ -386,6 +391,9 @@ class PaperTradingEngine:
         current_notional: float = 0.0,
         open_positions: int = 0,
     ) -> Any:
+        if self.kill_switch_controller is not None and self.kill_switch_controller.is_active():
+            return type("RiskDecision", (), {"allow_entry": False, "position_size": 0.0, "reason": "kill_switch"})()
+
         if self.risk_manager is None:
             return type("RiskDecision", (), {"allow_entry": True, "position_size": self.default_order_size})()
         return self.risk_manager.evaluate(
@@ -398,6 +406,7 @@ class PaperTradingEngine:
             signal_side=signal_side,
             current_notional=current_notional,
             open_positions=open_positions,
+            circuit_breaker=self.circuit_breaker,
         )
 
     def _apply_cost(self, price: float, *, side: str, size: float) -> float:
