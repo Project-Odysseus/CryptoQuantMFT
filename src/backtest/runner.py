@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
-from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, moving_average_crossover_strategy
+from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, momentum_breakout_strategy, moving_average_crossover_strategy
 from src.risk.controls import RiskControlConfig, RiskManager
 
 
@@ -48,6 +48,7 @@ class StrategyRegistry:
         """Initialize the object with its runtime state."""
         self._strategies: dict[str, Any] = {
             "moving_average_crossover": moving_average_crossover_strategy,
+            "momentum_breakout": momentum_breakout_strategy,
         }
 
     def register(self, name: str, strategy: Any) -> None:
@@ -123,12 +124,21 @@ def compare_backtests(bars: Sequence[Any], config: BacktestConfig | None = None,
     )
 
 
-def _resolve_strategy(config: BacktestConfig, registry: StrategyRegistry) -> Any:
-    """Resolve a configured strategy name into a callable."""
-    strategy_factory = registry.get(config.strategy_name)
-    strategy = strategy_factory() if callable(strategy_factory) and not isinstance(strategy_factory, str) else None
-
-    if strategy is None:
+def resolve_strategy(strategy_name: str, registry: StrategyRegistry | None = None, **params: Any) -> Any:
+    """Resolve a configured strategy name into a callable using the supplied registry."""
+    resolved_registry = registry or StrategyRegistry()
+    strategy_factory = resolved_registry.get(strategy_name)
+    if not callable(strategy_factory) or isinstance(strategy_factory, str):
         raise TypeError("Strategy registry entries must resolve to a callable")
 
-    return strategy
+    if params:
+        try:
+            return strategy_factory(**params)
+        except TypeError:
+            return strategy_factory()
+    return strategy_factory()
+
+
+def _resolve_strategy(config: BacktestConfig, registry: StrategyRegistry) -> Any:
+    """Resolve a configured strategy name into a callable."""
+    return resolve_strategy(config.strategy_name, registry)
