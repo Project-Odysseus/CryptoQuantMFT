@@ -9,14 +9,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config import settings
-from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, evaluate_walk_forward, run_backtest, moving_average_crossover_strategy
+from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, evaluate_walk_forward, resolve_strategy, run_backtest
 from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
 from src.execution import ExecutionRouter, PaperTradingEngine
 from src.risk.controls import RiskControlConfig, RiskManager
 from src.risk.kill_switch import KillSwitchController
 from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
-from src.runtime import RuntimeOrchestrator, RuntimeWatchdogError
+from src.runtime import RuntimeConfig, RuntimeOrchestrator, RuntimeWatchdogError, build_runtime_config_from_args
 from src.storage.bar_aggregator import OHLCVBar
 from src.storage.market_store import MarketStore
 from src.storage.order_book import OrderBookSnapshot
@@ -49,17 +49,26 @@ async def run_pipeline(iterations: int = 3, interval_seconds: float = 1.0) -> No
 
 def build_runtime_orchestrator(
     *,
-    mode: str,
-    interval_seconds: float,
-    use_mock_connector: bool,
-    watchdog_timeout_seconds: float,
+    config: RuntimeConfig | None = None,
+    mode: str | None = None,
+    interval_seconds: float | None = None,
+    use_mock_connector: bool | None = None,
+    watchdog_timeout_seconds: float | None = None,
     exchange: str | None = None,
 ) -> tuple[RuntimeOrchestrator, MarketDataPipeline]:
     """Build the runtime orchestrator and its market-data pipeline for a run."""
+    runtime_config = config or RuntimeConfig(
+        mode=mode or "paper",
+        interval_seconds=interval_seconds or 1.0,
+        use_mock_connector=use_mock_connector or False,
+        watchdog_timeout_seconds=watchdog_timeout_seconds or 5.0,
+        exchange=exchange,
+    )
+
     store = MarketStore(database_path=settings.database_path)
     pipeline = MarketDataPipeline(store=store, interval_seconds=60)
 
-    if use_mock_connector:
+    if runtime_config.use_mock_connector:
         pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))
     else:
         pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
@@ -78,7 +87,7 @@ def build_runtime_orchestrator(
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
-    execution_router = ExecutionRouter(mode=mode, exchange=exchange)
+    execution_router = ExecutionRouter(mode=runtime_config.mode, exchange=runtime_config.exchange)
     engine = PaperTradingEngine(
         initial_cash=1000.0,
         default_order_size=1.0,
@@ -88,13 +97,14 @@ def build_runtime_orchestrator(
         trade_logger=trade_logger,
         execution_adapter=execution_router.adapter,
     )
+    strategy = resolve_strategy(runtime_config.strategy_name, **runtime_config.strategy_params)
     orchestrator = RuntimeOrchestrator(
         pipeline=pipeline,
         execution_engine=engine,
-        strategy=moving_average_crossover_strategy(short_window=3, long_window=6),
-        mode=mode,
-        interval_seconds=interval_seconds,
-        watchdog_timeout_seconds=watchdog_timeout_seconds,
+        strategy=strategy,
+        mode=runtime_config.mode,
+        interval_seconds=runtime_config.interval_seconds,
+        watchdog_timeout_seconds=runtime_config.watchdog_timeout_seconds,
         trade_logger=trade_logger,
     )
     return orchestrator, pipeline
@@ -102,6 +112,7 @@ def build_runtime_orchestrator(
 
 async def run_runtime_orchestrator(
     *,
+    config: RuntimeConfig | None = None,
     mode: str = "paper",
     iterations: int = 3,
     interval_seconds: float = 1.0,
@@ -111,16 +122,26 @@ async def run_runtime_orchestrator(
     exchange: str | None = None,
 ) -> None:
     """Run the runtime orchestrator over a simple market-data pipeline."""
-    restart_attempts = max(0, watchdog_restarts) + 1
+    runtime_config = config or RuntimeConfig(
+        mode=mode,
+        iterations=iterations,
+        interval_seconds=interval_seconds,
+        use_mock_connector=use_mock_connector,
+        watchdog_timeout_seconds=watchdog_timeout_seconds,
+        watchdog_restarts=watchdog_restarts,
+        exchange=exchange,
+    )
+    restart_attempts = max(0, runtime_config.watchdog_restarts) + 1
     last_orchestrator: RuntimeOrchestrator | None = None
 
     for attempt in range(restart_attempts):
         orchestrator, _pipeline = build_runtime_orchestrator(
-            mode=mode,
-            interval_seconds=interval_seconds,
-            use_mock_connector=use_mock_connector,
-            watchdog_timeout_seconds=watchdog_timeout_seconds,
-            exchange=exchange,
+            config=runtime_config,
+            mode=runtime_config.mode,
+            interval_seconds=runtime_config.interval_seconds,
+            use_mock_connector=runtime_config.use_mock_connector,
+            watchdog_timeout_seconds=runtime_config.watchdog_timeout_seconds,
+            exchange=runtime_config.exchange,
         )
         loop = asyncio.get_running_loop()
 
@@ -144,7 +165,7 @@ async def run_runtime_orchestrator(
 
         _install_signal_handlers()
         try:
-            await orchestrator.run_loop(iterations=iterations, interval_seconds=interval_seconds)
+            await orchestrator.run_loop(iterations=runtime_config.iterations, interval_seconds=runtime_config.interval_seconds)
         except RuntimeWatchdogError as exc:
             orchestrator.request_shutdown(reason="watchdog_timeout")
             logger.warning("runtime_watchdog_triggered attempt={} reason={}", attempt + 1, exc)
@@ -162,22 +183,22 @@ async def run_runtime_orchestrator(
         break
 
     if last_orchestrator is None:
-        logger.info("runtime_complete mode={} iterations={} completed=0", mode, iterations)
+        logger.info("runtime_complete mode={} iterations={} completed=0", runtime_config.mode, runtime_config.iterations)
         return
 
     logger.info("runtime_health_report {}", last_orchestrator.get_health_report())
 
     last_cycle = last_orchestrator.last_cycle
     if last_cycle is None or last_cycle.execution_result is None:
-        logger.info("runtime_complete mode={} iterations={} completed=0", mode, iterations)
+        logger.info("runtime_complete mode={} iterations={} completed=0", runtime_config.mode, runtime_config.iterations)
         return
 
     portfolio_history = last_cycle.execution_result.portfolio_history
     final_equity = portfolio_history[-1].equity if portfolio_history else 1000.0
     logger.info(
         "runtime_complete mode={} iterations={} trades={} final_equity={}",
-        mode,
-        iterations,
+        runtime_config.mode,
+        runtime_config.iterations,
         len(last_cycle.execution_result.trades),
         final_equity,
     )
@@ -312,10 +333,16 @@ def run_l2_simulation() -> None:
     )
 
 
-def run_paper_trading(bars: list[OHLCVBar], signals: list[float | int | str | None] | None = None) -> None:
+def run_paper_trading(
+    bars: list[OHLCVBar],
+    signals: list[float | int | str | None] | None = None,
+    *,
+    strategy_name: str = "moving_average_crossover",
+    strategy_params: dict | None = None,
+) -> None:
     """Run the paper-trading engine over bars and signals."""
     if signals is None:
-        strategy = moving_average_crossover_strategy(short_window=3, long_window=6)
+        strategy = resolve_strategy(strategy_name, **(strategy_params or {}))
         signals = []
         for index in range(len(bars)):
             history = list(bars[: index + 1])
@@ -420,6 +447,7 @@ def main() -> None:
     parser.add_argument("--demo-backtest", action="store_true", help="Run a synthetic backtest and save plots")
     parser.add_argument("--plot-output-dir", default="plots", help="Directory for generated plots")
     parser.add_argument("--strategy", default="moving_average_crossover", help="Name of the strategy to run")
+    parser.add_argument("--strategy-params", default="{}", help="Optional JSON object of strategy constructor parameters, e.g. '{\"lookback\": 5, \"threshold\": 0.01}'")
     parser.add_argument("--include-costs", action="store_true", help="Apply the fee and FX cost model")
     parser.add_argument("--compare-costs", action="store_true", help="Compare baseline and cost-adjusted backtests")
     parser.add_argument("--paper-trading", action="store_true", help="Run the paper-trading engine over bars and signals")
@@ -447,6 +475,7 @@ def main() -> None:
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
     args = parser.parse_args()
+    runtime_config = build_runtime_config_from_args(args)
 
     logger.info("CryptoQuantMFT startup complete")
     logger.info("database_path={}", settings.database_path)
@@ -504,6 +533,7 @@ def main() -> None:
     if args.runtime:
         asyncio.run(
             run_runtime_orchestrator(
+                config=runtime_config,
                 mode=args.runtime,
                 iterations=args.runtime_iterations,
                 interval_seconds=args.runtime_interval,
@@ -521,7 +551,7 @@ def main() -> None:
             bars = build_kraken_bars(symbol=args.kraken_symbol, count=args.kraken_bars)
 
         if args.paper_trading:
-            run_paper_trading(bars)
+            run_paper_trading(bars, strategy_name=args.strategy, strategy_params=runtime_config.strategy_params)
             return
 
         config = BacktestConfig(

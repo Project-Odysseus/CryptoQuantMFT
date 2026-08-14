@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from src.backtest import BacktestConfig, compare_backtests
+from src.backtest import BacktestConfig, StrategyRegistry, compare_backtests, resolve_strategy
 from src.storage.bar_aggregator import OHLCVBar
 
 
@@ -51,3 +51,11 @@ def test_compare_backtests_reports_cost_impact() -> None:
 
     assert comparison.baseline.final_equity >= 100.0
     assert comparison.with_costs.final_equity <= comparison.baseline.final_equity
+
+
+def test_strategy_registry_can_resolve_runtime_style_strategy() -> None:
+    """The strategy registry should provide the new breakout strategy entry."""
+    registry = StrategyRegistry()
+    strategy = resolve_strategy("momentum_breakout", registry=registry, lookback=3, threshold=0.02)
+
+    assert callable(strategy)
