@@ -6,6 +6,31 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
+
+DEFAULT_EXCHANGE_RISK_LIMITS: dict[str, dict[str, Any]] = {
+    "kraken": {
+        "max_position_size": 0.5,
+        "max_notional_per_trade": 500.0,
+        "max_total_notional": 2500.0,
+        "max_open_positions": 1,
+        "max_open_orders": 2,
+    },
+    "firi": {
+        "max_position_size": 0.35,
+        "max_notional_per_trade": 400.0,
+        "max_total_notional": 2000.0,
+        "max_open_positions": 1,
+        "max_open_orders": 2,
+    },
+    "sandbox": {
+        "max_position_size": 1.0,
+        "max_notional_per_trade": 1000.0,
+        "max_total_notional": 5000.0,
+        "max_open_positions": 3,
+        "max_open_orders": 5,
+    },
+}
+
 import numpy as np
 
 
@@ -30,6 +55,7 @@ class RiskControlConfig:
     max_open_positions: int = 3
     hard_stop_drawdown_pct: float = 0.02
     hard_stop_cooldown_bars: int = 5
+    exchange_risk_limits: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -109,6 +135,11 @@ class RiskManager:
         hard_stop_active: bool = False,
         cooldown_bars_remaining: int = 0,
         circuit_breaker: CircuitBreaker | None = None,
+        exchange_name: str | None = None,
+        exchange_position_size: float = 0.0,
+        current_exchange_notional: float = 0.0,
+        exchange_open_positions: int = 0,
+        open_orders_count: int = 0,
     ) -> RiskDecision:
         """Return whether a new position should be allowed and how large it should be."""
         if hard_stop_active:
@@ -144,12 +175,23 @@ class RiskManager:
         if open_positions >= self.config.max_open_positions:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="position_limit")
 
+        exchange_caps = self._exchange_caps(exchange_name)
+        exchange_max_open_positions = int(exchange_caps.get("max_open_positions", self.config.max_open_positions))
+        exchange_max_open_orders = int(exchange_caps.get("max_open_orders", 5))
+        max_total_notional = max(0.0, float(exchange_caps.get("max_total_notional", self.config.max_total_notional)))
+        if exchange_open_positions >= exchange_max_open_positions:
+            return RiskDecision(allow_entry=False, position_size=0.0, reason="exchange_position_limit")
+        if open_orders_count >= exchange_max_open_orders:
+            return RiskDecision(allow_entry=False, position_size=0.0, reason="open_order_limit")
+        if max_total_notional > 0.0 and current_exchange_notional >= max_total_notional:
+            return RiskDecision(allow_entry=False, position_size=0.0, reason="exchange_notional_limit")
+
         volatility_pct = self._estimate_volatility(bars)
         if volatility_pct > self.config.max_volatility_pct:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="volatility_limit")
 
         if volatility_pct <= 0.0:
-            position_size = self.config.max_position_size
+            position_size = self._resolve_position_limit(exchange_name=exchange_name)
             position_size = self._apply_inventory_penalty(
                 position_size=position_size,
                 signal_side=signal_side,
@@ -159,10 +201,13 @@ class RiskManager:
                 position_size=position_size,
                 current_notional=current_notional,
                 equity=equity,
+                exchange_name=exchange_name,
+                current_exchange_notional=current_exchange_notional,
+                exchange_position_size=exchange_position_size,
             )
-            return RiskDecision(allow_entry=True, position_size=max(0.0, min(self.config.max_position_size, position_size)))
+            return RiskDecision(allow_entry=True, position_size=max(0.0, min(self._resolve_position_limit(exchange_name=exchange_name), position_size)))
 
-        base_position_size = min(self.config.max_position_size, self.config.risk_per_trade_pct / volatility_pct)
+        base_position_size = min(self._resolve_position_limit(exchange_name=exchange_name), self.config.risk_per_trade_pct / volatility_pct)
         kelly_multiplier = self._estimate_kelly_multiplier(bars)
         position_size = base_position_size * kelly_multiplier
         position_size = self._apply_inventory_penalty(
@@ -174,8 +219,11 @@ class RiskManager:
             position_size=position_size,
             current_notional=current_notional,
             equity=equity,
+            exchange_name=exchange_name,
+            current_exchange_notional=current_exchange_notional,
+            exchange_position_size=exchange_position_size,
         )
-        return RiskDecision(allow_entry=True, position_size=max(0.0, min(self.config.max_position_size, position_size)))
+        return RiskDecision(allow_entry=True, position_size=max(0.0, min(self._resolve_position_limit(exchange_name=exchange_name), position_size)))
 
     def _estimate_volatility(self, bars: Sequence[Any]) -> float:
         if len(bars) < 2:
@@ -247,26 +295,54 @@ class RiskManager:
         penalty = min(1.0, skew_ratio * self.config.inventory_penalty_factor)
         return max(0.0, position_size * (1.0 - penalty))
 
-    def _apply_position_caps(self, *, position_size: float, current_notional: float, equity: float) -> float:
+    def _apply_position_caps(
+        self,
+        *,
+        position_size: float,
+        current_notional: float,
+        equity: float,
+        exchange_name: str | None = None,
+        current_exchange_notional: float = 0.0,
+        exchange_position_size: float = 0.0,
+    ) -> float:
         if position_size <= 0.0:
             return 0.0
 
-        max_trade_notional = max(0.0, self.config.max_notional_per_trade)
-        if current_notional + max_trade_notional <= 0.0:
+        exchange_caps = self._exchange_caps(exchange_name)
+        max_trade_notional = max(0.0, float(exchange_caps.get("max_notional_per_trade", self.config.max_notional_per_trade)))
+        max_total_notional = max(0.0, float(exchange_caps.get("max_total_notional", self.config.max_total_notional)))
+        if current_exchange_notional + max_trade_notional <= 0.0:
             return position_size
 
-        if max_trade_notional > 0.0 and current_notional > max_trade_notional:
+        if max_trade_notional > 0.0 and current_exchange_notional > max_trade_notional:
             return 0.0
 
-        available_capacity = max(0.0, self.config.max_total_notional - current_notional)
-        if self.config.max_total_notional > 0.0 and available_capacity <= 0.0:
+        available_capacity = max(0.0, max_total_notional - current_exchange_notional)
+        if max_total_notional > 0.0 and available_capacity <= 0.0:
             return 0.0
 
-        if self.config.max_total_notional > 0.0:
+        if max_total_notional > 0.0:
             max_allowed = min(position_size, available_capacity / max(1.0, equity))
             return max(0.0, max_allowed)
 
+        if exchange_position_size >= self._resolve_position_limit(exchange_name=exchange_name):
+            return 0.0
+
         return position_size
+
+    def _resolve_position_limit(self, *, exchange_name: str | None) -> float:
+        exchange_caps = self._exchange_caps(exchange_name)
+        return max(0.0, float(exchange_caps.get("max_position_size", self.config.max_position_size)))
+
+    def _exchange_caps(self, exchange_name: str | None) -> dict[str, Any]:
+        normalized_name = (exchange_name or "").strip().lower()
+        if not normalized_name:
+            return {}
+        configured = self.config.exchange_risk_limits.get(normalized_name, {})
+        if configured:
+            return configured
+        defaults = DEFAULT_EXCHANGE_RISK_LIMITS.get(normalized_name, {})
+        return dict(defaults)
 
     def _estimate_slippage_pct(self, bar: Any) -> float:
         close = _get_close(bar)

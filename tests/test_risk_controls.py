@@ -242,6 +242,62 @@ def test_risk_manager_triggers_circuit_breaker_on_hard_stop_drawdown() -> None:
     assert breaker.is_active()
 
 
+def test_risk_manager_enforces_exchange_open_order_limit() -> None:
+    """Exchange-specific order limits should block new entries once the queue is saturated."""
+    bar = OHLCVBar(
+        exchange="mock",
+        symbol="BTC/NOK",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        open=100.0,
+        high=100.0,
+        low=100.0,
+        close=100.0,
+        volume=10.0,
+    )
+
+    manager = RiskManager(RiskControlConfig())
+    decision = manager.evaluate(
+        bars=[bar],
+        equity=1000.0,
+        peak_equity=1000.0,
+        current_bar=bar,
+        exchange_name="kraken",
+        open_orders_count=2,
+    )
+
+    assert not decision.allow_entry
+    assert decision.reason == "open_order_limit"
+
+
+def test_risk_manager_enforces_exchange_notional_limit() -> None:
+    """Exchange-specific notional caps should reduce or reject new entries once the budget is exhausted."""
+    bar = OHLCVBar(
+        exchange="mock",
+        symbol="BTC/NOK",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        open=100.0,
+        high=100.0,
+        low=100.0,
+        close=100.0,
+        volume=10.0,
+    )
+
+    manager = RiskManager(RiskControlConfig())
+    decision = manager.evaluate(
+        bars=[bar],
+        equity=1000.0,
+        peak_equity=1000.0,
+        current_bar=bar,
+        exchange_name="firi",
+        current_exchange_notional=2000.0,
+    )
+
+    assert not decision.allow_entry
+    assert decision.reason == "exchange_notional_limit"
+
+
 def test_kill_switch_controller_cancels_open_orders(tmp_path) -> None:
     """The kill switch should cancel outstanding orders and record its state."""
 
