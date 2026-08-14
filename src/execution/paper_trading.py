@@ -70,6 +70,7 @@ class PaperTradingResult:
     trades: list[PaperTrade] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=list)
     portfolio_history: list[PortfolioSnapshot] = field(default_factory=list)
+    entry_decisions: list[dict[str, Any]] = field(default_factory=list)
 
 
 class PaperTradingEngine:
@@ -128,6 +129,7 @@ class PaperTradingEngine:
         trades: list[PaperTrade] = []
         equity_curve: list[float] = []
         portfolio_history: list[PortfolioSnapshot] = []
+        entry_decisions: list[dict[str, Any]] = []
         active_orders: list[PaperOrder] = []
 
         for index, bar in enumerate(bars):
@@ -151,6 +153,16 @@ class PaperTradingEngine:
                     current_exchange_notional=max(0.0, position_size * price),
                     exchange_open_positions=1 if position_size != 0.0 else 0,
                     open_orders_count=len(active_orders),
+                )
+                self._record_entry_decision(
+                    decisions=entry_decisions,
+                    signal=signal,
+                    side="buy",
+                    allowed=risk_decision.allow_entry,
+                    reason=getattr(risk_decision, "reason", None),
+                    price=price,
+                    timestamp=timestamp,
+                    order_size=risk_decision.position_size,
                 )
                 if not risk_decision.allow_entry:
                     pass
@@ -187,6 +199,16 @@ class PaperTradingEngine:
                     current_exchange_notional=max(0.0, position_size * price),
                     exchange_open_positions=1 if position_size != 0.0 else 0,
                     open_orders_count=len(active_orders),
+                )
+                self._record_entry_decision(
+                    decisions=entry_decisions,
+                    signal=signal,
+                    side="sell",
+                    allowed=risk_decision.allow_entry,
+                    reason=getattr(risk_decision, "reason", None),
+                    price=price,
+                    timestamp=timestamp,
+                    order_size=risk_decision.position_size,
                 )
                 if not risk_decision.allow_entry:
                     pass
@@ -307,7 +329,38 @@ class PaperTradingEngine:
                     position_size=position_size,
                 )
 
-        return PaperTradingResult(orders=orders, trades=trades, equity_curve=equity_curve, portfolio_history=portfolio_history)
+        return PaperTradingResult(
+            orders=orders,
+            trades=trades,
+            equity_curve=equity_curve,
+            portfolio_history=portfolio_history,
+            entry_decisions=entry_decisions,
+        )
+
+    def _record_entry_decision(
+        self,
+        *,
+        decisions: list[dict[str, Any]],
+        signal: float | int | str | None,
+        side: str,
+        allowed: bool,
+        reason: str | None,
+        price: float,
+        timestamp: datetime,
+        order_size: float,
+    ) -> None:
+        """Record whether the current bar generated a valid entry decision."""
+        decisions.append(
+            {
+                "signal": signal,
+                "side": side,
+                "allowed": allowed,
+                "reason": reason,
+                "price": price,
+                "timestamp": timestamp,
+                "order_size": order_size,
+            }
+        )
 
     def _create_order(self, *, timestamp: datetime, side: str, size: float) -> PaperOrder:
         self._order_counter += 1

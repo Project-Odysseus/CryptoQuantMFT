@@ -136,3 +136,32 @@ def test_paper_trading_engine_skips_zero_size_orders() -> None:
 
     assert result.orders == []
     assert result.trades == []
+
+
+def test_paper_trading_engine_records_blocked_entry_decisions() -> None:
+    """Blocked entry attempts should be recorded for dashboard summaries."""
+    class BlockingRiskManager:
+        """Represent a BlockingRiskManager."""
+        def evaluate(self, **_: object) -> SimpleNamespace:
+            """Reject entries with a specific reason for reporting."""
+            return SimpleNamespace(allow_entry=False, position_size=0.0, reason="spread_limit")
+
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        )
+    ]
+
+    result = PaperTradingEngine(risk_manager=BlockingRiskManager()).run(bars, [1.0])
+
+    assert len(result.entry_decisions) == 1
+    assert result.entry_decisions[0]["allowed"] is False
+    assert result.entry_decisions[0]["reason"] == "spread_limit"
