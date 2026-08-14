@@ -55,6 +55,22 @@ def test_firi_adapter_tracks_local_order_state() -> None:
     assert reconciliation.filled_size == 0.25
 
 
+def test_adapter_reconciles_account_state_against_remote_snapshot() -> None:
+    adapter = FiriExecutionAdapter(api_key="firi-key")
+    adapter._balances = {"NOK": 1000.0}
+    adapter._positions = {"BTC": 0.0}
+
+    summary = adapter.reconcile_account_state(
+        balances={"NOK": 950.0},
+        positions={"BTC": 0.5},
+    )
+
+    assert summary["matched"] is False
+    assert summary["balance_mismatches"]["NOK"]["remote"] == 950.0
+    assert summary["position_mismatches"]["BTC"]["remote"] == 0.5
+    assert adapter.get_account_snapshot()["balances"]["NOK"] == 950.0
+
+
 def test_execution_router_builds_exchange_specific_adapter() -> None:
     router = ExecutionRouter(mode="live", exchange="kraken")
 

@@ -57,6 +57,9 @@ class ExecutionAdapter:
         self._balances: dict[str, float] = {}
         self._positions: dict[str, float] = {}
         self._base_currency = "USD"
+        self._remote_balances: dict[str, float] = {}
+        self._remote_positions: dict[str, float] = {}
+        self._account_reconciliation: dict[str, Any] = {}
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
         raise NotImplementedError
@@ -130,10 +133,66 @@ class ExecutionAdapter:
         return {
             "balances": dict(self._balances),
             "positions": dict(self._positions),
+            "remote_balances": dict(self._remote_balances),
+            "remote_positions": dict(self._remote_positions),
+            "account_reconciliation": dict(self._account_reconciliation),
         }
+
+    def reconcile_account_state(
+        self,
+        *,
+        balances: dict[str, Any] | None = None,
+        positions: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        remote_balances = self._normalize_account_values(balances) if balances is not None else dict(self._remote_balances)
+        remote_positions = self._normalize_account_values(positions) if positions is not None else dict(self._remote_positions)
+
+        if balances is not None:
+            self._remote_balances = remote_balances
+        if positions is not None:
+            self._remote_positions = remote_positions
+
+        local_balances = dict(self._balances)
+        local_positions = dict(self._positions)
+        if not remote_balances and not remote_positions:
+            remote_balances = dict(local_balances)
+            remote_positions = dict(local_positions)
+
+        balance_mismatches = {
+            currency: {"local": local_balances.get(currency), "remote": remote_balances.get(currency)}
+            for currency in sorted(set(local_balances) | set(remote_balances))
+            if local_balances.get(currency) != remote_balances.get(currency)
+        }
+        position_mismatches = {
+            symbol: {"local": local_positions.get(symbol), "remote": remote_positions.get(symbol)}
+            for symbol in sorted(set(local_positions) | set(remote_positions))
+            if local_positions.get(symbol) != remote_positions.get(symbol)
+        }
+
+        self._balances = dict(remote_balances)
+        self._positions = dict(remote_positions)
+        self._account_reconciliation = {
+            "matched": not balance_mismatches and not position_mismatches,
+            "balance_mismatches": balance_mismatches,
+            "position_mismatches": position_mismatches,
+            "remote_balances": dict(remote_balances),
+            "remote_positions": dict(remote_positions),
+        }
+        return dict(self._account_reconciliation)
 
     def list_orders(self) -> list[ExecutionOrder]:
         return list(self._orders.values())
+
+    def _normalize_account_values(self, values: dict[str, Any] | None) -> dict[str, float]:
+        if not values:
+            return {}
+        normalized: dict[str, float] = {}
+        for key, value in values.items():
+            try:
+                normalized[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return normalized
 
     def _apply_fill_to_account_state(
         self,
@@ -180,6 +239,8 @@ class SandboxExecutionAdapter(ExecutionAdapter):
         self._base_currency = "EUR" if exchange_name == "kraken" else "NOK" if exchange_name == "firi" else "USD"
         self._balances = {self._base_currency: 1000.0}
         self._positions = {}
+        self._remote_balances = dict(self._balances)
+        self._remote_positions = dict(self._positions)
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
         if size <= 0:
