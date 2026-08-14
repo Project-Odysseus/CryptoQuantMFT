@@ -178,6 +178,11 @@ class ExecutionAdapter:
             remote_balances = dict(local_balances)
             remote_positions = dict(local_positions)
 
+        merged_balances = dict(local_balances)
+        merged_balances.update(remote_balances)
+        merged_positions = dict(local_positions)
+        merged_positions.update(remote_positions)
+
         balance_mismatches = {
             currency: {"local": local_balances.get(currency), "remote": remote_balances.get(currency)}
             for currency in sorted(set(local_balances) | set(remote_balances))
@@ -189,14 +194,16 @@ class ExecutionAdapter:
             if local_positions.get(symbol) != remote_positions.get(symbol)
         }
 
-        self._balances = dict(remote_balances)
-        self._positions = dict(remote_positions)
+        self._balances = merged_balances
+        self._positions = merged_positions
         self._account_reconciliation = {
             "matched": not balance_mismatches and not position_mismatches,
             "balance_mismatches": balance_mismatches,
             "position_mismatches": position_mismatches,
             "remote_balances": dict(remote_balances),
             "remote_positions": dict(remote_positions),
+            "merged_balances": dict(merged_balances),
+            "merged_positions": dict(merged_positions),
         }
         return dict(self._account_reconciliation)
 

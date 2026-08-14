@@ -99,6 +99,12 @@ class SessionAccountStateTracker:
         else:
             self.account_reconciliation_summary = {"matched": True, "balance_mismatches": {}, "position_mismatches": {}}
 
+        snapshot = getattr(adapter, "get_account_snapshot", None)
+        if callable(snapshot):
+            account_snapshot = snapshot()
+            self._merge_account_snapshot(account_snapshot)
+
+        self.last_reconciled_at = datetime.now(timezone.utc)
         return self.account_reconciliation_summary or {}
 
     def recover_execution_state(self, adapter: Any, *, remote_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -202,6 +208,7 @@ class SessionAccountStateTracker:
 
     def get_summary(self) -> dict[str, Any]:
         """Return a compact summary suitable for runtime diagnostics and dashboards."""
+        account_reconciliation = self.account_reconciliation_summary or {}
         return {
             "exchange": self.exchange_name,
             "base_currency": self.base_currency,
@@ -210,14 +217,19 @@ class SessionAccountStateTracker:
             "inventory": {
                 "symbols": list(self.positions.keys()),
                 "position_count": len(self.positions),
+                "position_sizes": dict(self.positions),
             },
             "unsettled_order_count": len(self.unsettled_orders),
             "reconciled_order_count": sum(1 for entry in self.reconciliation_results if entry.matched),
             "reconciliation_mismatches": [entry.order_id for entry in self.reconciliation_results if not entry.matched],
             "last_reconciled_at": self.last_reconciled_at.isoformat() if self.last_reconciled_at else None,
-            "account_reconciliation": self.account_reconciliation_summary,
+            "account_reconciliation": account_reconciliation,
+            "account_reconciliation_status": "matched" if account_reconciliation.get("matched", True) else "mismatched",
             "recovery_summary": self.recovery_summary,
-            "reconciliation_status": "matched" if not self.reconciliation_results or all(entry.matched for entry in self.reconciliation_results) else "mismatched",
+            "reconciliation_status": "matched"
+            if (not self.reconciliation_results or all(entry.matched for entry in self.reconciliation_results))
+            and account_reconciliation.get("matched", True)
+            else "mismatched",
         }
 
     def _default_currency(self, exchange_name: str | None) -> str:

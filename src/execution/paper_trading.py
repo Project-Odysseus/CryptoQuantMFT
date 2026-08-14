@@ -88,6 +88,7 @@ class PaperTradingEngine:
         execution_adapter: Any | None = None,
         circuit_breaker: CircuitBreaker | None = None,
         kill_switch_controller: KillSwitchController | None = None,
+        exchange_name: str | None = None,
     ) -> None:
         """Initialize the object with its runtime state."""
         if initial_cash <= 0:
@@ -109,6 +110,7 @@ class PaperTradingEngine:
         self.execution_adapter = execution_adapter
         self.circuit_breaker = circuit_breaker
         self.kill_switch_controller = kill_switch_controller
+        self.exchange_name = exchange_name or getattr(execution_adapter, "exchange_name", None) or getattr(execution_adapter, "name", None) or "paper"
         self._order_counter = 0
 
     def run(self, bars: Sequence[Any], signals: Sequence[float | int | str | None]) -> PaperTradingResult:
@@ -144,6 +146,11 @@ class PaperTradingEngine:
                     signal_side="buy",
                     current_notional=max(0.0, position_size * price),
                     open_positions=1 if position_size != 0.0 else 0,
+                    exchange_name=self.exchange_name,
+                    exchange_position_size=position_size,
+                    current_exchange_notional=max(0.0, position_size * price),
+                    exchange_open_positions=1 if position_size != 0.0 else 0,
+                    open_orders_count=len(active_orders),
                 )
                 if not risk_decision.allow_entry:
                     pass
@@ -175,6 +182,11 @@ class PaperTradingEngine:
                     signal_side="sell",
                     current_notional=max(0.0, position_size * price),
                     open_positions=1 if position_size != 0.0 else 0,
+                    exchange_name=self.exchange_name,
+                    exchange_position_size=position_size,
+                    current_exchange_notional=max(0.0, position_size * price),
+                    exchange_open_positions=1 if position_size != 0.0 else 0,
+                    open_orders_count=len(active_orders),
                 )
                 if not risk_decision.allow_entry:
                     pass
@@ -392,6 +404,11 @@ class PaperTradingEngine:
         signal_side: str | None = None,
         current_notional: float = 0.0,
         open_positions: int = 0,
+        exchange_name: str | None = None,
+        exchange_position_size: float = 0.0,
+        current_exchange_notional: float = 0.0,
+        exchange_open_positions: int = 0,
+        open_orders_count: int = 0,
     ) -> Any:
         if self.kill_switch_controller is not None and self.kill_switch_controller.is_active():
             return type("RiskDecision", (), {"allow_entry": False, "position_size": 0.0, "reason": "kill_switch"})()
@@ -409,6 +426,11 @@ class PaperTradingEngine:
             current_notional=current_notional,
             open_positions=open_positions,
             circuit_breaker=self.circuit_breaker,
+            exchange_name=exchange_name or self.exchange_name,
+            exchange_position_size=exchange_position_size,
+            current_exchange_notional=current_exchange_notional,
+            exchange_open_positions=exchange_open_positions,
+            open_orders_count=open_orders_count,
         )
 
     def _apply_cost(self, price: float, *, side: str, size: float) -> float:

@@ -75,6 +75,23 @@ def test_adapter_reconciles_account_state_against_remote_snapshot() -> None:
     assert adapter.get_account_snapshot()["balances"]["NOK"] == 950.0
 
 
+def test_adapter_reconcile_account_state_merges_partial_snapshot() -> None:
+    """Test test adapter preserves existing balances and positions when the remote snapshot is partial."""
+    adapter = FiriExecutionAdapter(api_key="firi-key")
+    adapter._balances = {"NOK": 1000.0, "EUR": 100.0}
+    adapter._positions = {"BTC": 0.25, "ETH": 0.5}
+
+    summary = adapter.reconcile_account_state(
+        balances={"NOK": 950.0},
+        positions={"BTC": 0.1},
+    )
+
+    assert summary["merged_balances"]["EUR"] == 100.0
+    assert summary["merged_positions"]["ETH"] == 0.5
+    assert adapter.get_account_snapshot()["balances"]["EUR"] == 100.0
+    assert adapter.get_account_snapshot()["positions"]["ETH"] == 0.5
+
+
 def test_adapter_recover_execution_state_reconciles_orders_and_account_snapshot() -> None:
     """Test test adapter can recover remote order and account state after reconnects."""
     adapter = FiriExecutionAdapter(api_key="firi-key")

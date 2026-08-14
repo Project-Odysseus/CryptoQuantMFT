@@ -164,6 +164,94 @@ A production-grade, event-driven quantitative trading system in Python designed 
 ## Phase 9: Live Trading Readiness & 24/7 Operations
 This phase captures the remaining work needed to move from a prototype backtest/paper-trading engine to something that can plausibly run live crypto trading continuously with appropriate safety controls.
 
+### Rollout Plan: Live Paper Trading + Parallel Signal Research
+The recommended path is to run one conservative production-like paper-trading lane while keeping signal research in a separate experimental lane. This avoids mixing unverified strategies into the live-paper runtime and makes monitoring and decision-making clearer.
+
+- [ ] **Lane A: Live Paper Runtime (Primary Production-Like Lane)**
+  - [ ] Keep one stable baseline strategy active for paper trading only
+  - [ ] Run the runtime using live market data with paper execution and the current risk controls
+  - [ ] Enforce exchange-specific caps (position size, notional, open orders, open positions)
+  - [ ] Maintain a single source of truth for runtime state: health report, trade logger, reconciliation status, and kill-switch state
+  - [ ] Make the runtime easy to monitor with a clear CLI dashboard and a small operational checklist for each run
+  - [ ] Use the same risk config and execution path every day so changes are comparable across sessions
+  - [ ] Urgency: High
+
+- [ ] **Lane B: Signal Research (Separate Experimental Lane)**
+  - [ ] Run signal experiments in parallel, but outside the production-like runtime path
+  - [ ] Keep research outputs in a separate backtest or notebook workflow, not in the live-paper runtime
+  - [ ] Compare candidate strategies offline using walk-forward / out-of-sample evaluation before promoting them
+  - [ ] Store research results with metadata: strategy name, parameters, dataset, metrics, and recommendation status
+  - [ ] Use a simple promotion gate before any strategy is moved into the live-paper runtime
+  - [ ] Urgency: Medium
+
+- [ ] **Operational Workflow: Running Both Lanes Safely**
+  - [ ] Create a daily operating checklist for: startup, runtime health, reconciliation status, open orders, drawdown, and kill-switch readiness
+  - [ ] Maintain one “active strategy” config and one “research candidates” directory or registry
+  - [ ] Separate runtime logs and research outputs so it is obvious which system is currently live-paper and which work is experimental
+  - [ ] Add a simple status report that shows: active strategy, current mode, current risk config, recent trades, reconciliation health, and open research candidates
+  - [ ] Urgency: High
+
+- [ ] **Promotion / Demotion Process for Strategies**
+  - [ ] Define a promotion rule set: strategy must pass offline validation, remain below drawdown thresholds in paper mode, and have no major reconciliation or execution issues
+  - [ ] Define a rollback rule set: any unexpected risk breach, stale data event, or reconciliation mismatch immediately disables the active strategy in paper mode
+  - [ ] Record the active strategy and risk config version for each paper run
+  - [ ] Urgency: High
+
+- [ ] **Monitoring & Visibility**
+  - [ ] Build a single dashboard view that combines runtime health, account state, open orders, recent trades, and research queue status
+  - [ ] Make anomalies obvious: stale quotes, reconciliation mismatches, circuit-breaker state, and kill-switch activation should be visible at a glance
+  - [ ] Add a lightweight summary export or CLI report suitable for both live-paper monitoring and research review
+  - [ ] Urgency: High
+
+- [ ] **Staged Execution Path**
+  - [ ] Paper mode first: live data, paper execution, no real capital exposure
+  - [ ] Live dry-run second: sandbox/exchange-shaped routing with low-risk settings and human approval
+  - [ ] Small live size third: only after stable paper performance and a manual sign-off checklist
+  - [ ] Urgency: Medium
+
+- [ ] **Execution Readiness Checklist**
+  - [ ] Confirm exchange credentials, permissions, and sandbox/testnet access are configured
+  - [ ] Confirm risk limits and kill-switch behavior are tested before each run
+  - [ ] Confirm reconciliation and order-state reporting are healthy before enabling a strategy
+  - [ ] Confirm operational logs, backups, and monitoring are available before a run starts
+  - [ ] Urgency: High
+
+### Suggested Priority Tasks
+- [ ] **Priority 1: Build a simple strategy registry + runtime config switcher**
+  - [ ] Add a registry of baseline and experimental strategies
+  - [ ] Allow the runtime to select an active strategy from config or CLI without code edits
+  - [ ] Keep the active strategy and research strategies separate in the workflow
+  - [ ] Urgency: High
+
+- [ ] **Priority 2: Add a consolidated operational dashboard/report**
+  - [ ] Show runtime health, account state, reconciliation status, recent trades, and research candidate status in one view
+  - [ ] Make the report easy to read in the terminal and suitable for quick monitoring during a run
+  - [ ] Urgency: High
+
+### Subtasks to Add Under Existing Bullet Points
+- [ ] **Under Runtime Orchestration / Live Runtime**
+  - [ ] Add a stable runtime config file for paper mode and a separate config file for research mode
+  - [ ] Add a startup summary banner showing mode, strategy, exchange, risk limits, and current kill-switch state
+  - [ ] Add a periodic health snapshot to the trade logger and CLI output
+  - [ ] Urgency: High
+
+- [ ] **Under Monitoring & Telemetry**
+  - [ ] Add a simple alerting channel for stale quotes, reconciliation mismatches, and risk events
+  - [ ] Add a heartbeat check for market-data feed and execution loop health
+  - [ ] Add a persisted daily summary report for paper-trading performance and research queue status
+  - [ ] Urgency: High
+
+- [ ] **Under Deployment & Reliability**
+  - [ ] Add a restart-safe state checkpoint for the active strategy and runtime config
+  - [ ] Add a simple log rotation and backup policy for trade/logger state and runtime artifacts
+  - [ ] Add a documented recovery procedure for restarting the paper runtime after a crash or disconnect
+  - [ ] Urgency: Medium
+
+- [ ] **Under Governance & Compliance**
+  - [ ] Define an approval checklist for promoting a strategy from research to live-paper or live-dry-run
+  - [ ] Record the strategy version, risk config version, and approval owner for each promoted run
+  - [ ] Urgency: Medium
+
 - [x] **Runtime Orchestration**
   - [x] Implement a single live-runtime loop that wires market data ingestion, signal generation, risk gates, execution routing, persistence, and monitoring together
   - [x] Support explicit runtime modes: `paper`, `live_dry_run`, and `live`
@@ -185,10 +273,10 @@ This phase captures the remaining work needed to move from a prototype backtest/
     - [x] Track unsettled orders and their current status
     - [x] Surface reconciliation status in the runtime health dashboard
 - [ ] **Operational Safety & Risk Controls**
-  - [ ] Add account balance and inventory reconciliation against exchange state
+  - [x] Add account balance and inventory reconciliation against exchange state
   - [x] Add hard stop / circuit-breaker logic for daily drawdown, API failures, or stale market data
   - [x] Add a kill-switch command path that can cancel open orders and force liquidation/neutralization quickly
-  - [ ] Add per-exchange position limits, max notional, and max open-order caps
+  - [x] Add per-exchange position limits, max notional, and max open-order caps
 - [ ] **Monitoring & Telemetry**
   - [ ] Add heartbeat monitoring for the strategy loop, market-data feed, and exchange connectivity
   - [ ] Add alerts for stale quotes, order failures, API rate-limit issues, and unexpected risk events
