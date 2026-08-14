@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -94,6 +95,8 @@ class RuntimeOrchestrator:
         watchdog_timeout_seconds: float = 5.0,
         trade_logger: TradeLogger | None = None,
         kill_switch_state_file: str | Path | None = None,
+        strategy_name: str | None = None,
+        strategy_params: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the object with its runtime state."""
         if mode not in {"paper", "live_dry_run", "live"}:
@@ -102,6 +105,8 @@ class RuntimeOrchestrator:
         self.mode = mode
         self.interval_seconds = interval_seconds
         self.strategy = strategy or moving_average_crossover_strategy(short_window=3, long_window=6)
+        self.strategy_name = strategy_name or "moving_average_crossover"
+        self.strategy_params = dict(strategy_params or {})
         self.circuit_breaker = CircuitBreaker()
         self.kill_switch_controller = KillSwitchController(state_file=kill_switch_state_file, trade_logger=trade_logger)
         self.execution_engine = execution_engine or PaperTradingEngine(
@@ -350,6 +355,86 @@ class RuntimeOrchestrator:
             "circuit_breaker": self.circuit_breaker.snapshot(),
             "kill_switch": self.kill_switch_controller.get_state(),
         }
+
+    def get_operational_report(self, *, limit: int = 10) -> dict[str, Any]:
+        """Return a consolidated operational report for the current runtime session."""
+        health_report = self.get_health_report()
+        account_state = health_report["account_state"]
+        last_cycle = self.last_cycle
+        execution_result = getattr(last_cycle, "execution_result", None) if last_cycle is not None else None
+        entry_decisions = getattr(execution_result, "entry_decisions", None) if execution_result is not None else None
+        decision_summary = self._summarize_entry_decisions(entry_decisions)
+        no_trade_summary = self._build_no_trade_summary(entry_decisions)
+
+        recent_trades: list[dict[str, Any]] = []
+        recent_events: list[dict[str, Any]] = []
+        if self.trade_logger is not None:
+            recent_trades = self.trade_logger.list_trades(limit=limit)
+            recent_events = self.trade_logger.list_events(limit=limit)
+
+        return {
+            "runtime": {
+                "mode": self.mode,
+                "strategy_name": self.strategy_name,
+                "strategy_params": self.strategy_params,
+                "exchange": account_state.get("exchange"),
+                "cycles_completed": health_report["cycles_completed"],
+                "shutdown_requested": health_report["shutdown_requested"],
+                "shutdown_reason": health_report["shutdown_reason"],
+                "last_error": health_report["last_error"],
+            },
+            "connectors": health_report["connector_status"],
+            "safety": {
+                "circuit_breaker": health_report["circuit_breaker"],
+                "kill_switch": health_report["kill_switch"],
+            },
+            "account_state": account_state,
+            "reconciliation": {
+                "status": account_state.get("reconciliation_status"),
+                "account_reconciliation_status": account_state.get("account_reconciliation_status"),
+                "mismatches": account_state.get("reconciliation_mismatches", []),
+                "unsettled_order_count": account_state.get("unsettled_order_count", 0),
+                "reconciled_order_count": account_state.get("reconciled_order_count", 0),
+                "last_reconciled_at": account_state.get("last_reconciled_at"),
+            },
+            "latest_cycle": {
+                "signals": list(getattr(last_cycle, "signals", []) or []),
+                "bars": len(getattr(last_cycle, "bars", []) or []),
+                "trades": len(getattr(execution_result, "trades", []) or []),
+                "orders": len(getattr(execution_result, "orders", []) or []),
+            },
+            "entry_decisions": decision_summary,
+            "no_trade_summary": no_trade_summary,
+            "recent_trades": recent_trades,
+            "recent_events": recent_events,
+        }
+
+    def _summarize_entry_decisions(self, entry_decisions: Sequence[dict[str, Any]] | None) -> dict[str, Any]:
+        if not entry_decisions:
+            return {"total": 0, "allowed": 0, "blocked": 0, "reasons": {}}
+
+        reasons = Counter(str(decision.get("reason") or "unknown") for decision in entry_decisions)
+        return {
+            "total": len(entry_decisions),
+            "allowed": sum(1 for decision in entry_decisions if decision.get("allowed")),
+            "blocked": sum(1 for decision in entry_decisions if not decision.get("allowed")),
+            "reasons": dict(reasons),
+        }
+
+    def _build_no_trade_summary(self, entry_decisions: Sequence[dict[str, Any]] | None) -> dict[str, Any]:
+        if not entry_decisions:
+            return {"status": "no_decisions", "reason": "no_entry_decisions_recorded"}
+
+        blocked_reasons = Counter(str(decision.get("reason") or "unknown") for decision in entry_decisions if not decision.get("allowed"))
+        if blocked_reasons:
+            most_common = blocked_reasons.most_common(1)[0]
+            return {
+                "status": "blocked",
+                "reason": most_common[0],
+                "reason_counts": dict(blocked_reasons),
+            }
+
+        return {"status": "allowed_but_no_trades", "reason": "entries_were_allowed_but_no_fill_was_recorded"}
 
     def _build_signals(self, bars: Sequence[Any]) -> list[float]:
         signals: list[float] = []

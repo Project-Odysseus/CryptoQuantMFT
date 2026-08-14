@@ -106,6 +106,8 @@ def build_runtime_orchestrator(
         interval_seconds=runtime_config.interval_seconds,
         watchdog_timeout_seconds=runtime_config.watchdog_timeout_seconds,
         trade_logger=trade_logger,
+        strategy_name=runtime_config.strategy_name,
+        strategy_params=runtime_config.strategy_params,
     )
     return orchestrator, pipeline
 
@@ -120,7 +122,7 @@ async def run_runtime_orchestrator(
     watchdog_timeout_seconds: float = 5.0,
     watchdog_restarts: int = 0,
     exchange: str | None = None,
-) -> None:
+) -> RuntimeOrchestrator | None:
     """Run the runtime orchestrator over a simple market-data pipeline."""
     runtime_config = config or RuntimeConfig(
         mode=mode,
@@ -184,14 +186,14 @@ async def run_runtime_orchestrator(
 
     if last_orchestrator is None:
         logger.info("runtime_complete mode={} iterations={} completed=0", runtime_config.mode, runtime_config.iterations)
-        return
+        return None
 
     logger.info("runtime_health_report {}", last_orchestrator.get_health_report())
 
     last_cycle = last_orchestrator.last_cycle
     if last_cycle is None or last_cycle.execution_result is None:
         logger.info("runtime_complete mode={} iterations={} completed=0", runtime_config.mode, runtime_config.iterations)
-        return
+        return last_orchestrator
 
     portfolio_history = last_cycle.execution_result.portfolio_history
     final_equity = portfolio_history[-1].equity if portfolio_history else 1000.0
@@ -202,6 +204,7 @@ async def run_runtime_orchestrator(
         len(last_cycle.execution_result.trades),
         final_equity,
     )
+    return last_orchestrator
 
 
 def build_demo_bars(count: int = 60) -> list[OHLCVBar]:
@@ -416,7 +419,12 @@ def print_trade_report(limit: int = 10) -> None:
             )
 
 
-def print_health_dashboard(limit: int = 10) -> None:
+def print_health_dashboard(
+    *,
+    limit: int = 10,
+    runtime_config: RuntimeConfig | None = None,
+    orchestrator: RuntimeOrchestrator | None = None,
+) -> None:
     """Print a compact health dashboard for the current runtime state."""
     logger_store = TradeLogger(database_path=settings.database_path)
     events = logger_store.list_events(limit=limit)
@@ -425,14 +433,49 @@ def print_health_dashboard(limit: int = 10) -> None:
     latest_trade = logger_store.list_trades(limit=1)[0] if logger_store.list_trades(limit=1) else None
     latest_snapshot = logger_store.list_equity_snapshots(limit=1)[0] if logger_store.list_equity_snapshots(limit=1) else None
 
+    report = orchestrator.get_operational_report(limit=limit) if orchestrator is not None else None
+
     print("Runtime health dashboard")
     print("-" * 28)
-    print(f"Last event: {latest_event['timestamp'] if latest_event else 'none'}")
-    print(f"Last event type: {latest_event['event_type'] if latest_event else 'none'}")
-    print(f"Last trade: {latest_trade['timestamp'] if latest_trade else 'none'}")
-    print(f"Last equity snapshot: {latest_snapshot['timestamp'] if latest_snapshot else 'none'}")
-    if latest_snapshot:
-        print(f"Current equity: {latest_snapshot['equity']:.4f} | cash: {latest_snapshot['cash']:.4f} | position: {latest_snapshot['position_size']:.4f}")
+    if report is not None:
+        runtime_info = report["runtime"]
+        print(f"Mode: {runtime_info['mode']}")
+        print(f"Strategy: {runtime_info['strategy_name']} ({runtime_info['strategy_params']})")
+        print(f"Exchange: {runtime_info['exchange']}")
+        print(f"Cycles: {runtime_info['cycles_completed']}")
+        print(f"Healthy: {'yes' if report['runtime']['last_error'] is None else 'no'}")
+        print(f"Circuit breaker: {'active' if report['safety']['circuit_breaker']['active'] else 'inactive'}")
+        print(f"Kill switch: {'active' if report['safety']['kill_switch']['active'] else 'inactive'}")
+        print(f"Reconciliation: {report['reconciliation']['status']}")
+        print(f"Unsettled orders: {report['reconciliation']['unsettled_order_count']}")
+        print(f"Mismatches: {len(report['reconciliation']['mismatches'])}")
+        format_reason = report["no_trade_summary"].get("reason")
+        print(f"No-trade reason: {format_reason or 'none'}")
+    else:
+        print(f"Mode: {runtime_config.mode if runtime_config is not None else 'unknown'}")
+        print(f"Strategy: {runtime_config.strategy_name if runtime_config is not None else 'unknown'}")
+        print(f"Exchange: {runtime_config.exchange if runtime_config is not None else 'unknown'}")
+        print(f"Last event: {latest_event['timestamp'] if latest_event else 'none'}")
+        print(f"Last event type: {latest_event['event_type'] if latest_event else 'none'}")
+        print(f"Last trade: {latest_trade['timestamp'] if latest_trade else 'none'}")
+        print(f"Last equity snapshot: {latest_snapshot['timestamp'] if latest_snapshot else 'none'}")
+        if latest_snapshot:
+            print(f"Current equity: {latest_snapshot['equity']:.4f} | cash: {latest_snapshot['cash']:.4f} | position: {latest_snapshot['position_size']:.4f}")
+
+    if report is not None:
+        account_state = report["account_state"]
+        balances = account_state.get("balances", {})
+        positions = account_state.get("positions", {})
+        print("Account state:")
+        if balances:
+            for currency, amount in balances.items():
+                print(f"  - balance {currency}: {amount:.4f}")
+        if positions:
+            for symbol, size in positions.items():
+                print(f"  - position {symbol}: {size:.4f}")
+        if not balances and not positions:
+            print("  - (empty)")
+
     print("Recent operational events:")
     if not events:
         print("  (none)")
@@ -481,10 +524,6 @@ def main() -> None:
     logger.info("database_path={}", settings.database_path)
     logger.info("log_level={}", settings.log_level)
 
-    if args.dashboard:
-        print_health_dashboard(limit=args.report_limit)
-        return
-
     if args.report:
         print_trade_report(limit=args.report_limit)
         return
@@ -531,7 +570,7 @@ def main() -> None:
         return
 
     if args.runtime:
-        asyncio.run(
+        orchestrator = asyncio.run(
             run_runtime_orchestrator(
                 config=runtime_config,
                 mode=args.runtime,
@@ -543,6 +582,12 @@ def main() -> None:
                 exchange=None if args.execution_exchange == "auto" else args.execution_exchange,
             )
         )
+        if args.dashboard:
+            print_health_dashboard(limit=args.report_limit, runtime_config=runtime_config, orchestrator=orchestrator)
+        return
+
+    if args.dashboard:
+        print_health_dashboard(limit=args.report_limit, runtime_config=runtime_config)
         return
 
     if args.demo_backtest:
