@@ -49,6 +49,14 @@ class Settings(BaseSettings):
         default=Path("data/cryptoquant.db"),
         description="Local database path for persistence of trades and snapshots.",
     )
+    telegram_bot_token: str = Field(
+        default="",
+        description="Telegram bot token used for runtime alerts and trade notifications.",
+    )
+    telegram_chat_id: str = Field(
+        default="",
+        description="Telegram chat ID used for runtime alerts and trade notifications.",
+    )
     eur_nok_fallback: Decimal = Field(
         default=Decimal("11.50"),
         description="Fallback EUR/NOK exchange rate used when upstream FX data is unavailable.",

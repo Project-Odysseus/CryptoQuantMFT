@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,7 +9,8 @@ import pytest
 
 from src.data.exchanges import MockExchangeConnector
 from src.data.pipeline import MarketDataPipeline
-from src.runtime.orchestrator import RuntimeOrchestrator
+from src.runtime.config import RuntimeConfig
+from src.runtime.orchestrator import RuntimeCycleResult, RuntimeOrchestrator
 from src.storage.market_store import MarketStore
 
 
@@ -95,3 +97,97 @@ async def test_runtime_orchestrator_raises_when_watchdog_times_out(tmp_path: Pat
         await orchestrator.run_loop(iterations=1, interval_seconds=0.0)
 
     assert orchestrator.health.watchdog_triggered is True
+
+
+def test_runtime_orchestrator_emits_stale_data_alert(tmp_path: Path) -> None:
+    """A stale market-data bar should trigger a runtime alert."""
+    orchestrator = RuntimeOrchestrator(pipeline=SimpleNamespace(connectors=[]), mode="paper", kill_switch_state_file=tmp_path / "kill-switch.json")
+    cycle = RuntimeCycleResult(
+        mode="paper",
+        bars=[SimpleNamespace(timestamp=datetime.now(timezone.utc) - timedelta(seconds=120))],
+        signals=[0.0],
+        execution_result=SimpleNamespace(entry_decisions=[], portfolio_history=[], trades=[], orders=[]),
+    )
+
+    orchestrator._evaluate_runtime_alerts(
+        cycle=cycle,
+        account_state_summary={"reconciliation_status": "matched", "reconciliation_mismatches": []},
+        execution_result=cycle.execution_result,
+    )
+
+    assert "stale_data" in orchestrator._active_alerts
+
+
+def test_runtime_orchestrator_emits_reconciliation_alert(tmp_path: Path) -> None:
+    """A reconciliation mismatch should trigger a runtime alert."""
+    orchestrator = RuntimeOrchestrator(pipeline=SimpleNamespace(connectors=[]), mode="paper", kill_switch_state_file=tmp_path / "kill-switch.json")
+    cycle = RuntimeCycleResult(mode="paper", bars=[SimpleNamespace(timestamp=datetime.now(timezone.utc))], signals=[0.0], execution_result=None)
+
+    orchestrator._evaluate_runtime_alerts(
+        cycle=cycle,
+        account_state_summary={"reconciliation_status": "mismatched", "reconciliation_mismatches": ["order-1"]},
+        execution_result=cycle.execution_result,
+    )
+
+    assert "reconciliation_mismatch" in orchestrator._active_alerts
+
+
+def test_runtime_orchestrator_emits_risk_stop_alert(tmp_path: Path) -> None:
+    """Blocked entry decisions should trigger a runtime risk-stop alert."""
+    orchestrator = RuntimeOrchestrator(pipeline=SimpleNamespace(connectors=[]), mode="paper", kill_switch_state_file=tmp_path / "kill-switch.json")
+    cycle = RuntimeCycleResult(mode="paper", bars=[SimpleNamespace(timestamp=datetime.now(timezone.utc))], signals=[0.0], execution_result=None)
+    execution_result = SimpleNamespace(entry_decisions=[{"allowed": False, "reason": "spread_limit"}], portfolio_history=[], trades=[], orders=[])
+
+    orchestrator._evaluate_runtime_alerts(
+        cycle=cycle,
+        account_state_summary={"reconciliation_status": "matched", "reconciliation_mismatches": []},
+        execution_result=execution_result,
+    )
+
+    assert "risk_stop" in orchestrator._active_alerts
+
+
+def test_runtime_orchestrator_emits_heartbeat_alert(tmp_path: Path) -> None:
+    """A stale heartbeat should trigger an alert."""
+    orchestrator = RuntimeOrchestrator(pipeline=SimpleNamespace(connectors=[]), mode="paper", kill_switch_state_file=tmp_path / "kill-switch.json")
+    orchestrator.heartbeat_timeout_seconds = 1.0
+    orchestrator.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=20)
+    cycle = RuntimeCycleResult(mode="paper", bars=[SimpleNamespace(timestamp=datetime.now(timezone.utc))], signals=[0.0], execution_result=None)
+
+    orchestrator._evaluate_runtime_alerts(
+        cycle=cycle,
+        account_state_summary={"reconciliation_status": "matched", "reconciliation_mismatches": []},
+        execution_result=None,
+    )
+
+    assert "heartbeat_lost" in orchestrator._active_alerts
+
+
+def test_runtime_orchestrator_saves_and_loads_checkpoint(tmp_path: Path) -> None:
+    """The orchestrator should persist and restore runtime state from a checkpoint file."""
+    checkpoint_path = tmp_path / "runtime.state.json"
+    orchestrator = RuntimeOrchestrator(
+        pipeline=SimpleNamespace(connectors=[]),
+        mode="paper",
+        kill_switch_state_file=tmp_path / "kill-switch.json",
+        runtime_config=RuntimeConfig(mode="paper", strategy_name="momentum_breakout", state_path=checkpoint_path),
+        checkpoint_path=checkpoint_path,
+    )
+    orchestrator.health.cycles_completed = 2
+    orchestrator.health.healthy = False
+    orchestrator._active_alerts.add("heartbeat_lost")
+    orchestrator.last_cycle = RuntimeCycleResult(mode="paper", signals=[1.0], bars=[], execution_result=None)
+    orchestrator.save_checkpoint()
+
+    restored = RuntimeOrchestrator(
+        pipeline=SimpleNamespace(connectors=[]),
+        mode="paper",
+        kill_switch_state_file=tmp_path / "kill-switch.json",
+        runtime_config=RuntimeConfig(mode="paper", strategy_name="moving_average_crossover", state_path=checkpoint_path),
+        checkpoint_path=checkpoint_path,
+    )
+    restored.load_checkpoint()
+
+    assert restored.health.cycles_completed == 2
+    assert restored.health.healthy is False
+    assert "heartbeat_lost" in restored._active_alerts
