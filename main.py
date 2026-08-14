@@ -108,6 +108,8 @@ def build_runtime_orchestrator(
         trade_logger=trade_logger,
         strategy_name=runtime_config.strategy_name,
         strategy_params=runtime_config.strategy_params,
+        runtime_config=runtime_config,
+        checkpoint_path=runtime_config.state_path,
     )
     return orchestrator, pipeline
 
@@ -122,6 +124,7 @@ async def run_runtime_orchestrator(
     watchdog_timeout_seconds: float = 5.0,
     watchdog_restarts: int = 0,
     exchange: str | None = None,
+    resume_runtime: bool = False,
 ) -> RuntimeOrchestrator | None:
     """Run the runtime orchestrator over a simple market-data pipeline."""
     runtime_config = config or RuntimeConfig(
@@ -167,7 +170,11 @@ async def run_runtime_orchestrator(
 
         _install_signal_handlers()
         try:
-            await orchestrator.run_loop(iterations=runtime_config.iterations, interval_seconds=runtime_config.interval_seconds)
+            await orchestrator.run_loop(
+                iterations=runtime_config.iterations,
+                interval_seconds=runtime_config.interval_seconds,
+                resume_from_checkpoint=resume_runtime,
+            )
         except RuntimeWatchdogError as exc:
             orchestrator.request_shutdown(reason="watchdog_timeout")
             logger.warning("runtime_watchdog_triggered attempt={} reason={}", attempt + 1, exc)
@@ -449,6 +456,9 @@ def print_health_dashboard(
         print(f"Reconciliation: {report['reconciliation']['status']}")
         print(f"Unsettled orders: {report['reconciliation']['unsettled_order_count']}")
         print(f"Mismatches: {len(report['reconciliation']['mismatches'])}")
+        heartbeat = report.get("heartbeat", {})
+        print(f"Heartbeat: {'stalled' if heartbeat.get('stalled') else 'healthy'} ({heartbeat.get('seconds_since_last_heartbeat')}s since last)")
+        print(f"Active alerts: {', '.join(sorted(report.get('active_alerts', []))) or 'none'}")
         format_reason = report["no_trade_summary"].get("reason")
         print(f"No-trade reason: {format_reason or 'none'}")
     else:
@@ -503,6 +513,8 @@ def main() -> None:
     parser.add_argument("--report", action="store_true", help="Print recent trades, equity snapshots, and operational events from the SQLite logger")
     parser.add_argument("--report-limit", type=int, default=10, help="Number of recent rows to print in the report")
     parser.add_argument("--dashboard", action="store_true", help="Print a compact health dashboard based on recent runtime events and portfolio snapshots")
+    parser.add_argument("--daily-summary", action="store_true", help="Print the persisted daily summary report for the selected day")
+    parser.add_argument("--daily-summary-date", default=None, help="Optional report date in YYYY-MM-DD format")
     parser.add_argument("--l2-simulator", action="store_true", help="Run the lightweight event-driven L2 simulator over synthetic snapshots")
     parser.add_argument("--walk-forward", action="store_true", help="Run a simple walk-forward evaluation over the selected bars")
     parser.add_argument("--walk-forward-train-window", type=int, default=40, help="Number of bars to use as the warmup/training window")
@@ -515,6 +527,9 @@ def main() -> None:
     parser.add_argument("--use-mock-connector", action="store_true", help="Use the mock exchange connector for the runtime loop")
     parser.add_argument("--watchdog-timeout", type=float, default=5.0, help="Seconds without a completed cycle or fresh data before the watchdog triggers")
     parser.add_argument("--watchdog-restarts", type=int, default=0, help="Number of times to restart the runtime after a watchdog timeout")
+    parser.add_argument("--runtime-config-path", default=None, help="Optional JSON file path used to persist and reload the runtime config")
+    parser.add_argument("--runtime-state-path", default=None, help="Optional JSON file path used to persist and reload the runtime checkpoint")
+    parser.add_argument("--resume-runtime", action="store_true", help="Load the runtime state from a checkpoint file before starting")
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
     args = parser.parse_args()
@@ -526,6 +541,30 @@ def main() -> None:
 
     if args.report:
         print_trade_report(limit=args.report_limit)
+        return
+
+    if args.daily_summary:
+        summary_date = None
+        if args.daily_summary_date:
+            try:
+                summary_date = datetime.strptime(args.daily_summary_date, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"invalid daily summary date: {args.daily_summary_date}") from exc
+        logger_store = TradeLogger(database_path=settings.database_path)
+        summary = logger_store.get_daily_summary(date=summary_date)
+        print("Daily summary report")
+        print("-" * 22)
+        print(f"Date: {summary['report_date']}")
+        print(f"Trades: {summary['total_trades']}")
+        print(f"Starting equity: {summary['starting_equity']:.4f}")
+        print(f"Ending equity: {summary['ending_equity']:.4f}")
+        print(f"PnL: {summary['total_pnl']:.4f}")
+        print(f"Max drawdown: {summary['max_drawdown']:.4f} ({summary['max_drawdown_pct']:.2%})")
+        print(f"Alerts: {summary['alert_count']}")
+        print(f"Active alerts: {', '.join(summary['active_alerts']) if summary['active_alerts'] else 'none'}")
+        print(f"Runtime status: {summary['runtime_status']}")
+        print(f"Research status: {summary['research_status']}")
+        print(f"Summary: {summary['summary_text']}")
         return
 
     if args.kill_switch:
@@ -580,6 +619,7 @@ def main() -> None:
                 watchdog_timeout_seconds=args.watchdog_timeout,
                 watchdog_restarts=args.watchdog_restarts,
                 exchange=None if args.execution_exchange == "auto" else args.execution_exchange,
+                resume_runtime=args.resume_runtime,
             )
         )
         if args.dashboard:

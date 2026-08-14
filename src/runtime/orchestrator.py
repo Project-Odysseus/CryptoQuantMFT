@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from src.backtest.simple_backtest import moving_average_crossover_strategy
+from src.runtime.config import RuntimeConfig
 from src.execution.paper_trading import PaperTradingEngine
 from src.execution.reconciliation import SessionAccountStateTracker
 from src.risk.controls import CircuitBreaker, RiskManager
 from src.risk.kill_switch import KillSwitchController
 from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
+from src.utils.telegram import TelegramNotifier
 
 StrategyFn = Callable[[Sequence[Any], int, Any], float | int | str | None]
 
@@ -97,6 +100,8 @@ class RuntimeOrchestrator:
         kill_switch_state_file: str | Path | None = None,
         strategy_name: str | None = None,
         strategy_params: dict[str, Any] | None = None,
+        runtime_config: RuntimeConfig | None = None,
+        checkpoint_path: str | Path | None = None,
     ) -> None:
         """Initialize the object with its runtime state."""
         if mode not in {"paper", "live_dry_run", "live"}:
@@ -122,17 +127,120 @@ class RuntimeOrchestrator:
         self.health = RuntimeHealth()
         self.watchdog = RuntimeWatchdog(watchdog_timeout_seconds)
         self.trade_logger = trade_logger
+        self.runtime_config = runtime_config
+        self.checkpoint_path = Path(checkpoint_path or getattr(runtime_config, "state_path", None) or "data/runtime_state.json")
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        self.alert_notifier = TelegramNotifier()
+        self._active_alerts: set[str] = set()
+        self.stale_quote_threshold_seconds = max(30.0, float(interval_seconds) * 10.0)
+        self.heartbeat_timeout_seconds = max(2 * self.stale_quote_threshold_seconds, float(watchdog_timeout_seconds))
+        self.last_heartbeat_at: datetime | None = None
         self.account_state_tracker = SessionAccountStateTracker(exchange_name="paper" if mode == "paper" else None)
         if getattr(self.execution_engine, "circuit_breaker", None) is None:
             self.execution_engine.circuit_breaker = self.circuit_breaker
         if getattr(self.execution_engine, "kill_switch_controller", None) is None:
             self.execution_engine.kill_switch_controller = self.kill_switch_controller
 
+    def load_checkpoint(self) -> bool:
+        """Restore runtime health and config from the persisted checkpoint, if present."""
+        if not self.checkpoint_path.exists():
+            return False
+
+        with self.checkpoint_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+
+        config_payload = payload.get("config") or {}
+        if config_payload:
+            self.runtime_config = RuntimeConfig.from_dict(config_payload)
+            self.mode = str(self.runtime_config.mode)
+            self.strategy_name = str(self.runtime_config.strategy_name)
+            self.strategy_params = dict(self.runtime_config.strategy_params or {})
+            if self.runtime_config.state_path:
+                self.checkpoint_path = Path(self.runtime_config.state_path)
+                self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+        health_payload = payload.get("health") or {}
+        self.health.healthy = bool(health_payload.get("healthy", True))
+        self.health.startup_checks_passed = bool(health_payload.get("startup_checks_passed", False))
+        self.health.last_error = health_payload.get("last_error")
+        self.health.cycles_completed = int(health_payload.get("cycles_completed", 0))
+        self.health.shutdown_requested = bool(health_payload.get("shutdown_requested", False))
+        self.health.shutdown_reason = health_payload.get("shutdown_reason")
+        self.health.connector_status = dict(health_payload.get("connector_status", {}))
+        self.health.watchdog_triggered = bool(health_payload.get("watchdog_triggered", False))
+        self.health.watchdog_restarts_completed = int(health_payload.get("watchdog_restarts_completed", 0))
+        self._active_alerts = set(payload.get("active_alerts", []))
+
+        last_cycle_payload = payload.get("last_cycle") or {}
+        if last_cycle_payload:
+            self.last_cycle = RuntimeCycleResult(
+                mode=str(last_cycle_payload.get("mode", self.mode)),
+                signals=list(last_cycle_payload.get("signals", []) or []),
+                bars=[],
+                execution_result=None,
+            )
+            self.history = [self.last_cycle]
+        return True
+
+    def save_checkpoint(self) -> None:
+        """Persist the current runtime state for restart-safe recovery."""
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "config": self._serialize_runtime_config(),
+            "health": {
+                "healthy": self.health.healthy,
+                "startup_checks_passed": self.health.startup_checks_passed,
+                "last_error": self.health.last_error,
+                "cycles_completed": self.health.cycles_completed,
+                "shutdown_requested": self.health.shutdown_requested,
+                "shutdown_reason": self.health.shutdown_reason,
+                "connector_status": dict(self.health.connector_status),
+                "watchdog_triggered": self.health.watchdog_triggered,
+                "watchdog_restarts_completed": self.health.watchdog_restarts_completed,
+            },
+            "active_alerts": sorted(self._active_alerts),
+            "last_cycle": self._serialize_last_cycle(),
+        }
+
+        with self.checkpoint_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+
+    def _serialize_runtime_config(self) -> dict[str, Any]:
+        if self.runtime_config is not None:
+            return self.runtime_config.to_dict()
+        return RuntimeConfig(
+            mode=self.mode,
+            strategy_name=self.strategy_name,
+            strategy_params=dict(self.strategy_params),
+            state_path=self.checkpoint_path,
+        ).to_dict()
+
+    def _serialize_last_cycle(self) -> dict[str, Any]:
+        if self.last_cycle is None:
+            return {}
+
+        execution_result = getattr(self.last_cycle, "execution_result", None)
+        portfolio_history = list(getattr(execution_result, "portfolio_history", []) or [])
+        final_equity = None
+        if portfolio_history:
+            final_equity = float(getattr(portfolio_history[-1], "equity", 0.0))
+
+        return {
+            "mode": getattr(self.last_cycle, "mode", self.mode),
+            "signals": list(getattr(self.last_cycle, "signals", []) or []),
+            "bar_count": len(getattr(self.last_cycle, "bars", []) or []),
+            "trade_count": len(getattr(execution_result, "trades", []) or []),
+            "order_count": len(getattr(execution_result, "orders", []) or []),
+            "final_equity": final_equity,
+        }
+
     async def run_startup_checks(self) -> bool:
         """Validate that the configured connectors can fetch a snapshot before starting the loop."""
         self.health.startup_checks_passed = False
         self.health.connector_status = {}
         self.watchdog.start()
+        self.last_heartbeat_at = datetime.now(timezone.utc)
         self._emit_startup_banner()
         if self.trade_logger is not None:
             self.trade_logger.log_event(
@@ -234,7 +342,7 @@ class RuntimeOrchestrator:
 
         adapter = getattr(self.execution_engine, "execution_adapter", None)
         exchange_name = getattr(adapter, "exchange_name", None)
-        self.account_state_tracker.update_from_runtime(
+        account_state_summary = self.account_state_tracker.update_from_runtime(
             execution_result=execution_result,
             adapter=adapter,
             exchange_name=exchange_name or ("paper" if self.mode == "paper" else None),
@@ -247,13 +355,22 @@ class RuntimeOrchestrator:
             signals=signals,
             execution_result=execution_result,
         )
+        previous_trade_count = 0
+        if self.last_cycle is not None:
+            previous_result = getattr(self.last_cycle, "execution_result", None)
+            previous_trade_count = len(getattr(previous_result, "trades", []) or [])
+
         self.last_cycle = cycle
         self.history.append(cycle)
         self.health.cycles_completed += 1
         self.health.healthy = True
         self.health.last_error = None
         self.watchdog.checkin_cycle()
+        self.last_heartbeat_at = datetime.now(timezone.utc)
+        self._evaluate_runtime_alerts(cycle=cycle, account_state_summary=account_state_summary, execution_result=execution_result)
+        self._maybe_notify_new_trades(execution_result, previous_trade_count=previous_trade_count)
         self._emit_cycle_health_snapshot(cycle)
+        self._write_daily_summary()
         if self.trade_logger is not None:
             self.trade_logger.log_event(
                 timestamp=datetime.now(timezone.utc),
@@ -263,12 +380,16 @@ class RuntimeOrchestrator:
                 source="runtime",
                 metadata={"mode": self.mode, "cycle": self.health.cycles_completed},
             )
+        self.save_checkpoint()
         return cycle
 
-    async def run_loop(self, iterations: int = 3, *, interval_seconds: float | None = None) -> list[RuntimeCycleResult]:
+    async def run_loop(self, iterations: int = 3, *, interval_seconds: float | None = None, resume_from_checkpoint: bool = False) -> list[RuntimeCycleResult]:
         """Run the orchestrator for a number of iterations with a small sleep between cycles."""
         if iterations < 1:
             raise ValueError("iterations must be at least 1")
+
+        if resume_from_checkpoint:
+            self.load_checkpoint()
 
         if not self.health.startup_checks_passed and not await self.run_startup_checks():
             return self.history
@@ -311,12 +432,20 @@ class RuntimeOrchestrator:
                 source="runtime",
                 metadata={"mode": self.mode},
             )
+        self.save_checkpoint()
 
     def trigger_hard_stop(self, reason: str, *, metadata: dict[str, Any] | None = None) -> None:
         """Activate the circuit breaker and request a shutdown."""
         self.circuit_breaker.activate(reason, **(metadata or {}))
         self._mark_unhealthy(f"hard_stop:{reason}")
         self.request_shutdown(reason=f"hard_stop:{reason}")
+        self._set_alert_state(
+            "circuit_breaker",
+            active=True,
+            message=f"hard stop triggered: {reason}",
+            metadata={"mode": self.mode, **(metadata or {})},
+            level="WARNING",
+        )
         if self.trade_logger is not None:
             self.trade_logger.log_event(
                 timestamp=datetime.now(timezone.utc),
@@ -333,6 +462,13 @@ class RuntimeOrchestrator:
             reason,
             execution_adapter=getattr(self.execution_engine, "execution_adapter", None),
             trade_logger=self.trade_logger,
+        )
+        self._set_alert_state(
+            "kill_switch",
+            active=True,
+            message=f"kill switch activated: {reason}",
+            metadata={"mode": self.mode, "state": state},
+            level="WARNING",
         )
         self.trigger_hard_stop(reason, metadata={"kill_switch": True, "state": state})
         return state
@@ -372,6 +508,117 @@ class RuntimeOrchestrator:
                 metadata={"summary": summary},
             )
 
+    def _evaluate_runtime_alerts(self, *, cycle: RuntimeCycleResult, account_state_summary: dict[str, Any], execution_result: Any | None) -> None:
+        """Emit runtime alerts for stale data, reconciliation mismatches, blocked entries, and heartbeat lapses."""
+        self._evaluate_stale_market_data_alert(cycle)
+        self._evaluate_reconciliation_alert(account_state_summary)
+        self._evaluate_entry_decision_alert(execution_result)
+        self._evaluate_heartbeat_alert()
+
+    def _evaluate_stale_market_data_alert(self, cycle: RuntimeCycleResult) -> None:
+        """Raise an alert if the latest market-data bar is older than the configured threshold."""
+        bars = list(getattr(cycle, "bars", []) or [])
+        if not bars:
+            self._clear_alert("stale_data")
+            return
+
+        latest_bar = bars[-1]
+        timestamp = getattr(latest_bar, "timestamp", None)
+        if timestamp is None:
+            self._clear_alert("stale_data")
+            return
+
+        if isinstance(timestamp, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                self._clear_alert("stale_data")
+                return
+
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        age_seconds = max(0.0, (now - timestamp).total_seconds())
+        self._set_alert_state(
+            "stale_data",
+            active=age_seconds > self.stale_quote_threshold_seconds,
+            message=f"market data appears stale (latest bar age={age_seconds:.1f}s)",
+            metadata={"latest_bar_age_seconds": round(age_seconds, 2), "threshold_seconds": round(self.stale_quote_threshold_seconds, 2)},
+            level="WARNING",
+        )
+
+    def _evaluate_reconciliation_alert(self, account_state_summary: dict[str, Any]) -> None:
+        """Raise an alert when reconciliation reports an unmatched or inconsistent state."""
+        mismatches = account_state_summary.get("reconciliation_mismatches", []) or []
+        status = account_state_summary.get("reconciliation_status", "unknown")
+        self._set_alert_state(
+            "reconciliation_mismatch",
+            active=status != "matched" or bool(mismatches),
+            message=f"reconciliation mismatch detected (status={status}, mismatches={len(mismatches)})",
+            metadata={"status": status, "mismatch_count": len(mismatches), "mismatches": mismatches},
+            level="WARNING",
+        )
+
+    def _evaluate_entry_decision_alert(self, execution_result: Any | None) -> None:
+        """Raise an alert when the execution engine blocked entries due to risk controls."""
+        entry_decisions = getattr(execution_result, "entry_decisions", None) or []
+        blocked_entries = [decision for decision in entry_decisions if not bool(decision.get("allowed", True))]
+        reasons = Counter(str(decision.get("reason") or "unknown") for decision in blocked_entries)
+        self._set_alert_state(
+            "risk_stop",
+            active=bool(blocked_entries),
+            message=f"risk controls blocked entries ({dict(reasons)})",
+            metadata={"blocked_entry_count": len(blocked_entries), "reasons": dict(reasons)},
+            level="WARNING",
+        )
+
+    def _evaluate_heartbeat_alert(self) -> None:
+        """Alert if the runtime has not emitted a heartbeat recently."""
+        if self.last_heartbeat_at is None:
+            return
+
+        since_last_heartbeat = (datetime.now(timezone.utc) - self.last_heartbeat_at).total_seconds()
+        self._set_alert_state(
+            "heartbeat_lost",
+            active=since_last_heartbeat > self.heartbeat_timeout_seconds,
+            message=f"runtime heartbeat stalled for {since_last_heartbeat:.1f}s",
+            metadata={"seconds_since_last_heartbeat": round(since_last_heartbeat, 2), "threshold_seconds": round(self.heartbeat_timeout_seconds, 2)},
+            level="WARNING",
+        )
+
+    def _set_alert_state(self, alert_key: str, *, active: bool, message: str, metadata: dict[str, Any] | None = None, level: str = "WARNING") -> None:
+        """Ensure a runtime alert is emitted once and then tracked as active until conditions clear."""
+        if active:
+            if alert_key in self._active_alerts:
+                return
+            self._emit_alert(alert_key, message, metadata=metadata, level=level)
+            self._active_alerts.add(alert_key)
+            return
+
+        if alert_key in self._active_alerts:
+            self._active_alerts.remove(alert_key)
+
+    def _emit_alert(self, alert_key: str, message: str, *, metadata: dict[str, Any] | None = None, level: str = "WARNING") -> None:
+        """Emit a runtime alert through logs, the persisted event log, and theTelegram placeholder notifier."""
+        logger.warning("runtime_alert alert={} {}", alert_key, message)
+        if self.trade_logger is not None:
+            self.trade_logger.log_event(
+                timestamp=datetime.now(timezone.utc),
+                level=level,
+                event_type="runtime_alert",
+                message=message,
+                source="runtime",
+                metadata={"alert": alert_key, **(metadata or {})},
+            )
+        if self.alert_notifier is not None:
+            self.alert_notifier.send_alert(event_type=alert_key, message=message, metadata=metadata)
+
+    def _clear_alert(self, alert_key: str) -> None:
+        """Clear an alert from the active set without re-emitting."""
+        if alert_key in self._active_alerts:
+            self._active_alerts.remove(alert_key)
+
     def _emit_cycle_health_snapshot(self, cycle: RuntimeCycleResult) -> None:
         """Emit a compact health snapshot after each runtime cycle."""
         summary = self._build_cycle_summary(cycle)
@@ -385,6 +632,97 @@ class RuntimeOrchestrator:
                 source="runtime",
                 metadata={"summary": summary, "cycle": self.health.cycles_completed},
             )
+
+    def _write_daily_summary(self) -> None:
+        """Write a persisted daily summary for the active runtime session."""
+        if self.trade_logger is None:
+            return
+
+        health_report = self.get_health_report()
+        active_alerts = sorted(self._active_alerts)
+        runtime_status = "healthy" if health_report["healthy"] and not active_alerts else "degraded"
+        self.trade_logger.get_daily_summary(
+            date=datetime.now(timezone.utc),
+            runtime_status=runtime_status,
+            research_status="parallel_lane_pending",
+            active_alerts=active_alerts,
+        )
+
+    def _maybe_notify_new_trades(self, execution_result: Any | None, *, previous_trade_count: int = 0) -> None:
+        """Send a Telegram trade update when the runtime records a new paper-trade event."""
+        if execution_result is None:
+            return
+
+        current_trades = list(getattr(execution_result, "trades", []) or [])
+        if len(current_trades) <= previous_trade_count:
+            return
+
+        latest_trade = current_trades[-1]
+        portfolio_history = list(getattr(execution_result, "portfolio_history", []) or [])
+        if not portfolio_history:
+            return
+
+        latest_snapshot = portfolio_history[-1]
+        initial_equity = float(getattr(self.execution_engine, "initial_cash", 1000.0))
+        current_equity = float(getattr(latest_snapshot, "equity", initial_equity))
+        current_pnl = current_equity - initial_equity
+
+        peak_equity = initial_equity
+        worst_equity = current_equity
+        for snapshot in portfolio_history:
+            peak_equity = max(peak_equity, float(getattr(snapshot, "equity", initial_equity)))
+            worst_equity = min(worst_equity, float(getattr(snapshot, "equity", initial_equity)))
+
+        current_drawdown_pct = 0.0 if peak_equity <= 0.0 else max(0.0, (peak_equity - current_equity) / peak_equity)
+        distance_to_max_drawdown_point = current_equity - worst_equity
+        position_side = "flat"
+        position_size = float(getattr(latest_snapshot, "position_size", 0.0))
+        if position_size > 0.0:
+            position_side = "long"
+        elif position_size < 0.0:
+            position_side = "short"
+
+        pnl_last_hour = self._calculate_pnl_last_hour()
+        self.alert_notifier.send_trade_update(
+            strategy_name=self.strategy_name,
+            trade_side=str(getattr(latest_trade, "side", "unknown") or "unknown"),
+            current_pnl=current_pnl,
+            pnl_last_hour=pnl_last_hour,
+            position_side=position_side,
+            max_drawdown_pct=current_drawdown_pct,
+            distance_to_max_drawdown_point=distance_to_max_drawdown_point,
+        )
+
+    def _calculate_pnl_last_hour(self) -> float:
+        """Estimate recent equity change over the last hour using persisted equity snapshots."""
+        if self.trade_logger is None:
+            return 0.0
+
+        snapshots = self.trade_logger.list_equity_snapshots(limit=200)
+        if not snapshots:
+            return 0.0
+
+        parsed_snapshots: list[tuple[datetime, float]] = []
+        now = datetime.now(timezone.utc)
+        for snapshot in snapshots:
+            timestamp = snapshot.get("timestamp")
+            if not timestamp:
+                continue
+            try:
+                parsed_timestamp = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if parsed_timestamp.tzinfo is None:
+                parsed_timestamp = parsed_timestamp.replace(tzinfo=timezone.utc)
+            if now - parsed_timestamp <= timedelta(hours=1):
+                parsed_snapshots.append((parsed_timestamp, float(snapshot.get("equity", 0.0))))
+
+        if len(parsed_snapshots) < 2:
+            return 0.0
+
+        oldest_equity = parsed_snapshots[-1][1]
+        newest_equity = parsed_snapshots[0][1]
+        return newest_equity - oldest_equity
 
     def _build_startup_summary(self) -> str:
         """Build a human-readable summary of the runtime configuration."""
@@ -447,6 +785,11 @@ class RuntimeOrchestrator:
             recent_trades = self.trade_logger.list_trades(limit=limit)
             recent_events = self.trade_logger.list_events(limit=limit)
 
+        last_heartbeat = self.last_heartbeat_at
+        seconds_since_heartbeat = None
+        if last_heartbeat is not None:
+            seconds_since_heartbeat = round((datetime.now(timezone.utc) - last_heartbeat).total_seconds(), 2)
+
         return {
             "runtime": {
                 "mode": self.mode,
@@ -457,6 +800,12 @@ class RuntimeOrchestrator:
                 "shutdown_requested": health_report["shutdown_requested"],
                 "shutdown_reason": health_report["shutdown_reason"],
                 "last_error": health_report["last_error"],
+            },
+            "heartbeat": {
+                "last_heartbeat_at": last_heartbeat.isoformat() if last_heartbeat is not None else None,
+                "seconds_since_last_heartbeat": seconds_since_heartbeat,
+                "threshold_seconds": round(self.heartbeat_timeout_seconds, 2),
+                "stalled": seconds_since_heartbeat is not None and seconds_since_heartbeat > self.heartbeat_timeout_seconds,
             },
             "connectors": health_report["connector_status"],
             "safety": {
@@ -480,6 +829,7 @@ class RuntimeOrchestrator:
             },
             "entry_decisions": decision_summary,
             "no_trade_summary": no_trade_summary,
+            "active_alerts": sorted(self._active_alerts),
             "recent_trades": recent_trades,
             "recent_events": recent_events,
         }
