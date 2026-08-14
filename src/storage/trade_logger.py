@@ -13,6 +13,7 @@ class TradeLogger:
     """Persist trade and equity snapshots for local review."""
 
     def __init__(self, database_path: str | Path | None = None) -> None:
+        """Initialize the object with its runtime state."""
         self.database_path = Path(database_path or "data/trades.db")
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_schema()

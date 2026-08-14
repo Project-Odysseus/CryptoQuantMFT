@@ -45,6 +45,7 @@ class StrategyRegistry:
     """Resolve a strategy name to a strategy callable."""
 
     def __init__(self) -> None:
+        """Initialize the object with its runtime state."""
         self._strategies: dict[str, Any] = {
             "moving_average_crossover": moving_average_crossover_strategy,
         }

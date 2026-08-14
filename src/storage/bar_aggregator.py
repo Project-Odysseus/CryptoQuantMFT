@@ -31,6 +31,7 @@ class BarAggregator:
     SUPPORTED_INTERVALS = {1, 60, 300, 1800, 3600, 86400}
 
     def __init__(self, store: MarketStore, interval_seconds: int = 60) -> None:
+        """Initialize the object with its runtime state."""
         if interval_seconds not in self.SUPPORTED_INTERVALS:
             raise ValueError(f"Unsupported interval: {interval_seconds}")
         self.store = store

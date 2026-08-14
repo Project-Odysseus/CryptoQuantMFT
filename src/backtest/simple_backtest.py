@@ -61,6 +61,7 @@ class SimpleBacktester:
         cost_model: CostModel | None = None,
         risk_manager: RiskManager | None = None,
     ) -> None:
+        """Initialize the object with its runtime state."""
         self.strategy = strategy or self._default_strategy
         if initial_equity <= 0:
             raise ValueError("initial_equity must be positive")
@@ -393,6 +394,7 @@ def moving_average_crossover_strategy(short_window: int = 3, long_window: int = 
     """Create a simple moving-average crossover strategy for any OHLC-like series."""
 
     def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
+        """Generate the signal strategy output for the current market context."""
         if len(history) < max(short_window, long_window):
             return 0
         closes = [_get_close(bar) for bar in history[-long_window:]]

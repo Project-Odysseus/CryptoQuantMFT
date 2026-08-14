@@ -55,24 +55,29 @@ class CircuitBreaker:
     """A lightweight hard-stop controller that can pause trading immediately."""
 
     def __init__(self, *, state: CircuitBreakerState | None = None) -> None:
+        """Initialize the object with its runtime state."""
         self.state = state or CircuitBreakerState()
 
     def activate(self, reason: str, **metadata: Any) -> None:
+        """Activate the control and record the supplied reason."""
         self.state.active = True
         self.state.reason = reason
         self.state.triggered_at = datetime.now(timezone.utc)
         self.state.metadata = dict(metadata)
 
     def deactivate(self) -> None:
+        """Deactivate the control and clear its state."""
         self.state.active = False
         self.state.reason = None
         self.state.triggered_at = None
         self.state.metadata = {}
 
     def is_active(self) -> bool:
+        """Return whether the control is currently active."""
         return bool(self.state.active)
 
     def snapshot(self) -> dict[str, Any]:
+        """Return a snapshot of the control state."""
         return {
             "active": self.state.active,
             "reason": self.state.reason,
@@ -85,6 +90,7 @@ class RiskManager:
     """Gate new entries using drawdown and volatility thresholds."""
 
     def __init__(self, config: RiskControlConfig | None = None) -> None:
+        """Initialize the object with its runtime state."""
         self.config = config or RiskControlConfig()
 
     def evaluate(

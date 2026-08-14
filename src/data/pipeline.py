@@ -13,6 +13,7 @@ class MarketDataPipeline:
     """Run connectors against a shared store and streaming aggregator."""
 
     def __init__(self, store: MarketStore | None = None, interval_seconds: int = 60) -> None:
+        """Initialize the object with its runtime state."""
         self.store = store or MarketStore()
         self.aggregator = StreamingAggregator(store=self.store, interval_seconds=interval_seconds)
         self.connectors: list[Any] = []

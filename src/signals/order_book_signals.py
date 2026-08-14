@@ -40,6 +40,7 @@ class OrderBookSignalEngine:
     """Compute simple, order-book-driven signals from a depth snapshot."""
 
     def __init__(self, depth_levels: int = 5) -> None:
+        """Initialize the object with its runtime state."""
         self.depth_levels = depth_levels
 
     def compute_obi(self, snapshot: Any) -> OrderBookImbalanceSignal:

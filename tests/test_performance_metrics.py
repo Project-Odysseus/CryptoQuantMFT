@@ -106,6 +106,7 @@ def test_simple_backtester_populates_performance_metrics() -> None:
     ]
 
     def strategy(history: list[OHLCVBar], index: int, current_bar: OHLCVBar) -> int:
+        """Generate the signal strategy output for the current market context."""
         return 1 if index >= 1 else 0
 
     result = SimpleBacktester(strategy=strategy, initial_equity=100.0).run(bars)

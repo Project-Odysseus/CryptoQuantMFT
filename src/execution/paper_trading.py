@@ -34,6 +34,7 @@ class PaperOrder:
 
     @property
     def remaining_size(self) -> float:
+        """Return the remaining order size."""
         return self.size - self.filled_size
 
 
@@ -88,6 +89,7 @@ class PaperTradingEngine:
         circuit_breaker: CircuitBreaker | None = None,
         kill_switch_controller: KillSwitchController | None = None,
     ) -> None:
+        """Initialize the object with its runtime state."""
         if initial_cash <= 0:
             raise ValueError("initial_cash must be positive")
         if default_order_size <= 0:

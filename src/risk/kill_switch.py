@@ -14,12 +14,14 @@ class KillSwitchController:
     """Persist and activate a runtime kill switch for order cancellation and neutralization."""
 
     def __init__(self, *, state_file: str | Path | None = None, trade_logger: TradeLogger | None = None) -> None:
+        """Initialize the object with its runtime state."""
         self.state_file = Path(state_file or "data/kill_switch_state.json")
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.trade_logger = trade_logger
         self._state = self._load_state()
 
     def activate(self, reason: str, *, execution_adapter: Any | None = None, trade_logger: TradeLogger | None = None) -> dict[str, Any]:
+        """Activate the control and record the supplied reason."""
         self._state = {
             "active": True,
             "reason": reason,
@@ -49,12 +51,15 @@ class KillSwitchController:
         return self.get_state()
 
     def is_active(self) -> bool:
+        """Return whether the control is currently active."""
         return bool(self._state.get("active"))
 
     def get_state(self) -> dict[str, Any]:
+        """Return the state value."""
         return dict(self._state)
 
     def reset(self) -> None:
+        """Perform the reset operation."""
         self._state = {"active": False, "reason": None, "triggered_at": None, "orders_cancelled": [], "account_snapshot": None, "neutralized": False}
         self._persist_state()
 

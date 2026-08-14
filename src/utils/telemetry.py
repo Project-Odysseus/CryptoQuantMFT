@@ -36,6 +36,7 @@ class WebSocketReconnectHandler:
         backoff_factor: float = 2.0,
         jitter: float = 0.2,
     ) -> None:
+        """Initialize the object with its runtime state."""
         self.initial_delay_seconds = initial_delay_seconds
         self.max_delay_seconds = max_delay_seconds
         self.backoff_factor = backoff_factor

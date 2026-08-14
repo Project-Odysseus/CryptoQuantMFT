@@ -14,6 +14,7 @@ from src.storage.market_store import MarketStore
 
 @pytest.mark.asyncio
 async def test_runtime_orchestrator_runs_cycle_and_collects_results(tmp_path: Path) -> None:
+    """Test test runtime orchestrator runs cycle and collects results."""
     store = MarketStore(database_path="/tmp/cryptoquantmft-runtime-test.db")
     pipeline = MarketDataPipeline(store=store, interval_seconds=60)
     pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))
@@ -31,6 +32,7 @@ async def test_runtime_orchestrator_runs_cycle_and_collects_results(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_runtime_orchestrator_includes_account_state_in_health_report(tmp_path: Path) -> None:
+    """Test test runtime orchestrator includes account state in health report."""
     store = MarketStore(database_path="/tmp/cryptoquantmft-runtime-health-test.db")
     pipeline = MarketDataPipeline(store=store, interval_seconds=60)
     pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))
@@ -45,16 +47,21 @@ async def test_runtime_orchestrator_includes_account_state_in_health_report(tmp_
 
 @pytest.mark.asyncio
 async def test_runtime_orchestrator_marks_unhealthy_when_startup_checks_fail(tmp_path: Path) -> None:
+    """Test test runtime orchestrator marks unhealthy when startup checks fail."""
     class FailingConnector:
+        """Represent a FailingConnector."""
         name = "failing"
 
         async def connect(self) -> None:
+            """Connect the component to its backing source."""
             raise RuntimeError("connector unavailable")
 
         async def disconnect(self) -> None:
+            """Disconnect the component from its backing source."""
             return None
 
         async def fetch_snapshot(self) -> None:
+            """Fetch a fresh snapshot from the backing source."""
             return None
 
     pipeline = SimpleNamespace(connectors=[FailingConnector()])
@@ -69,6 +76,7 @@ async def test_runtime_orchestrator_marks_unhealthy_when_startup_checks_fail(tmp
 
 @pytest.mark.asyncio
 async def test_runtime_orchestrator_raises_when_watchdog_times_out(tmp_path: Path) -> None:
+    """Test test runtime orchestrator raises when watchdog times out."""
     store = MarketStore(database_path="/tmp/cryptoquantmft-watchdog-test.db")
     pipeline = MarketDataPipeline(store=store, interval_seconds=60)
     pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))

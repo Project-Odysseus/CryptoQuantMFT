@@ -40,6 +40,7 @@ class OrderBookReconstructor:
     """Compute simple depth-based metrics from a basic order book snapshot."""
 
     def __init__(self, depth_levels: int = 5) -> None:
+        """Initialize the object with its runtime state."""
         self.depth_levels = depth_levels
         self._signal_engine = OrderBookSignalEngine(depth_levels=depth_levels)
 

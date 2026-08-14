@@ -29,6 +29,7 @@ class DataNormalizer:
     """Align OHLCV bars from multiple exchanges into a common representation."""
 
     def __init__(self, interval_seconds: int) -> None:
+        """Initialize the object with its runtime state."""
         self.interval_seconds = interval_seconds
 
     def normalize(self, bars: list[OHLCVBar]) -> list[NormalizedBar]:
