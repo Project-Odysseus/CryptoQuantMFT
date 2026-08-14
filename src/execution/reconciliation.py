@@ -37,6 +37,7 @@ class SessionAccountStateTracker:
         self.unsettled_orders: dict[str, dict[str, Any]] = {}
         self.reconciliation_results: list[ReconciliationEntry] = []
         self.last_reconciled_at: datetime | None = None
+        self.account_reconciliation_summary: dict[str, Any] | None = None
 
     def update_from_runtime(
         self,
@@ -63,10 +64,40 @@ class SessionAccountStateTracker:
                     self.positions.pop("BTC", None)
 
         if adapter is not None:
+            remote_snapshot = None
+            if execution_result is not None:
+                portfolio_history = getattr(execution_result, "portfolio_history", None) or []
+                if portfolio_history:
+                    latest_snapshot = portfolio_history[-1]
+                    remote_snapshot = {
+                        "balances": {self.base_currency: float(getattr(latest_snapshot, "cash", 0.0))},
+                        "positions": {"BTC": float(getattr(latest_snapshot, "position_size", 0.0))},
+                    }
+            self.reconcile_account_state(adapter, remote_snapshot=remote_snapshot)
             self._merge_account_snapshot(adapter.get_account_snapshot())
             self.reconcile_orders(adapter)
 
         return self.get_summary()
+
+    def reconcile_account_state(self, adapter: Any, *, remote_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Compare the adapter's local balances/positions to an external snapshot and sync them."""
+        if adapter is None:
+            self.account_reconciliation_summary = {"matched": True, "balance_mismatches": {}, "position_mismatches": {}}
+            return self.account_reconciliation_summary
+
+        balances = None
+        positions = None
+        if remote_snapshot is not None:
+            balances = remote_snapshot.get("balances")
+            positions = remote_snapshot.get("positions")
+
+        summary = getattr(adapter, "reconcile_account_state", None)
+        if callable(summary):
+            self.account_reconciliation_summary = summary(balances=balances, positions=positions)
+        else:
+            self.account_reconciliation_summary = {"matched": True, "balance_mismatches": {}, "position_mismatches": {}}
+
+        return self.account_reconciliation_summary or {}
 
     def reconcile_orders(self, adapter: Any) -> list[ReconciliationEntry]:
         """Compare local order state against the adapter's current remote view."""
@@ -156,6 +187,7 @@ class SessionAccountStateTracker:
             "reconciled_order_count": sum(1 for entry in self.reconciliation_results if entry.matched),
             "reconciliation_mismatches": [entry.order_id for entry in self.reconciliation_results if not entry.matched],
             "last_reconciled_at": self.last_reconciled_at.isoformat() if self.last_reconciled_at else None,
+            "account_reconciliation": self.account_reconciliation_summary,
         }
 
     def _default_currency(self, exchange_name: str | None) -> str:

@@ -6,6 +6,7 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from src.backtest.simple_backtest import moving_average_crossover_strategy
@@ -87,6 +88,7 @@ class RuntimeOrchestrator:
         interval_seconds: float = 1.0,
         watchdog_timeout_seconds: float = 5.0,
         trade_logger: TradeLogger | None = None,
+        kill_switch_state_file: str | Path | None = None,
     ) -> None:
         if mode not in {"paper", "live_dry_run", "live"}:
             raise ValueError("mode must be one of: paper, live_dry_run, live")
@@ -95,7 +97,7 @@ class RuntimeOrchestrator:
         self.interval_seconds = interval_seconds
         self.strategy = strategy or moving_average_crossover_strategy(short_window=3, long_window=6)
         self.circuit_breaker = CircuitBreaker()
-        self.kill_switch_controller = KillSwitchController(trade_logger=trade_logger)
+        self.kill_switch_controller = KillSwitchController(state_file=kill_switch_state_file, trade_logger=trade_logger)
         self.execution_engine = execution_engine or PaperTradingEngine(
             initial_cash=1000.0,
             default_order_size=1.0,
