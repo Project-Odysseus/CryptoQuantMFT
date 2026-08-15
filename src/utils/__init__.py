@@ -4,5 +4,6 @@ from __future__ import annotations
 
 from src.utils.logger import logger
 from src.utils.telemetry import WebSocketReconnectHandler, install_exception_hooks
+from src.utils.telegram import TelegramNotifier
 
-__all__ = ["logger", "WebSocketReconnectHandler", "install_exception_hooks"]
+__all__ = ["logger", "WebSocketReconnectHandler", "install_exception_hooks", "TelegramNotifier"]

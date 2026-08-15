@@ -68,7 +68,7 @@ def test_trade_logger_writes_daily_summary(tmp_path: Path) -> None:
     )
 
     summary = logger.get_daily_summary(
-        date=timestamp,
+        report_date=timestamp,
         runtime_status="healthy",
         research_status="parallel_lane_pending",
         active_alerts=["heartbeat_lost"],

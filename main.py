@@ -539,33 +539,7 @@ def main() -> None:
     logger.info("database_path={}", settings.database_path)
     logger.info("log_level={}", settings.log_level)
 
-    if args.report:
-        print_trade_report(limit=args.report_limit)
-        return
-
-    if args.daily_summary:
-        summary_date = None
-        if args.daily_summary_date:
-            try:
-                summary_date = datetime.strptime(args.daily_summary_date, "%Y-%m-%d")
-            except ValueError as exc:
-                raise SystemExit(f"invalid daily summary date: {args.daily_summary_date}") from exc
-        logger_store = TradeLogger(database_path=settings.database_path)
-        summary = logger_store.get_daily_summary(date=summary_date)
-        print("Daily summary report")
-        print("-" * 22)
-        print(f"Date: {summary['report_date']}")
-        print(f"Trades: {summary['total_trades']}")
-        print(f"Starting equity: {summary['starting_equity']:.4f}")
-        print(f"Ending equity: {summary['ending_equity']:.4f}")
-        print(f"PnL: {summary['total_pnl']:.4f}")
-        print(f"Max drawdown: {summary['max_drawdown']:.4f} ({summary['max_drawdown_pct']:.2%})")
-        print(f"Alerts: {summary['alert_count']}")
-        print(f"Active alerts: {', '.join(summary['active_alerts']) if summary['active_alerts'] else 'none'}")
-        print(f"Runtime status: {summary['runtime_status']}")
-        print(f"Research status: {summary['research_status']}")
-        print(f"Summary: {summary['summary_text']}")
-        return
+    logger_store = TradeLogger(database_path=settings.database_path)
 
     if args.kill_switch:
         controller = KillSwitchController(trade_logger=TradeLogger(database_path=settings.database_path))
@@ -624,10 +598,60 @@ def main() -> None:
         )
         if args.dashboard:
             print_health_dashboard(limit=args.report_limit, runtime_config=runtime_config, orchestrator=orchestrator)
+        if args.report:
+            print_trade_report(limit=args.report_limit)
+        if args.daily_summary:
+            summary_date = None
+            if args.daily_summary_date:
+                try:
+                    summary_date = datetime.strptime(args.daily_summary_date, "%Y-%m-%d")
+                except ValueError as exc:
+                    raise SystemExit(f"invalid daily summary date: {args.daily_summary_date}") from exc
+            summary = logger_store.get_daily_summary(report_date=summary_date)
+            print("Daily summary report")
+            print("-" * 22)
+            print(f"Date: {summary['report_date']}")
+            print(f"Trades: {summary['total_trades']}")
+            print(f"Starting equity: {summary['starting_equity']:.4f}")
+            print(f"Ending equity: {summary['ending_equity']:.4f}")
+            print(f"PnL: {summary['total_pnl']:.4f}")
+            print(f"Max drawdown: {summary['max_drawdown']:.4f} ({summary['max_drawdown_pct']:.2%})")
+            print(f"Alerts: {summary['alert_count']}")
+            print(f"Active alerts: {', '.join(summary['active_alerts']) if summary['active_alerts'] else 'none'}")
+            print(f"Runtime status: {summary['runtime_status']}")
+            print(f"Research status: {summary['research_status']}")
+            print(f"Summary: {summary['summary_text']}")
         return
 
     if args.dashboard:
         print_health_dashboard(limit=args.report_limit, runtime_config=runtime_config)
+        return
+
+    if args.report:
+        print_trade_report(limit=args.report_limit)
+        return
+
+    if args.daily_summary:
+        summary_date = None
+        if args.daily_summary_date:
+            try:
+                summary_date = datetime.strptime(args.daily_summary_date, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"invalid daily summary date: {args.daily_summary_date}") from exc
+        summary = logger_store.get_daily_summary(report_date=summary_date)
+        print("Daily summary report")
+        print("-" * 22)
+        print(f"Date: {summary['report_date']}")
+        print(f"Trades: {summary['total_trades']}")
+        print(f"Starting equity: {summary['starting_equity']:.4f}")
+        print(f"Ending equity: {summary['ending_equity']:.4f}")
+        print(f"PnL: {summary['total_pnl']:.4f}")
+        print(f"Max drawdown: {summary['max_drawdown']:.4f} ({summary['max_drawdown_pct']:.2%})")
+        print(f"Alerts: {summary['alert_count']}")
+        print(f"Active alerts: {', '.join(summary['active_alerts']) if summary['active_alerts'] else 'none'}")
+        print(f"Runtime status: {summary['runtime_status']}")
+        print(f"Research status: {summary['research_status']}")
+        print(f"Summary: {summary['summary_text']}")
         return
 
     if args.demo_backtest:

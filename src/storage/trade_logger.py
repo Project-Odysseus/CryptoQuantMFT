@@ -336,41 +336,18 @@ class TradeLogger:
     def get_daily_summary(
         self,
         *,
-        date: datetime | date | None = None,
+        report_date: datetime | date | None = None,
         runtime_status: str = "unknown",
         research_status: str = "not_configured",
         active_alerts: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """Return the daily summary for the requested day, computing it if needed."""
-        if isinstance(date, datetime):
-            report_date = date.date().isoformat()
-        elif isinstance(date, date):
-            report_date = date.isoformat()
+        if isinstance(report_date, datetime):
+            report_day = report_date.date().isoformat()
+        elif isinstance(report_date, date):
+            report_day = report_date.isoformat()
         else:
-            report_date = datetime.now(timezone.utc).date().isoformat()
-
-        with closing(sqlite3.connect(self.database_path)) as connection:
-            row = connection.execute(
-                "SELECT report_date, created_at, total_trades, starting_equity, ending_equity, total_pnl, max_drawdown, max_drawdown_pct, alert_count, active_alerts, runtime_status, research_status, summary_text FROM daily_summary_reports WHERE report_date = ?",
-                (report_date,),
-            ).fetchone()
-
-        if row is not None:
-            return {
-                "report_date": row[0],
-                "created_at": row[1],
-                "total_trades": int(row[2]),
-                "starting_equity": float(row[3]),
-                "ending_equity": float(row[4]),
-                "total_pnl": float(row[5]),
-                "max_drawdown": float(row[6]),
-                "max_drawdown_pct": float(row[7]),
-                "alert_count": int(row[8]),
-                "active_alerts": json.loads(row[9]) if row[9] else [],
-                "runtime_status": row[10],
-                "research_status": row[11],
-                "summary_text": row[12],
-            }
+            report_day = datetime.now(timezone.utc).date().isoformat()
 
         with closing(sqlite3.connect(self.database_path)) as connection:
             trades = connection.execute(
@@ -388,7 +365,7 @@ class TradeLogger:
             parsed_timestamp = self._parse_timestamp(timestamp)
             if parsed_timestamp is None:
                 continue
-            if parsed_timestamp.date().isoformat() != report_date:
+            if parsed_timestamp.date().isoformat() != report_day:
                 continue
             parsed_trades.append((parsed_timestamp, side, price, size, fee))
 
@@ -402,7 +379,7 @@ class TradeLogger:
         all_snapshots.sort(key=lambda item: item[0])
         parsed_snapshots = []
         for parsed_timestamp, equity in all_snapshots:
-            if parsed_timestamp.date().isoformat() != report_date:
+            if parsed_timestamp.date().isoformat() != report_day:
                 continue
             parsed_snapshots.append((parsed_timestamp, equity))
 
@@ -411,7 +388,7 @@ class TradeLogger:
             parsed_timestamp = self._parse_timestamp(timestamp)
             if parsed_timestamp is None:
                 continue
-            if parsed_timestamp.date().isoformat() != report_date:
+            if parsed_timestamp.date().isoformat() != report_day:
                 continue
             if event_type == "runtime_alert":
                 parsed_alerts.append(event_type)
@@ -436,7 +413,7 @@ class TradeLogger:
 
         total_pnl = ending_equity - starting_equity
         return self.write_daily_summary(
-            timestamp=datetime.fromisoformat(report_date + "T00:00:00+00:00"),
+            timestamp=datetime.fromisoformat(report_day + "T00:00:00+00:00"),
             total_trades=len(parsed_trades),
             starting_equity=starting_equity,
             ending_equity=ending_equity,
@@ -447,7 +424,7 @@ class TradeLogger:
             active_alerts=list(active_alerts or []),
             runtime_status=runtime_status,
             research_status=research_status,
-            summary_text=f"date={report_date} trades={len(parsed_trades)} pnl={total_pnl:.4f} drawdown={max_drawdown:.4f} alerts={len(parsed_alerts)}",
+            summary_text=f"date={report_day} trades={len(parsed_trades)} pnl={total_pnl:.4f} drawdown={max_drawdown:.4f} alerts={len(parsed_alerts)}",
         )
 
     @staticmethod
