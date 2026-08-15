@@ -153,7 +153,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [ ] Write `Dockerfile` and `docker-compose.yml` for unified runtime environment
   - [ ] Deploy to cloud VPS (Hetzner / DigitalOcean) physically close to exchange server regions
   - [ ] Configure `systemd` service or `supervisord` for automatic process management
-  - [ ] Add backup/restore steps for the local database and runtime state
+  - [x] Add backup/restore steps for the local database and runtime state
 - [ ] **Security Hardening**
   - [ ] Restrict API Key permissions on exchanges (Enable Trading, **Strictly Disable Withdrawals**)
   - [ ] Store keys encrypted using system environment variables via `pydantic-settings`
@@ -236,7 +236,9 @@ The recommended path is to run one conservative production-like paper-trading la
   - [ ] Urgency: High
 
 - [ ] **Under Monitoring & Telemetry**
-  - [ ] Add a simple alerting channel for stale quotes, reconciliation mismatches, and risk events
+  - [x] Add a simple alerting channel for stale quotes, reconciliation mismatches, and risk events
+  - [x] Add a Telegram notifier skeleton (configurable `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`, placeholder send hook) for future alert delivery
+  - [x] Add a Telegram trade-summary payload for new trades with strategy, direction, PnL, PnL last hour, long/short, current max drawdown, distance to max drawdown point, and a placeholder diagnostics link
   - [ ] Add a heartbeat check for market-data feed and execution loop health
   - [ ] Add a persisted daily summary report for paper-trading performance and research queue status
   - [ ] Urgency: High
