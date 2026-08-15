@@ -433,6 +433,30 @@ def momentum_breakout_strategy(lookback: int = 5, threshold: float = 0.01) -> St
     return strategy
 
 
+def signal_trend_strategy(lookback: int = 1, threshold: float = 0.001) -> StrategyFn:
+    """Create a simple signal-following strategy that reacts quickly to recent price moves."""
+
+    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
+        """Generate a long/short signal based on the recent price change."""
+        if len(history) < lookback + 1:
+            return 0
+
+        baseline_bar = history[-lookback - 1]
+        current_close = _get_close(current_bar)
+        baseline_close = _get_close(baseline_bar)
+        if baseline_close <= 0:
+            return 0
+
+        return_pct = (current_close - baseline_close) / baseline_close
+        if return_pct > threshold:
+            return 1
+        if return_pct < -threshold:
+            return -1
+        return 0
+
+    return strategy
+
+
 def _normalize_signal(raw_signal: float | int | str | None) -> float:
     if raw_signal is None:
         return 0.0

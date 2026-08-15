@@ -642,7 +642,7 @@ class RuntimeOrchestrator:
         active_alerts = sorted(self._active_alerts)
         runtime_status = "healthy" if health_report["healthy"] and not active_alerts else "degraded"
         self.trade_logger.get_daily_summary(
-            date=datetime.now(timezone.utc),
+            report_date=datetime.now(timezone.utc),
             runtime_status=runtime_status,
             research_status="parallel_lane_pending",
             active_alerts=active_alerts,
