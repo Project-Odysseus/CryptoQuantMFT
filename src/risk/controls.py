@@ -57,6 +57,10 @@ class RiskControlConfig:
     hard_stop_drawdown_pct: float = 0.02
     hard_stop_cooldown_bars: int = 5
     exchange_risk_limits: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # When True, skip execution-quality checks (spread/slippage/volatility) that
+    # are only meaningful for live fills.  Paper trading does not have real
+    # execution risk so these checks just prevent signals from filling.
+    paper_mode: bool = False
 
 
 @dataclass(slots=True)
@@ -152,7 +156,7 @@ class RiskManager:
         if current_position != 0.0:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="position_open")
 
-        if current_bar is not None:
+        if current_bar is not None and not self.config.paper_mode:
             slippage_pct = self._estimate_slippage_pct(current_bar)
             if slippage_pct > self.config.max_slippage_pct:
                 return RiskDecision(allow_entry=False, position_size=0.0, reason="slippage_limit")
@@ -188,7 +192,7 @@ class RiskManager:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="exchange_notional_limit")
 
         volatility_pct = self._estimate_volatility(bars)
-        if volatility_pct > self.config.max_volatility_pct:
+        if not self.config.paper_mode and volatility_pct > self.config.max_volatility_pct:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="volatility_limit")
 
         if volatility_pct <= 0.0:

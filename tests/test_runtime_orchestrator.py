@@ -7,12 +7,23 @@ from types import SimpleNamespace
 
 import pytest
 
+from main import build_runtime_orchestrator
 from src.data.exchanges import MockExchangeConnector
 from src.data.pipeline import MarketDataPipeline
 from src.execution.paper_trading import PortfolioSnapshot
 from src.runtime.config import RuntimeConfig
 from src.runtime.orchestrator import RuntimeCycleResult, RuntimeOrchestrator
 from src.storage.market_store import MarketStore
+
+
+def test_build_runtime_orchestrator_uses_runtime_interval_for_market_data_pipeline(tmp_path: Path) -> None:
+    """The runtime pipeline should use the configured interval for bar aggregation."""
+    runtime_config = RuntimeConfig(interval_seconds=3.0, use_mock_connector=True, state_path=tmp_path / "runtime.state.json")
+
+    orchestrator, pipeline = build_runtime_orchestrator(config=runtime_config, mode="paper")
+
+    assert orchestrator.interval_seconds == 3.0
+    assert pipeline.aggregator.interval_seconds == 3
 
 
 @pytest.mark.asyncio
@@ -150,10 +161,81 @@ def test_runtime_cycle_summary_reports_entry_and_mark_price(tmp_path: Path) -> N
 
     assert "entry_price=100.0000" in summary
     assert "mark_price=110.0000" in summary
+    assert "size=1.000000" in summary
+    assert "notional=110.0000" in summary
     assert "realized_pnl=0.0000" in summary
     assert "unrealized_pnl=10.0000" in summary
     assert "total_pnl=10.0000" in summary
     assert "fees_paid=0.5000" in summary
+
+
+def test_runtime_orchestrator_refreshes_latest_snapshot_prices_from_latest_market_snapshot(tmp_path: Path) -> None:
+    """The latest portfolio snapshot should be revalued from the newest market snapshot instead of stale bar data."""
+    orchestrator = RuntimeOrchestrator(pipeline=SimpleNamespace(connectors=[]), mode="paper", kill_switch_state_file=tmp_path / "kill-switch.json")
+    cycle = RuntimeCycleResult(
+        mode="paper",
+        snapshots=[SimpleNamespace(last=100.0), SimpleNamespace(last=120.0)],
+        bars=[SimpleNamespace(close=110.0)],
+        signals=[1.0],
+        execution_result=SimpleNamespace(
+            entry_decisions=[],
+            portfolio_history=[
+                PortfolioSnapshot(
+                    timestamp=datetime.now(timezone.utc),
+                    cash=900.0,
+                    position_size=1.0,
+                    avg_entry_price=100.0,
+                    equity=1010.0,
+                    unrealized_pnl=10.0,
+                    position_side="long",
+                    mark_price=110.0,
+                    fees_paid=0.5,
+                )
+            ],
+            trades=[],
+            orders=[],
+        ),
+    )
+
+    orchestrator._refresh_latest_snapshot_prices(cycle)
+    snapshot = cycle.execution_result.portfolio_history[-1]
+
+    assert snapshot.mark_price == 120.0
+    assert snapshot.equity == 1020.0
+    assert snapshot.unrealized_pnl == 20.0
+
+
+def test_runtime_cycle_summary_reports_data_source_and_risk_details(tmp_path: Path) -> None:
+    """The health summary should surface the active data source and the latest risk gate metrics."""
+    orchestrator = RuntimeOrchestrator(pipeline=SimpleNamespace(connectors=[SimpleNamespace(name="kraken")]), mode="paper", kill_switch_state_file=tmp_path / "kill-switch.json")
+    cycle = RuntimeCycleResult(
+        mode="paper",
+        bars=[SimpleNamespace(close=110.0)],
+        signals=[1.0],
+        execution_result=SimpleNamespace(
+            entry_decisions=[{"allowed": False, "reason": "volatility_limit", "volatility_pct": 0.0123, "max_volatility_pct": 0.01}],
+            portfolio_history=[
+                PortfolioSnapshot(
+                    timestamp=datetime.now(timezone.utc),
+                    cash=1000.0,
+                    position_size=0.0,
+                    avg_entry_price=None,
+                    equity=1000.0,
+                    unrealized_pnl=0.0,
+                    position_side="flat",
+                    mark_price=110.0,
+                    fees_paid=0.0,
+                )
+            ],
+            trades=[],
+            orders=[],
+        ),
+    )
+
+    summary = orchestrator._build_cycle_summary(cycle)
+
+    assert "data_source: kraken" in summary
+    assert "risk_volatility=0.0123/0.0100" in summary
 
 
 def test_runtime_orchestrator_emits_reconciliation_alert(tmp_path: Path) -> None:

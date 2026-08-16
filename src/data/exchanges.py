@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
@@ -108,18 +109,39 @@ class ExchangeConnector(ABC):
 
 
 class MockExchangeConnector(ExchangeConnector):
-    """Simple in-memory connector used for offline development and tests."""
+    """Simple in-memory connector used for offline development and tests.
+
+    Simulates a realistic random walk around a configurable starting price so
+    the mock feed resembles live market behaviour.  Price can go both up and
+    down, which exercises the full signal/risk/PnL pipeline without needing a
+    real exchange connection.
+    """
+
+    _DEFAULT_START_PRICE: dict[str, float] = {
+        "BTC/EUR": 90_000.0,
+        "BTC/USD": 98_000.0,
+        "BTC/NOK": 1_050_000.0,
+        "ETH/EUR": 3_200.0,
+        "ETH/USD": 3_500.0,
+    }
 
     def __init__(
         self,
         symbol: str = "BTC/NOK",
+        start_price: float | None = None,
+        volatility_per_tick: float = 0.0005,
+        half_spread: float | None = None,
         store: "MarketStore | None" = None,
         aggregator: "StreamingAggregator | None" = None,
     ) -> None:
         """Initialize the object with its runtime state."""
         super().__init__(name="mock", symbol=symbol, store=store, aggregator=aggregator)
-        self._last_price = 100.0
-        self._drift = 0.25
+        if start_price is not None and start_price > 0.0:
+            self._last_price = float(start_price)
+        else:
+            self._last_price = self._DEFAULT_START_PRICE.get(symbol, 90_000.0)
+        self._volatility_per_tick = max(1e-6, float(volatility_per_tick))
+        self._half_spread = half_spread if half_spread is not None else max(1.0, self._last_price * 0.0002)
 
     async def connect(self) -> None:
         """Connect the component to its backing source."""
@@ -135,9 +157,10 @@ class MockExchangeConnector(ExchangeConnector):
             raise RuntimeError("connector is not connected")
 
         now = datetime.now(timezone.utc)
-        self._last_price += self._drift
-        bid = self._last_price - 0.2
-        ask = self._last_price + 0.2
+        pct_change = random.gauss(0.0, self._volatility_per_tick)
+        self._last_price = max(1.0, self._last_price * (1.0 + pct_change))
+        bid = max(0.01, self._last_price - self._half_spread)
+        ask = self._last_price + self._half_spread
         tick = MarketTick(
             exchange=self.name,
             symbol=self.symbol,
@@ -145,7 +168,7 @@ class MockExchangeConnector(ExchangeConnector):
             bid=bid,
             ask=ask,
             last=self._last_price,
-            volume=1.25,
+            volume=random.uniform(0.1, 2.5),
             raw={"source": "mock", "price": self._last_price},
         )
         self._persist_tick(tick)

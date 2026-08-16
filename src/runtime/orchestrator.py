@@ -127,6 +127,8 @@ class RuntimeOrchestrator:
         self.last_cycle: RuntimeCycleResult | None = None
         self.history: list[RuntimeCycleResult] = []
         self._bar_history: list[Any] = []
+        self._latest_live_price: float | None = None
+        self._latest_live_price_source: str = "unknown"
         self.health = RuntimeHealth()
         self.watchdog = RuntimeWatchdog(watchdog_timeout_seconds)
         self.trade_logger = trade_logger
@@ -318,6 +320,13 @@ class RuntimeOrchestrator:
 
         if snapshots:
             self.watchdog.checkin_data()
+            for snap in snapshots:
+                for attr in ("last", "price", "close"):
+                    val = getattr(snap, attr, None)
+                    if isinstance(val, (int, float)) and val > 0:
+                        self._latest_live_price = float(val)
+                        self._latest_live_price_source = getattr(snap, "exchange", None) or getattr(snap, "symbol", "unknown")
+                        break
         if new_bars:
             self.watchdog.checkin_data()
 
@@ -359,6 +368,7 @@ class RuntimeOrchestrator:
             signals=signals,
             execution_result=execution_result,
         )
+        self._refresh_latest_snapshot_prices(cycle)
         previous_trade_count = 0
         if self.last_cycle is not None:
             previous_result = getattr(self.last_cycle, "execution_result", None)
@@ -653,6 +663,58 @@ class RuntimeOrchestrator:
         if alert_key in self._active_alerts:
             self._active_alerts.remove(alert_key)
 
+    def _refresh_latest_snapshot_prices(self, cycle: RuntimeCycleResult) -> None:
+        """Update the latest portfolio snapshot so its mark price, equity, and PnL reflect the newest market quote."""
+        execution_result = getattr(cycle, "execution_result", None)
+        if execution_result is None:
+            return
+
+        portfolio_history = list(getattr(execution_result, "portfolio_history", []) or [])
+        if not portfolio_history:
+            return
+
+        latest_price = self._resolve_latest_market_price(cycle)
+        if latest_price is None:
+            return
+
+        latest_snapshot = portfolio_history[-1]
+        position_size = float(getattr(latest_snapshot, "position_size", 0.0))
+        avg_entry_price = getattr(latest_snapshot, "avg_entry_price", None)
+        cash = float(getattr(latest_snapshot, "cash", 0.0))
+        latest_snapshot.mark_price = latest_price
+        latest_snapshot.equity = cash + (position_size * latest_price if position_size else 0.0)
+        if position_size > 0.0:
+            latest_snapshot.position_side = "long"
+        elif position_size < 0.0:
+            latest_snapshot.position_side = "short"
+        else:
+            latest_snapshot.position_side = "flat"
+        latest_snapshot.unrealized_pnl = (position_size * latest_price) - (position_size * (float(avg_entry_price) if avg_entry_price is not None else 0.0))
+        latest_snapshot.realized_pnl = float(getattr(latest_snapshot, "realized_pnl", 0.0))
+
+    def _resolve_latest_market_price(self, cycle: RuntimeCycleResult) -> float | None:
+        """Return the newest available market price from snapshots or bars."""
+        for snapshot in reversed(list(getattr(cycle, "snapshots", []) or [])):
+            for attr in ("last", "price", "close", "mark_price"):
+                value = getattr(snapshot, attr, None)
+                if isinstance(value, (int, float)):
+                    return float(value)
+            bid = getattr(snapshot, "bid", None)
+            ask = getattr(snapshot, "ask", None)
+            if isinstance(bid, (int, float)) and isinstance(ask, (int, float)):
+                return (float(bid) + float(ask)) / 2.0
+
+        for bar in reversed(list(getattr(cycle, "bars", []) or [])):
+            for attr in ("close", "last"):
+                try:
+                    value = getattr(bar, attr, None)
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if isinstance(value, (int, float)):
+                    return float(value)
+
+        return None
+
     def _emit_cycle_health_snapshot(self, cycle: RuntimeCycleResult) -> None:
         """Emit a compact health snapshot after each runtime cycle."""
         summary = self._build_cycle_summary(cycle)
@@ -777,6 +839,32 @@ class RuntimeOrchestrator:
         ]
         return "\n".join(lines)
 
+    def _resolve_data_source(self, cycle: RuntimeCycleResult) -> str:
+        """Infer the most relevant price/data source for the current cycle."""
+        execution_result = getattr(cycle, "execution_result", None)
+        portfolio_history = getattr(execution_result, "portfolio_history", None) or []
+        latest_snapshot = portfolio_history[-1] if portfolio_history else None
+        snapshot_payload = getattr(latest_snapshot, "metadata", None) or {}
+        if isinstance(snapshot_payload, dict):
+            source = snapshot_payload.get("source") or snapshot_payload.get("data_source")
+            if source:
+                return str(source)
+
+        for bar in reversed(list(getattr(cycle, "bars", []) or [])):
+            if hasattr(bar, "metadata") and getattr(bar.metadata, "source", None):
+                return str(bar.metadata.source)
+            if isinstance(bar, dict):
+                source = bar.get("source") or bar.get("data_source")
+                if source:
+                    return str(source)
+
+        connectors = getattr(self.pipeline, "connectors", []) or []
+        if connectors:
+            first_connector = connectors[0]
+            name = getattr(first_connector, "name", None) or getattr(first_connector, "__class__", type(first_connector)).__name__
+            return str(name)
+        return "unknown"
+
     def _build_cycle_summary(self, cycle: RuntimeCycleResult) -> str:
         """Build a compact health summary for the latest runtime cycle."""
         health_report = self.get_health_report()
@@ -789,6 +877,7 @@ class RuntimeOrchestrator:
         unrealized_pnl = float(getattr(latest_snapshot, "unrealized_pnl", 0.0)) if latest_snapshot is not None else 0.0
         realized_pnl = float(getattr(latest_snapshot, "realized_pnl", 0.0)) if latest_snapshot is not None else 0.0
         position_side = getattr(latest_snapshot, "position_side", "flat") if latest_snapshot is not None else "flat"
+        position_size = float(getattr(latest_snapshot, "position_size", 0.0)) if latest_snapshot is not None else 0.0
         entry_price = getattr(latest_snapshot, "avg_entry_price", None)
         mark_price = getattr(latest_snapshot, "mark_price", None)
         fees_paid = float(getattr(latest_snapshot, "fees_paid", 0.0)) if latest_snapshot is not None else 0.0
@@ -801,9 +890,18 @@ class RuntimeOrchestrator:
         orders = list(getattr(execution_result, "orders", []) or [])
         entry_decisions = getattr(execution_result, "entry_decisions", None) or []
         decision_summary = self._summarize_entry_decisions(entry_decisions)
+        latest_decision = entry_decisions[-1] if entry_decisions else None
+        data_source = self._resolve_data_source(cycle)
+        risk_detail_text = ""
+        if latest_decision is not None:
+            volatility = latest_decision.get("volatility_pct")
+            max_volatility = latest_decision.get("max_volatility_pct")
+            if volatility is not None and max_volatility is not None:
+                risk_detail_text = f" risk_volatility={float(volatility):.4f}/{float(max_volatility):.4f}"
 
         entry_price_text = "n/a" if entry_price is None else f"{float(entry_price):.4f}"
         mark_price_text = "n/a" if mark_price is None else f"{float(mark_price):.4f}"
+        live_price_text = "n/a" if self._latest_live_price is None else f"{self._latest_live_price:.4f}"
         lines = [
             "=== Runtime health snapshot ===",
             f"cycle: {self.health.cycles_completed}",
@@ -812,11 +910,13 @@ class RuntimeOrchestrator:
             f"strategy: {self.strategy_name}",
             f"signals: {len(cycle.signals)} bars: {len(cycle.bars)} trades: {len(trades)} orders: {len(orders)}",
             f"equity: {final_equity:.4f} cash: {account_state.get('balances', {}).get('USD', 0.0):.4f}",
-            f"position: side={position_side} entry_price={entry_price_text} mark_price={mark_price_text} realized_pnl={realized_pnl:.4f} unrealized_pnl={unrealized_pnl:.4f} total_pnl={realized_pnl + unrealized_pnl:.4f} fees_paid={fees_paid:.4f}",
+            f"live_price: {live_price_text} (source={self._latest_live_price_source})",
+            f"position: side={position_side} size={position_size:.6f} entry_price={entry_price_text} mark_price={mark_price_text} notional={position_size * float(mark_price if mark_price is not None else 0.0):.4f} realized_pnl={realized_pnl:.4f} unrealized_pnl={unrealized_pnl:.4f} total_pnl={realized_pnl + unrealized_pnl:.4f} fees_paid={fees_paid:.4f}",
             f"reconciliation: {account_state.get('reconciliation_status', 'unknown')}",
             f"circuit_breaker: active={health_report['circuit_breaker']['active']} reason={health_report['circuit_breaker']['reason'] or 'none'}",
             f"kill_switch: active={health_report['kill_switch']['active']} reason={health_report['kill_switch']['reason'] or 'none'}",
-            f"entry_decisions: total={decision_summary['total']} allowed={decision_summary['allowed']} blocked={decision_summary['blocked']} reasons={decision_summary['reasons']}",
+            f"data_source: {data_source}",
+            f"entry_decisions: total={decision_summary['total']} allowed={decision_summary['allowed']} blocked={decision_summary['blocked']} reasons={decision_summary['reasons']}{risk_detail_text}",
             f"no_trade_reason: {no_trade_summary.get('reason', 'none')}",
         ]
         return "\n".join(lines)

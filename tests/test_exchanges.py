@@ -26,15 +26,22 @@ async def test_mock_exchange_connector_fetch_snapshot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mock_exchange_connector_trends_upward() -> None:
-    """The mock connector should produce a small deterministic trend for strategy tests."""
+async def test_mock_exchange_connector_produces_realistic_price_random_walk() -> None:
+    """The mock connector should produce a realistic BTC/NOK starting price and fluctuate."""
     connector = MockExchangeConnector(symbol="BTC/NOK")
 
     await connector.connect()
-    first = await connector.fetch_snapshot()
-    second = await connector.fetch_snapshot()
+    snapshots = [await connector.fetch_snapshot() for _ in range(20)]
 
-    assert first.last < second.last
+    prices = [s.last for s in snapshots]
+    # Starting price should be realistic (~1,000,000 NOK range for BTC)
+    assert prices[0] > 100_000, f"expected realistic BTC/NOK price, got {prices[0]}"
+    # Price should have moved both up and down (random walk, not monotone drift)
+    # With 20 ticks the probability of ALL going same direction is ~2 * (0.5^20) ≈ 0.000002
+    # So this is effectively deterministic unless the RNG is degenerate
+    diffs = [prices[i + 1] - prices[i] for i in range(len(prices) - 1)]
+    assert any(d > 0 for d in diffs), "expected at least one upward tick"
+    assert any(d < 0 for d in diffs), "expected at least one downward tick"
 
     await connector.disconnect()
 

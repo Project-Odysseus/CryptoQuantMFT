@@ -236,6 +236,51 @@ def test_paper_trading_engine_records_blocked_entry_decisions() -> None:
     assert result.entry_decisions[0]["reason"] == "spread_limit"
 
 
+def test_paper_trading_engine_sizes_buy_orders_to_available_cash() -> None:
+    """Buy orders should be reduced to a fraction that fits the current cash balance."""
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=50000.0,
+            high=50000.0,
+            low=50000.0,
+            close=50000.0,
+            volume=10.0,
+        )
+    ]
+
+    result = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=5).run(bars, [1.0])
+
+    assert len(result.orders) == 1
+    assert result.orders[0].size == 0.02
+
+
+def test_paper_trading_engine_sizes_buy_orders_to_risk_budget() -> None:
+    """Buy orders should respect a portfolio risk budget based on current equity."""
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=50000.0,
+            high=50000.0,
+            low=50000.0,
+            close=50000.0,
+            volume=10.0,
+        )
+    ]
+
+    risk_manager = RiskManager(RiskControlConfig(risk_per_trade_pct=0.10))
+    result = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=5, risk_manager=risk_manager).run(bars, [1.0])
+
+    assert len(result.orders) == 1
+    assert result.orders[0].size == 0.002
+
+
 def test_paper_trading_engine_logs_blocked_entry_reasons() -> None:
     """Trade logging should capture entry decisions with the underlying blocking reason."""
     class BlockingRiskManager:

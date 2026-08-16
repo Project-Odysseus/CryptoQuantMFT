@@ -27,7 +27,7 @@ from src.utils.logger import logger
 async def run_pipeline(iterations: int = 3, interval_seconds: float = 1.0) -> None:
     """Run the data pipeline for a small number of cycles using the available connectors."""
     store = MarketStore(database_path=settings.database_path)
-    pipeline = MarketDataPipeline(store=store, interval_seconds=60)
+    pipeline = MarketDataPipeline(store=store, interval_seconds=max(1, int(round(interval_seconds))))
 
     pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
 
@@ -65,25 +65,40 @@ def build_runtime_orchestrator(
         exchange=exchange,
     )
 
+    market_data_interval_seconds = max(1, int(round(runtime_config.interval_seconds)))
     store = MarketStore(database_path=settings.database_path)
-    pipeline = MarketDataPipeline(store=store, interval_seconds=60)
+    pipeline = MarketDataPipeline(store=store, interval_seconds=market_data_interval_seconds)
 
     if runtime_config.use_mock_connector:
         pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))
     else:
-        pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
-        if settings.firi_api_key:
+        exchange_name = (runtime_config.exchange or "auto").lower()
+        if exchange_name in {"auto", "kraken"}:
+            pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
+        if exchange_name in {"auto", "firi"} and settings.firi_api_key:
             pipeline.add_connector(FiriConnector(symbol="BTC/NOK"))
+
+    logger.info(
+        "runtime_market_data_config interval_seconds={} connector={} use_mock={}",
+        market_data_interval_seconds,
+        runtime_config.exchange or "auto",
+        runtime_config.use_mock_connector,
+    )
 
     risk_manager = RiskManager(
         RiskControlConfig(
             max_drawdown_pct=0.25,
-            max_volatility_pct=0.10,
-            risk_per_trade_pct=0.02,
+            max_volatility_pct=0.50,
+            risk_per_trade_pct=0.10,
             max_position_size=1.0,
             volatility_window=10,
             kelly_fraction=0.5,
             kelly_window=20,
+            max_slippage_pct=0.20,
+            max_spread_pct=0.20,
+            max_notional_per_trade=10000.0,
+            max_total_notional=25000.0,
+            paper_mode=(runtime_config.mode == "paper"),
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
@@ -364,7 +379,7 @@ def run_paper_trading(
         RiskControlConfig(
             max_drawdown_pct=0.25,
             max_volatility_pct=0.10,
-            risk_per_trade_pct=0.02,
+            risk_per_trade_pct=0.10,
             max_position_size=1.0,
             volatility_window=10,
             kelly_fraction=0.5,
