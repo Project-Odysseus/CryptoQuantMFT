@@ -270,7 +270,11 @@ class RiskManager:
         positive_returns = [value for value in returns if value > 0.0]
         negative_returns = [abs(value) for value in returns if value < 0.0]
         if not positive_returns or not negative_returns:
-            return 1.0 if positive_returns else 0.0
+            # No losses at all → no basis for Kelly to shrink sizing.
+            # No wins at all → Kelly would say 0, but that blocks every entry.
+            # Use a conservative fallback (kelly_fraction/2) so the caller
+            # can still place a trade and gain real trade data.
+            return self.config.kelly_fraction * 0.5 if positive_returns else self.config.kelly_fraction * 0.25
 
         win_rate = len(positive_returns) / len(returns)
         avg_win = float(np.mean(positive_returns))

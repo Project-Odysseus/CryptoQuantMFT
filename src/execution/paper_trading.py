@@ -320,9 +320,16 @@ class PaperTradingEngine:
                         cash=cash,
                         position_size=position_size,
                         equity=current_equity,
+                        risk_details=self._build_risk_details(bars=list(bars[: index + 1]), price=price, equity=current_equity, risk_decision=risk_decision),
                     )
                     if risk_decision.allow_entry:
-                        order_size = max(0.0, min(self.default_order_size, risk_decision.position_size))
+                        order_size = self._resolve_order_size(
+                            price=price,
+                            cash=cash,
+                            equity=current_equity,
+                            requested_size=self.default_order_size,
+                            risk_position_size=risk_decision.position_size,
+                        )
                         if order_size > 0.0:
                             order = self._create_order(timestamp=timestamp, side="buy", size=order_size)
                             active_orders.append(order)
@@ -367,9 +374,16 @@ class PaperTradingEngine:
                         cash=cash,
                         position_size=position_size,
                         equity=current_equity,
+                        risk_details=self._build_risk_details(bars=list(bars[: index + 1]), price=price, equity=current_equity, risk_decision=risk_decision),
                     )
                     if risk_decision.allow_entry:
-                        order_size = max(0.0, min(self.default_order_size, risk_decision.position_size))
+                        order_size = self._resolve_order_size(
+                            price=price,
+                            cash=cash,
+                            equity=current_equity,
+                            requested_size=self.default_order_size,
+                            risk_position_size=risk_decision.position_size,
+                        )
                         if order_size > 0.0:
                             order = self._create_order(timestamp=timestamp, side="sell", size=order_size)
                             active_orders.append(order)
@@ -441,19 +455,21 @@ class PaperTradingEngine:
         cash: float | None = None,
         position_size: float | None = None,
         equity: float | None = None,
+        risk_details: dict[str, Any] | None = None,
     ) -> None:
         """Record whether the current bar generated a valid entry decision."""
-        decisions.append(
-            {
-                "signal": signal,
-                "side": side,
-                "allowed": allowed,
-                "reason": reason,
-                "price": price,
-                "timestamp": timestamp,
-                "order_size": order_size,
-            }
-        )
+        decision = {
+            "signal": signal,
+            "side": side,
+            "allowed": allowed,
+            "reason": reason,
+            "price": price,
+            "timestamp": timestamp,
+            "order_size": order_size,
+        }
+        if risk_details:
+            decision.update(risk_details)
+        decisions.append(decision)
         if self.trade_logger is None:
             return
         self.trade_logger.log_event(
@@ -472,8 +488,47 @@ class PaperTradingEngine:
                 "cash": cash,
                 "position_size": position_size,
                 "equity": equity,
+                **(risk_details or {}),
             },
         )
+
+    def _build_risk_details(
+        self,
+        *,
+        bars: list[Any],
+        price: float,
+        equity: float,
+        risk_decision: Any,
+    ) -> dict[str, Any]:
+        details = {
+            "price": price,
+            "equity": equity,
+        }
+        risk_manager = getattr(self, "risk_manager", None)
+        if risk_manager is None:
+            return details
+
+        volatility_pct = None
+        max_volatility_pct = None
+        if hasattr(risk_manager, "estimate_volatility"):
+            try:
+                volatility_pct = risk_manager.estimate_volatility(bars)
+            except TypeError:
+                volatility_pct = None
+        if hasattr(risk_manager, "max_volatility_pct"):
+            max_volatility_pct = risk_manager.max_volatility_pct
+        elif hasattr(risk_manager, "config") and hasattr(risk_manager.config, "max_volatility_pct"):
+            max_volatility_pct = risk_manager.config.max_volatility_pct
+
+        if volatility_pct is not None:
+            details["volatility_pct"] = volatility_pct
+        if max_volatility_pct is not None:
+            details["max_volatility_pct"] = max_volatility_pct
+        if hasattr(risk_decision, "position_size"):
+            details["risk_position_size"] = risk_decision.position_size
+        if hasattr(risk_decision, "reason"):
+            details["risk_reason"] = risk_decision.reason
+        return details
 
     def _log_order_event(self, *, order: PaperOrder, timestamp: datetime, event_type: str, message: str, reason: str | None = None, **metadata: Any) -> None:
         if self.trade_logger is None:
@@ -636,6 +691,23 @@ class PaperTradingEngine:
             exchange_open_positions=exchange_open_positions,
             open_orders_count=open_orders_count,
         )
+
+    def _resolve_order_size(self, *, price: float, cash: float, equity: float, requested_size: float, risk_position_size: float) -> float:
+        if price <= 0.0:
+            return 0.0
+        max_affordable_size = cash / price
+        if max_affordable_size <= 0.0:
+            return 0.0
+
+        max_risk_fraction = 0.0
+        if self.risk_manager is not None and getattr(self.risk_manager, "config", None) is not None:
+            max_risk_fraction = float(getattr(self.risk_manager.config, "risk_per_trade_pct", 0.0))
+
+        max_risk_size = float("inf")
+        if max_risk_fraction > 0.0:
+            max_risk_size = (equity * max_risk_fraction) / price
+
+        return max(0.0, min(requested_size, risk_position_size, max_affordable_size, max_risk_size))
 
     def _apply_cost(self, price: float, *, side: str, size: float) -> float:
         if self.cost_model is None:
