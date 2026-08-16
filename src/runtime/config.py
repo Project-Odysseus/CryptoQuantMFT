@@ -19,11 +19,13 @@ class RuntimeConfig:
     iterations: int = 3
     interval_seconds: float = 1.0
     use_mock_connector: bool = False
-    watchdog_timeout_seconds: float = 5.0
+    watchdog_timeout_seconds: float = 30.0
     watchdog_restarts: int = 0
     exchange: str | None = None
     kill_switch: bool = False
     kill_switch_reason: str = "manual"
+    live_plot: bool = False
+    live_plot_path: str | Path | None = None
     config_path: str | Path | None = None
     state_path: str | Path | None = None
 
@@ -46,6 +48,8 @@ class RuntimeConfig:
             "exchange": self.exchange,
             "kill_switch": self.kill_switch,
             "kill_switch_reason": self.kill_switch_reason,
+            "live_plot": self.live_plot,
+            "live_plot_path": str(self.live_plot_path) if self.live_plot_path is not None else None,
             "config_path": str(self.config_path) if self.config_path is not None else None,
             "state_path": str(self.state_path) if self.state_path is not None else None,
         }
@@ -60,11 +64,13 @@ class RuntimeConfig:
             iterations=int(payload.get("iterations", 3)),
             interval_seconds=float(payload.get("interval_seconds", 1.0)),
             use_mock_connector=bool(payload.get("use_mock_connector", False)),
-            watchdog_timeout_seconds=float(payload.get("watchdog_timeout_seconds", 5.0)),
+            watchdog_timeout_seconds=float(payload.get("watchdog_timeout_seconds", 30.0)),
             watchdog_restarts=int(payload.get("watchdog_restarts", 0)),
             exchange=payload.get("exchange"),
             kill_switch=bool(payload.get("kill_switch", False)),
             kill_switch_reason=str(payload.get("kill_switch_reason", "manual")),
+            live_plot=bool(payload.get("live_plot", False)),
+            live_plot_path=payload.get("live_plot_path"),
             config_path=payload.get("config_path"),
             state_path=payload.get("state_path"),
         )
@@ -97,6 +103,11 @@ def build_runtime_config_from_args(args: argparse.Namespace) -> RuntimeConfig:
     state_path = getattr(args, "runtime_state_path", None)
     if state_path is None and config_path is not None:
         state_path = str(Path(config_path).with_suffix(".state.json"))
+    live_plot = bool(getattr(args, "live_plot", False))
+    live_plot_path = getattr(args, "live_plot_path", None)
+    if live_plot and not live_plot_path:
+        live_plot_path = "plots/runtime_live_plot.png"
+
     runtime_config = RuntimeConfig(
         mode=args.runtime or "paper",
         strategy_name=args.strategy,
@@ -107,8 +118,10 @@ def build_runtime_config_from_args(args: argparse.Namespace) -> RuntimeConfig:
         watchdog_timeout_seconds=args.watchdog_timeout,
         watchdog_restarts=args.watchdog_restarts,
         exchange=None if args.execution_exchange == "auto" else args.execution_exchange,
-        kill_switch=args.kill_switch,
-        kill_switch_reason=args.kill_switch_reason,
+        kill_switch=bool(getattr(args, "kill_switch", False)),
+        kill_switch_reason=getattr(args, "kill_switch_reason", "manual"),
+        live_plot=live_plot,
+        live_plot_path=live_plot_path,
         config_path=config_path,
         state_path=state_path,
     )

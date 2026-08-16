@@ -165,3 +165,43 @@ def test_paper_trading_engine_records_blocked_entry_decisions() -> None:
     assert len(result.entry_decisions) == 1
     assert result.entry_decisions[0]["allowed"] is False
     assert result.entry_decisions[0]["reason"] == "spread_limit"
+
+
+def test_paper_trading_engine_logs_blocked_entry_reasons() -> None:
+    """Trade logging should capture entry decisions with the underlying blocking reason."""
+    class BlockingRiskManager:
+        def evaluate(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(allow_entry=False, position_size=0.0, reason="spread_limit")
+
+    class FakeTradeLogger:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        def log_event(self, **kwargs: object) -> int:
+            self.events.append(kwargs)
+            return 1
+
+        def log_trade(self, **_: object) -> int:
+            return 1
+
+        def log_equity_snapshot(self, **_: object) -> int:
+            return 1
+
+    logger = FakeTradeLogger()
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        )
+    ]
+
+    PaperTradingEngine(risk_manager=BlockingRiskManager(), trade_logger=logger).run(bars, [1.0])
+
+    assert any(event["event_type"] == "entry_decision" and event["metadata"]["reason"] == "spread_limit" for event in logger.events)

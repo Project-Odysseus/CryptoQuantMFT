@@ -9,6 +9,7 @@ import pytest
 
 from src.data.exchanges import MockExchangeConnector
 from src.data.pipeline import MarketDataPipeline
+from src.execution.paper_trading import PortfolioSnapshot
 from src.runtime.config import RuntimeConfig
 from src.runtime.orchestrator import RuntimeCycleResult, RuntimeOrchestrator
 from src.storage.market_store import MarketStore
@@ -116,6 +117,43 @@ def test_runtime_orchestrator_emits_stale_data_alert(tmp_path: Path) -> None:
     )
 
     assert "stale_data" in orchestrator._active_alerts
+
+
+def test_runtime_cycle_summary_reports_entry_and_mark_price(tmp_path: Path) -> None:
+    """The runtime health summary should include entry and current prices for the open position."""
+    orchestrator = RuntimeOrchestrator(pipeline=SimpleNamespace(connectors=[]), mode="paper", kill_switch_state_file=tmp_path / "kill-switch.json")
+    cycle = RuntimeCycleResult(
+        mode="paper",
+        bars=[SimpleNamespace(close=110.0)],
+        signals=[1.0],
+        execution_result=SimpleNamespace(
+            entry_decisions=[],
+            portfolio_history=[
+                PortfolioSnapshot(
+                    timestamp=datetime.now(timezone.utc),
+                    cash=900.0,
+                    position_size=1.0,
+                    avg_entry_price=100.0,
+                    equity=1010.0,
+                    unrealized_pnl=10.0,
+                    position_side="long",
+                    mark_price=110.0,
+                    fees_paid=0.5,
+                )
+            ],
+            trades=[],
+            orders=[],
+        ),
+    )
+
+    summary = orchestrator._build_cycle_summary(cycle)
+
+    assert "entry_price=100.0000" in summary
+    assert "mark_price=110.0000" in summary
+    assert "realized_pnl=0.0000" in summary
+    assert "unrealized_pnl=10.0000" in summary
+    assert "total_pnl=10.0000" in summary
+    assert "fees_paid=0.5000" in summary
 
 
 def test_runtime_orchestrator_emits_reconciliation_alert(tmp_path: Path) -> None:

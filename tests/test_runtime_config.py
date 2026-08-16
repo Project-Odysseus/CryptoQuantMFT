@@ -45,3 +45,10 @@ def test_runtime_config_round_trips_to_disk(tmp_path: Path) -> None:
     assert reloaded.strategy_name == "momentum_breakout"
     assert reloaded.strategy_params == {"lookback": 3}
     assert reloaded.state_path == str(tmp_path / "runtime.state.json")
+
+
+def test_runtime_config_default_watchdog_timeout_is_more_forgiving() -> None:
+    """The runtime should use a more forgiving default watchdog window."""
+    runtime_config = RuntimeConfig()
+
+    assert runtime_config.watchdog_timeout_seconds == 30.0

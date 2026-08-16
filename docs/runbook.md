@@ -22,6 +22,8 @@ python main.py \
   --runtime-interval 1.0 \
   --runtime-config-path data/runtime_config.json \
   --runtime-state-path data/runtime_state.json \
+  --live-plot \
+  --live-plot-path plots/runtime_live_plot.png \
   --dashboard \
   --report \
   --daily-summary
@@ -29,6 +31,8 @@ python main.py \
 
 4. For a deterministic smoke test before a real paper run, add `--use-mock-connector`.
 5. Confirm the startup banner, the health snapshot, and the first operational events before leaving the runtime unattended.
+6. The health snapshot now reports entry-decision reasons, current position-side PnL, and the latest trade/alert context so you can audit blocked fills without digging through raw logs.
+7. The live plot is written to `plots/runtime_live_plot.png` and updates each runtime cycle while the process is running.
 
 ## Daily operational checks
 

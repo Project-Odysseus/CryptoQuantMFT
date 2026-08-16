@@ -61,7 +61,7 @@ def build_runtime_orchestrator(
         mode=mode or "paper",
         interval_seconds=interval_seconds or 1.0,
         use_mock_connector=use_mock_connector or False,
-        watchdog_timeout_seconds=watchdog_timeout_seconds or 5.0,
+        watchdog_timeout_seconds=watchdog_timeout_seconds or 30.0,
         exchange=exchange,
     )
 
@@ -110,6 +110,8 @@ def build_runtime_orchestrator(
         strategy_params=runtime_config.strategy_params,
         runtime_config=runtime_config,
         checkpoint_path=runtime_config.state_path,
+        live_plot=runtime_config.live_plot,
+        live_plot_path=runtime_config.live_plot_path,
     )
     return orchestrator, pipeline
 
@@ -121,7 +123,7 @@ async def run_runtime_orchestrator(
     iterations: int = 3,
     interval_seconds: float = 1.0,
     use_mock_connector: bool = False,
-    watchdog_timeout_seconds: float = 5.0,
+    watchdog_timeout_seconds: float = 30.0,
     watchdog_restarts: int = 0,
     exchange: str | None = None,
     resume_runtime: bool = False,
@@ -525,10 +527,12 @@ def main() -> None:
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi"], default="auto", help="Exchange routing target for the runtime execution adapter")
     parser.add_argument("--use-mock-connector", action="store_true", help="Use the mock exchange connector for the runtime loop")
-    parser.add_argument("--watchdog-timeout", type=float, default=5.0, help="Seconds without a completed cycle or fresh data before the watchdog triggers")
+    parser.add_argument("--watchdog-timeout", type=float, default=30.0, help="Seconds without a completed cycle or fresh data before the watchdog triggers")
     parser.add_argument("--watchdog-restarts", type=int, default=0, help="Number of times to restart the runtime after a watchdog timeout")
     parser.add_argument("--runtime-config-path", default=None, help="Optional JSON file path used to persist and reload the runtime config")
     parser.add_argument("--runtime-state-path", default=None, help="Optional JSON file path used to persist and reload the runtime checkpoint")
+    parser.add_argument("--live-plot", action="store_true", help="Write a continuously updating equity/trade plot to disk during the runtime")
+    parser.add_argument("--live-plot-path", default=None, help="Optional file path for the runtime live plot image")
     parser.add_argument("--resume-runtime", action="store_true", help="Load the runtime state from a checkpoint file before starting")
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")

@@ -27,6 +27,7 @@ class PaperOrder:
     age_bars: int = 0
     created_at: datetime | None = None
     last_updated_at: datetime | None = None
+    last_reason: str | None = None
 
     def __post_init__(self) -> None:
         self.created_at = self.timestamp
@@ -60,6 +61,11 @@ class PortfolioSnapshot:
     position_size: float
     avg_entry_price: float | None
     equity: float
+    unrealized_pnl: float = 0.0
+    realized_pnl: float = 0.0
+    position_side: str = "flat"
+    mark_price: float | None = None
+    fees_paid: float = 0.0
 
 
 @dataclass(slots=True)
@@ -125,6 +131,8 @@ class PaperTradingEngine:
         position_size = 0.0
         avg_entry_price: float | None = None
         peak_equity = self.initial_cash
+        fees_paid = 0.0
+        realized_pnl = 0.0
         orders: list[PaperOrder] = []
         trades: list[PaperTrade] = []
         equity_curve: list[float] = []
@@ -136,11 +144,12 @@ class PaperTradingEngine:
             signal = _normalize_signal(signals[index])
             price = _get_close(bar)
             timestamp = _get_timestamp(bar)
+            current_equity = cash + (position_size * price if position_size else 0.0)
 
             if not active_orders and signal > 0 and position_size <= 0.0:
                 risk_decision = self._evaluate_risk(
                     bars=list(bars[: index + 1]),
-                    equity=cash + (position_size * price if position_size else 0.0),
+                    equity=current_equity,
                     peak_equity=peak_equity,
                     current_position=position_size,
                     current_bar=bar,
@@ -163,6 +172,9 @@ class PaperTradingEngine:
                     price=price,
                     timestamp=timestamp,
                     order_size=risk_decision.position_size,
+                    cash=cash,
+                    position_size=position_size,
+                    equity=current_equity,
                 )
                 if not risk_decision.allow_entry:
                     pass
@@ -186,7 +198,7 @@ class PaperTradingEngine:
             elif not active_orders and signal < 0 and position_size >= 0.0:
                 risk_decision = self._evaluate_risk(
                     bars=list(bars[: index + 1]),
-                    equity=cash + (position_size * price if position_size else 0.0),
+                    equity=current_equity,
                     peak_equity=peak_equity,
                     current_position=position_size,
                     current_bar=bar,
@@ -209,6 +221,9 @@ class PaperTradingEngine:
                     price=price,
                     timestamp=timestamp,
                     order_size=risk_decision.position_size,
+                    cash=cash,
+                    position_size=position_size,
+                    equity=current_equity,
                 )
                 if not risk_decision.allow_entry:
                     pass
@@ -240,8 +255,16 @@ class PaperTradingEngine:
                     order.age_bars += 1
                     if order.age_bars >= self.max_order_lifetime_bars:
                         order.status = "CANCELED"
+                        order.last_reason = "max_order_lifetime_bars"
                         order.last_updated_at = timestamp
                         active_orders.remove(order)
+                        self._log_order_event(
+                            order=order,
+                            timestamp=timestamp,
+                            event_type="order_lifecycle",
+                            message="order canceled because it exceeded its lifetime",
+                            reason=order.last_reason,
+                        )
                         continue
 
                     fill_size = min(order.remaining_size, self.default_order_size * self.partial_fill_fraction)
@@ -251,6 +274,7 @@ class PaperTradingEngine:
                     gross_price = price
                     execution_price = self._apply_cost(price, side=order.side, size=fill_size)
                     cost = abs(execution_price - gross_price) * fill_size
+                    fees_paid += cost
                     if order.side == "buy" and cash >= execution_price * fill_size:
                         cash -= execution_price * fill_size
                         position_size += fill_size
@@ -261,6 +285,7 @@ class PaperTradingEngine:
                             fill_price=execution_price,
                         )
                     elif order.side == "sell" and position_size >= fill_size:
+                        realized_pnl += (execution_price - (avg_entry_price or execution_price)) * fill_size
                         cash += execution_price * fill_size
                         position_size -= fill_size
                         if position_size <= 0.0:
@@ -269,8 +294,16 @@ class PaperTradingEngine:
                             avg_entry_price = avg_entry_price
                     else:
                         order.status = "CANCELED"
+                        order.last_reason = "insufficient_cash_or_position"
                         order.last_updated_at = timestamp
                         active_orders.remove(order)
+                        self._log_order_event(
+                            order=order,
+                            timestamp=timestamp,
+                            event_type="order_lifecycle",
+                            message="order canceled because cash or inventory was insufficient for the fill",
+                            reason=order.last_reason,
+                        )
                         continue
 
                     order.filled_size += fill_size
@@ -280,8 +313,26 @@ class PaperTradingEngine:
                     if order.remaining_size <= 0.0:
                         order.status = "FILLED"
                         active_orders.remove(order)
+                        self._log_order_event(
+                            order=order,
+                            timestamp=timestamp,
+                            event_type="order_lifecycle",
+                            message="order filled",
+                            reason=None,
+                            fill_price=execution_price,
+                            fill_size=fill_size,
+                        )
                     else:
                         order.status = "PARTIALLY_FILLED"
+                        self._log_order_event(
+                            order=order,
+                            timestamp=timestamp,
+                            event_type="order_lifecycle",
+                            message="order partially filled",
+                            reason=None,
+                            fill_price=execution_price,
+                            fill_size=fill_size,
+                        )
 
                     trades.append(
                         PaperTrade(
@@ -310,6 +361,14 @@ class PaperTradingEngine:
 
             equity = cash + (position_size * price if position_size else 0.0)
             peak_equity = max(peak_equity, equity)
+            position_side = "flat"
+            unrealized_pnl = 0.0
+            if position_size > 0.0:
+                position_side = "long"
+                unrealized_pnl = (position_size * price) - (position_size * (avg_entry_price or 0.0))
+            elif position_size < 0.0:
+                position_side = "short"
+                unrealized_pnl = (position_size * price) - (position_size * (avg_entry_price or 0.0))
             equity_curve.append(equity)
             portfolio_history.append(
                 PortfolioSnapshot(
@@ -318,6 +377,11 @@ class PaperTradingEngine:
                     position_size=position_size,
                     avg_entry_price=avg_entry_price,
                     equity=equity,
+                    unrealized_pnl=unrealized_pnl,
+                    realized_pnl=realized_pnl,
+                    position_side=position_side,
+                    mark_price=price,
+                    fees_paid=fees_paid,
                 )
             )
             if self.trade_logger is not None:
@@ -348,6 +412,9 @@ class PaperTradingEngine:
         price: float,
         timestamp: datetime,
         order_size: float,
+        cash: float | None = None,
+        position_size: float | None = None,
+        equity: float | None = None,
     ) -> None:
         """Record whether the current bar generated a valid entry decision."""
         decisions.append(
@@ -360,6 +427,48 @@ class PaperTradingEngine:
                 "timestamp": timestamp,
                 "order_size": order_size,
             }
+        )
+        if self.trade_logger is None:
+            return
+        self.trade_logger.log_event(
+            timestamp=timestamp,
+            level="WARNING" if not allowed else "INFO",
+            event_type="entry_decision",
+            message="entry decision evaluated",
+            source="paper_trading",
+            metadata={
+                "signal": signal,
+                "side": side,
+                "allowed": allowed,
+                "reason": reason,
+                "price": price,
+                "order_size": order_size,
+                "cash": cash,
+                "position_size": position_size,
+                "equity": equity,
+            },
+        )
+
+    def _log_order_event(self, *, order: PaperOrder, timestamp: datetime, event_type: str, message: str, reason: str | None = None, **metadata: Any) -> None:
+        if self.trade_logger is None:
+            return
+        payload = {
+            "order_id": order.id,
+            "side": order.side,
+            "status": order.status,
+            "size": order.size,
+            "filled_size": order.filled_size,
+            "remaining_size": order.remaining_size,
+            "reason": reason,
+            **metadata,
+        }
+        self.trade_logger.log_event(
+            timestamp=timestamp,
+            level="WARNING" if reason else "INFO",
+            event_type=event_type,
+            message=message,
+            source="paper_trading",
+            metadata=payload,
         )
 
     def _create_order(self, *, timestamp: datetime, side: str, size: float) -> PaperOrder:
@@ -389,6 +498,14 @@ class PaperTradingEngine:
         )
         if report.status not in {"FILLED", "PARTIALLY_FILLED"}:
             order.status = "CANCELED"
+            order.last_reason = report.message or "execution_adapter_rejected_order"
+            self._log_order_event(
+                order=order,
+                timestamp=timestamp,
+                event_type="order_lifecycle",
+                message="order canceled before fill",
+                reason=order.last_reason,
+            )
             return cash, position_size, avg_entry_price
 
         fill_size = min(order.size, report.filled_size or order.size)
@@ -412,6 +529,14 @@ class PaperTradingEngine:
                 avg_entry_price = avg_entry_price
         else:
             order.status = "CANCELED"
+            order.last_reason = "insufficient_cash_or_position"
+            self._log_order_event(
+                order=order,
+                timestamp=timestamp,
+                event_type="order_lifecycle",
+                message="order canceled because cash or inventory was insufficient for the fill",
+                reason=order.last_reason,
+            )
             return cash, position_size, avg_entry_price
 
         order.filled_size = fill_size

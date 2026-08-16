@@ -17,6 +17,7 @@ from src.execution.paper_trading import PaperTradingEngine
 from src.execution.reconciliation import SessionAccountStateTracker
 from src.risk.controls import CircuitBreaker, RiskManager
 from src.risk.kill_switch import KillSwitchController
+from src.runtime.live_plot import RuntimeLivePlotter
 from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
 from src.utils.telegram import TelegramNotifier
@@ -95,13 +96,15 @@ class RuntimeOrchestrator:
         strategy: StrategyFn | None = None,
         mode: str = "paper",
         interval_seconds: float = 1.0,
-        watchdog_timeout_seconds: float = 5.0,
+        watchdog_timeout_seconds: float = 30.0,
         trade_logger: TradeLogger | None = None,
         kill_switch_state_file: str | Path | None = None,
         strategy_name: str | None = None,
         strategy_params: dict[str, Any] | None = None,
         runtime_config: RuntimeConfig | None = None,
         checkpoint_path: str | Path | None = None,
+        live_plot: bool = False,
+        live_plot_path: str | Path | None = None,
     ) -> None:
         """Initialize the object with its runtime state."""
         if mode not in {"paper", "live_dry_run", "live"}:
@@ -130,6 +133,7 @@ class RuntimeOrchestrator:
         self.runtime_config = runtime_config
         self.checkpoint_path = Path(checkpoint_path or getattr(runtime_config, "state_path", None) or "data/runtime_state.json")
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        self.live_plotter = RuntimeLivePlotter(output_path=live_plot_path or getattr(runtime_config, "live_plot_path", None)) if live_plot or bool(getattr(runtime_config, "live_plot", False)) else None
         self.alert_notifier = TelegramNotifier()
         self._active_alerts: set[str] = set()
         self.stale_quote_threshold_seconds = max(30.0, float(interval_seconds) * 10.0)
@@ -369,6 +373,7 @@ class RuntimeOrchestrator:
         self.last_heartbeat_at = datetime.now(timezone.utc)
         self._evaluate_runtime_alerts(cycle=cycle, account_state_summary=account_state_summary, execution_result=execution_result)
         self._maybe_notify_new_trades(execution_result, previous_trade_count=previous_trade_count)
+        self._update_live_plot(cycle=cycle, execution_result=execution_result)
         self._emit_cycle_health_snapshot(cycle)
         self._write_daily_summary()
         if self.trade_logger is not None:
@@ -508,6 +513,25 @@ class RuntimeOrchestrator:
                 metadata={"summary": summary},
             )
 
+    def _update_live_plot(self, *, cycle: RuntimeCycleResult, execution_result: Any | None) -> None:
+        """Append the latest runtime cycle to the live equity plot if enabled."""
+        if self.live_plotter is None or execution_result is None:
+            return
+
+        portfolio_history = list(getattr(execution_result, "portfolio_history", []) or [])
+        if not portfolio_history:
+            return
+
+        latest_snapshot = portfolio_history[-1]
+        plot_path = self.live_plotter.update(
+            equity=float(getattr(latest_snapshot, "equity", 0.0)),
+            timestamp=getattr(latest_snapshot, "timestamp", datetime.now(timezone.utc)),
+            trades=list(getattr(execution_result, "trades", []) or []),
+            initial_equity=getattr(self.execution_engine, "initial_cash", None),
+            title=f"{self.mode.title()} Runtime Equity",
+        )
+        logger.info("runtime_live_plot_updated path={}", plot_path)
+
     def _evaluate_runtime_alerts(self, *, cycle: RuntimeCycleResult, account_state_summary: dict[str, Any], execution_result: Any | None) -> None:
         """Emit runtime alerts for stale data, reconciliation mismatches, blocked entries, and heartbeat lapses."""
         self._evaluate_stale_market_data_alert(cycle)
@@ -516,7 +540,7 @@ class RuntimeOrchestrator:
         self._evaluate_heartbeat_alert()
 
     def _evaluate_stale_market_data_alert(self, cycle: RuntimeCycleResult) -> None:
-        """Raise an alert if the latest market-data bar is older than the configured threshold."""
+        """Raise an alert if the latest market-data bar is older than the bar cadence allows."""
         bars = list(getattr(cycle, "bars", []) or [])
         if not bars:
             self._clear_alert("stale_data")
@@ -540,11 +564,21 @@ class RuntimeOrchestrator:
 
         now = datetime.now(timezone.utc)
         age_seconds = max(0.0, (now - timestamp).total_seconds())
+        bar_interval_seconds = getattr(latest_bar, "interval_seconds", None)
+        try:
+            bar_interval_seconds = float(bar_interval_seconds or self.interval_seconds or 0.0)
+        except (TypeError, ValueError):
+            bar_interval_seconds = float(self.interval_seconds or 0.0)
+        threshold_seconds = max(self.stale_quote_threshold_seconds, bar_interval_seconds * 3.0)
         self._set_alert_state(
             "stale_data",
-            active=age_seconds > self.stale_quote_threshold_seconds,
+            active=age_seconds > threshold_seconds,
             message=f"market data appears stale (latest bar age={age_seconds:.1f}s)",
-            metadata={"latest_bar_age_seconds": round(age_seconds, 2), "threshold_seconds": round(self.stale_quote_threshold_seconds, 2)},
+            metadata={
+                "latest_bar_age_seconds": round(age_seconds, 2),
+                "threshold_seconds": round(threshold_seconds, 2),
+                "bar_interval_seconds": round(bar_interval_seconds, 2),
+            },
             level="WARNING",
         )
 
@@ -751,9 +785,25 @@ class RuntimeOrchestrator:
         no_trade_summary = self._build_no_trade_summary(getattr(execution_result, "entry_decisions", None))
         portfolio_history = getattr(execution_result, "portfolio_history", None) or []
         final_equity = portfolio_history[-1].equity if portfolio_history else 1000.0
+        latest_snapshot = portfolio_history[-1] if portfolio_history else None
+        unrealized_pnl = float(getattr(latest_snapshot, "unrealized_pnl", 0.0)) if latest_snapshot is not None else 0.0
+        realized_pnl = float(getattr(latest_snapshot, "realized_pnl", 0.0)) if latest_snapshot is not None else 0.0
+        position_side = getattr(latest_snapshot, "position_side", "flat") if latest_snapshot is not None else "flat"
+        entry_price = getattr(latest_snapshot, "avg_entry_price", None)
+        mark_price = getattr(latest_snapshot, "mark_price", None)
+        fees_paid = float(getattr(latest_snapshot, "fees_paid", 0.0)) if latest_snapshot is not None else 0.0
+        if mark_price is None and cycle.bars:
+            try:
+                mark_price = float(getattr(cycle.bars[-1], "close", getattr(cycle.bars[-1], "last", 0.0)))
+            except (TypeError, ValueError):
+                mark_price = None
         trades = list(getattr(execution_result, "trades", []) or [])
         orders = list(getattr(execution_result, "orders", []) or [])
+        entry_decisions = getattr(execution_result, "entry_decisions", None) or []
+        decision_summary = self._summarize_entry_decisions(entry_decisions)
 
+        entry_price_text = "n/a" if entry_price is None else f"{float(entry_price):.4f}"
+        mark_price_text = "n/a" if mark_price is None else f"{float(mark_price):.4f}"
         lines = [
             "=== Runtime health snapshot ===",
             f"cycle: {self.health.cycles_completed}",
@@ -762,9 +812,11 @@ class RuntimeOrchestrator:
             f"strategy: {self.strategy_name}",
             f"signals: {len(cycle.signals)} bars: {len(cycle.bars)} trades: {len(trades)} orders: {len(orders)}",
             f"equity: {final_equity:.4f} cash: {account_state.get('balances', {}).get('USD', 0.0):.4f}",
+            f"position: side={position_side} entry_price={entry_price_text} mark_price={mark_price_text} realized_pnl={realized_pnl:.4f} unrealized_pnl={unrealized_pnl:.4f} total_pnl={realized_pnl + unrealized_pnl:.4f} fees_paid={fees_paid:.4f}",
             f"reconciliation: {account_state.get('reconciliation_status', 'unknown')}",
             f"circuit_breaker: active={health_report['circuit_breaker']['active']} reason={health_report['circuit_breaker']['reason'] or 'none'}",
             f"kill_switch: active={health_report['kill_switch']['active']} reason={health_report['kill_switch']['reason'] or 'none'}",
+            f"entry_decisions: total={decision_summary['total']} allowed={decision_summary['allowed']} blocked={decision_summary['blocked']} reasons={decision_summary['reasons']}",
             f"no_trade_reason: {no_trade_summary.get('reason', 'none')}",
         ]
         return "\n".join(lines)

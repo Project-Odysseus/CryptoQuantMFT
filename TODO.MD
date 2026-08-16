@@ -34,6 +34,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] Implement Kraken WebSocket L2 Order Book (`book-10` depth) client using `websockets` / `ccxt.pro` (implemented as a REST-based live connector scaffold for now; WebSocket transport remains a future enhancement)
   - [x] Implement Firi L2 REST/WS polling client with rate-limit bucket throttling (implemented as a live REST connector using the configured API key)
   - [x] Implement FX Rate Collector (EUR/NOK) with local cache and fallback mechanisms (scaffolded as part of the shared connector architecture; live FX integration remains future work)
+  - [ ] Upgrade live market-data ingestion from REST polling to exchange WebSocket streams for Kraken/Firi with reconnect, resubscribe, and fallback handling for reliable live-paper and live trading
 - [x] **Multi-Timeframe Resampler**
   - [x] Build real-time streaming aggregator converting raw tick/orderbook streams into 1-second, 1-minute, 5-minute, and 1-hour OHLCV candle bars
 - [x] **Storage Infrastructure**
@@ -134,6 +135,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
 - [ ] **Performance Analytics & Review Script**
   - [ ] Script to plot cumulative equity curve vs. Buy-and-Hold Bitcoin benchmark
   - [ ] Calculate trade duration distribution, execution slippage vs. expected VWAP, and alpha decay over time
+  - [ ] Add cost-adjusted trade-level PnL reporting (fees, slippage, and benchmark comparison) to runtime diagnostics and summary exports
   - [x] Add a simple health dashboard output for runtime status, open orders, and live data freshness
 - [ ] **Telemetry & Alerting System**
   - [ ] Integrate Telegram/Discord webhook bot for instant notifications:

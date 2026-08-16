@@ -211,7 +211,7 @@ def test_risk_manager_blocks_entries_on_stale_quotes() -> None:
         volume=10.0,
     )
 
-    manager = RiskManager(RiskControlConfig(max_quote_age_seconds=60))
+    manager = RiskManager(RiskControlConfig(max_quote_age_seconds=60, enforce_quote_freshness=True))
     decision = manager.evaluate(bars=[previous_bar, current_bar], equity=100.0, peak_equity=100.0, current_bar=current_bar, bar_index=1)
 
     assert not decision.allow_entry

@@ -53,6 +53,7 @@ class RiskControlConfig:
     max_notional_per_trade: float = 1000.0
     max_total_notional: float = 5000.0
     max_open_positions: int = 3
+    enforce_quote_freshness: bool = False
     hard_stop_drawdown_pct: float = 0.02
     hard_stop_cooldown_bars: int = 5
     exchange_risk_limits: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -160,7 +161,7 @@ class RiskManager:
             if spread_pct > self.config.max_spread_pct:
                 return RiskDecision(allow_entry=False, position_size=0.0, reason="spread_limit")
 
-            if self._is_stale_quote(current_bar=current_bar, bars=bars, bar_index=bar_index):
+            if self.config.enforce_quote_freshness and self._is_stale_quote(current_bar=current_bar, bars=bars, bar_index=bar_index):
                 return RiskDecision(allow_entry=False, position_size=0.0, reason="stale_quote")
 
         drawdown = 0.0 if peak_equity <= 0.0 else max(0.0, (peak_equity - equity) / peak_equity)
