@@ -58,6 +58,75 @@ def test_paper_trading_engine_advances_orders_through_state_machine() -> None:
     assert result.portfolio_history[-1].equity > 100.0
 
 
+def test_paper_trading_engine_closes_positions_when_signal_flips() -> None:
+    """A position should be closed when the signal turns against it."""
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        ),
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+            open=101.0,
+            high=101.0,
+            low=101.0,
+            close=101.0,
+            volume=10.0,
+        ),
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc),
+            open=102.0,
+            high=102.0,
+            low=102.0,
+            close=102.0,
+            volume=10.0,
+        ),
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 3, tzinfo=timezone.utc),
+            open=103.0,
+            high=103.0,
+            low=103.0,
+            close=103.0,
+            volume=10.0,
+        ),
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 4, tzinfo=timezone.utc),
+            open=104.0,
+            high=104.0,
+            low=104.0,
+            close=104.0,
+            volume=10.0,
+        ),
+    ]
+    signals = [1.0, 0.0, -1.0, 0.0, 0.0]
+
+    result = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=5).run(bars, signals)
+
+    assert len(result.orders) == 2
+    assert [order.side for order in result.orders] == ["buy", "sell"]
+    assert len(result.trades) == 2
+    assert result.portfolio_history[-1].position_size == 0.0
+
+
 def test_paper_trading_engine_can_cancel_unfilled_orders() -> None:
     """Orders should be cancelled if they remain unresolved too long."""
     bars = [

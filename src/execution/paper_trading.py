@@ -146,105 +146,6 @@ class PaperTradingEngine:
             timestamp = _get_timestamp(bar)
             current_equity = cash + (position_size * price if position_size else 0.0)
 
-            if not active_orders and signal > 0 and position_size <= 0.0:
-                risk_decision = self._evaluate_risk(
-                    bars=list(bars[: index + 1]),
-                    equity=current_equity,
-                    peak_equity=peak_equity,
-                    current_position=position_size,
-                    current_bar=bar,
-                    bar_index=index,
-                    signal_side="buy",
-                    current_notional=max(0.0, position_size * price),
-                    open_positions=1 if position_size != 0.0 else 0,
-                    exchange_name=self.exchange_name,
-                    exchange_position_size=position_size,
-                    current_exchange_notional=max(0.0, position_size * price),
-                    exchange_open_positions=1 if position_size != 0.0 else 0,
-                    open_orders_count=len(active_orders),
-                )
-                self._record_entry_decision(
-                    decisions=entry_decisions,
-                    signal=signal,
-                    side="buy",
-                    allowed=risk_decision.allow_entry,
-                    reason=getattr(risk_decision, "reason", None),
-                    price=price,
-                    timestamp=timestamp,
-                    order_size=risk_decision.position_size,
-                    cash=cash,
-                    position_size=position_size,
-                    equity=current_equity,
-                )
-                if not risk_decision.allow_entry:
-                    pass
-                else:
-                    order_size = max(0.0, min(self.default_order_size, risk_decision.position_size))
-                    if order_size > 0.0:
-                        order = self._create_order(timestamp=timestamp, side="buy", size=order_size)
-                        active_orders.append(order)
-                        orders.append(order)
-                        cash, position_size, avg_entry_price = self._maybe_route_order(
-                            order=order,
-                            price=price,
-                            timestamp=timestamp,
-                            cash=cash,
-                            position_size=position_size,
-                            avg_entry_price=avg_entry_price,
-                            trades=trades,
-                        )
-                        if order.status in {"FILLED", "CANCELED"}:
-                            active_orders.remove(order)
-            elif not active_orders and signal < 0 and position_size >= 0.0:
-                risk_decision = self._evaluate_risk(
-                    bars=list(bars[: index + 1]),
-                    equity=current_equity,
-                    peak_equity=peak_equity,
-                    current_position=position_size,
-                    current_bar=bar,
-                    bar_index=index,
-                    signal_side="sell",
-                    current_notional=max(0.0, position_size * price),
-                    open_positions=1 if position_size != 0.0 else 0,
-                    exchange_name=self.exchange_name,
-                    exchange_position_size=position_size,
-                    current_exchange_notional=max(0.0, position_size * price),
-                    exchange_open_positions=1 if position_size != 0.0 else 0,
-                    open_orders_count=len(active_orders),
-                )
-                self._record_entry_decision(
-                    decisions=entry_decisions,
-                    signal=signal,
-                    side="sell",
-                    allowed=risk_decision.allow_entry,
-                    reason=getattr(risk_decision, "reason", None),
-                    price=price,
-                    timestamp=timestamp,
-                    order_size=risk_decision.position_size,
-                    cash=cash,
-                    position_size=position_size,
-                    equity=current_equity,
-                )
-                if not risk_decision.allow_entry:
-                    pass
-                else:
-                    order_size = max(0.0, min(self.default_order_size, risk_decision.position_size))
-                    if order_size > 0.0:
-                        order = self._create_order(timestamp=timestamp, side="sell", size=order_size)
-                        active_orders.append(order)
-                        orders.append(order)
-                        cash, position_size, avg_entry_price = self._maybe_route_order(
-                            order=order,
-                            price=price,
-                            timestamp=timestamp,
-                            cash=cash,
-                            position_size=position_size,
-                            avg_entry_price=avg_entry_price,
-                            trades=trades,
-                        )
-                        if order.status in {"FILLED", "CANCELED"}:
-                            active_orders.remove(order)
-
             for order in list(active_orders):
                 if order.status == "PENDING_SUBMIT":
                     order.status = "OPEN"
@@ -359,6 +260,131 @@ class PaperTradingEngine:
                             latency_ms=0,
                         )
 
+            if not active_orders:
+                if position_size > 0.0 and signal < 0.0:
+                    order = self._create_order(timestamp=timestamp, side="sell", size=position_size)
+                    active_orders.append(order)
+                    orders.append(order)
+                    cash, position_size, avg_entry_price = self._maybe_route_order(
+                        order=order,
+                        price=price,
+                        timestamp=timestamp,
+                        cash=cash,
+                        position_size=position_size,
+                        avg_entry_price=avg_entry_price,
+                        trades=trades,
+                    )
+                    if order.status in {"FILLED", "CANCELED"}:
+                        active_orders.remove(order)
+                elif position_size < 0.0 and signal > 0.0:
+                    order = self._create_order(timestamp=timestamp, side="buy", size=abs(position_size))
+                    active_orders.append(order)
+                    orders.append(order)
+                    cash, position_size, avg_entry_price = self._maybe_route_order(
+                        order=order,
+                        price=price,
+                        timestamp=timestamp,
+                        cash=cash,
+                        position_size=position_size,
+                        avg_entry_price=avg_entry_price,
+                        trades=trades,
+                    )
+                    if order.status in {"FILLED", "CANCELED"}:
+                        active_orders.remove(order)
+                elif signal > 0 and position_size <= 0.0:
+                    risk_decision = self._evaluate_risk(
+                        bars=list(bars[: index + 1]),
+                        equity=current_equity,
+                        peak_equity=peak_equity,
+                        current_position=position_size,
+                        current_bar=bar,
+                        bar_index=index,
+                        signal_side="buy",
+                        current_notional=max(0.0, position_size * price),
+                        open_positions=1 if position_size != 0.0 else 0,
+                        exchange_name=self.exchange_name,
+                        exchange_position_size=position_size,
+                        current_exchange_notional=max(0.0, position_size * price),
+                        exchange_open_positions=1 if position_size != 0.0 else 0,
+                        open_orders_count=len(active_orders),
+                    )
+                    self._record_entry_decision(
+                        decisions=entry_decisions,
+                        signal=signal,
+                        side="buy",
+                        allowed=risk_decision.allow_entry,
+                        reason=getattr(risk_decision, "reason", None),
+                        price=price,
+                        timestamp=timestamp,
+                        order_size=risk_decision.position_size,
+                        cash=cash,
+                        position_size=position_size,
+                        equity=current_equity,
+                    )
+                    if risk_decision.allow_entry:
+                        order_size = max(0.0, min(self.default_order_size, risk_decision.position_size))
+                        if order_size > 0.0:
+                            order = self._create_order(timestamp=timestamp, side="buy", size=order_size)
+                            active_orders.append(order)
+                            orders.append(order)
+                            cash, position_size, avg_entry_price = self._maybe_route_order(
+                                order=order,
+                                price=price,
+                                timestamp=timestamp,
+                                cash=cash,
+                                position_size=position_size,
+                                avg_entry_price=avg_entry_price,
+                                trades=trades,
+                            )
+                            if order.status in {"FILLED", "CANCELED"}:
+                                active_orders.remove(order)
+                elif signal < 0 and position_size >= 0.0:
+                    risk_decision = self._evaluate_risk(
+                        bars=list(bars[: index + 1]),
+                        equity=current_equity,
+                        peak_equity=peak_equity,
+                        current_position=position_size,
+                        current_bar=bar,
+                        bar_index=index,
+                        signal_side="sell",
+                        current_notional=max(0.0, position_size * price),
+                        open_positions=1 if position_size != 0.0 else 0,
+                        exchange_name=self.exchange_name,
+                        exchange_position_size=position_size,
+                        current_exchange_notional=max(0.0, position_size * price),
+                        exchange_open_positions=1 if position_size != 0.0 else 0,
+                        open_orders_count=len(active_orders),
+                    )
+                    self._record_entry_decision(
+                        decisions=entry_decisions,
+                        signal=signal,
+                        side="sell",
+                        allowed=risk_decision.allow_entry,
+                        reason=getattr(risk_decision, "reason", None),
+                        price=price,
+                        timestamp=timestamp,
+                        order_size=risk_decision.position_size,
+                        cash=cash,
+                        position_size=position_size,
+                        equity=current_equity,
+                    )
+                    if risk_decision.allow_entry:
+                        order_size = max(0.0, min(self.default_order_size, risk_decision.position_size))
+                        if order_size > 0.0:
+                            order = self._create_order(timestamp=timestamp, side="sell", size=order_size)
+                            active_orders.append(order)
+                            orders.append(order)
+                            cash, position_size, avg_entry_price = self._maybe_route_order(
+                                order=order,
+                                price=price,
+                                timestamp=timestamp,
+                                cash=cash,
+                                position_size=position_size,
+                                avg_entry_price=avg_entry_price,
+                                trades=trades,
+                            )
+                            if order.status in {"FILLED", "CANCELED"}:
+                                active_orders.remove(order)
             equity = cash + (position_size * price if position_size else 0.0)
             peak_equity = max(peak_equity, equity)
             position_side = "flat"
