@@ -151,8 +151,11 @@ A production-grade, event-driven quantitative trading system in Python designed 
   - [x] Add a safe command-line entrypoint that can be triggered manually or by the monitoring layer
 - [ ] **Containerization & Hosting**
   - [ ] Write `Dockerfile` and `docker-compose.yml` for unified runtime environment
-  - [ ] Deploy to cloud VPS (Hetzner / DigitalOcean) physically close to exchange server regions
+  - [ ] Add a 24/7 deployment plan for unattended operation: choose a small cloud VPS or managed container host, keep the runtime alive after reboot, and persist the SQLite/database state and runtime checkpoint files outside the container image
   - [ ] Configure `systemd` service or `supervisord` for automatic process management
+  - [ ] Add a lightweight watchdog/heartbeat that restarts the runtime if the market-data feed, execution loop, or Telegram notifier stalls
+  - [ ] Add remote log shipping and backup/sync for the runtime state and trade database to a second location
+  - [ ] Deploy to cloud VPS (Hetzner / DigitalOcean) physically close to exchange server regions
   - [x] Add backup/restore steps for the local database and runtime state
 - [ ] **Security Hardening**
   - [ ] Restrict API Key permissions on exchanges (Enable Trading, **Strictly Disable Withdrawals**)
