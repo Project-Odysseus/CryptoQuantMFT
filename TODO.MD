@@ -101,6 +101,7 @@ A production-grade, event-driven quantitative trading system in Python designed 
 - [ ] **Position Sizing & Capital Allocation**
   - [x] Implement Volatility-Adjusted Sizing with a fractional Kelly sizing layer
   - [x] Implement Dynamic Inventory Risk Manager: penalize buy signals if portfolio inventory is heavily long-skewed on one exchange
+  - [ ] Add dynamic sizing settings that can be tuned over time (for example, portfolio-risk percentage, max notional per trade, and regime-dependent sizing rules)
   - [ ] Add portfolio-level notional caps and per-exchange exposure limits before any live deployment
 - [ ] **Post-Trade & Portfolio Risk Controls**
   - [ ] **Circuit Breakers:** Implement daily Max Drawdown limit (e.g., hard stop at -2% account equity drop in 24 hours)

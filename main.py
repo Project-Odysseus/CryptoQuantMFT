@@ -520,6 +520,158 @@ def print_health_dashboard(
             print(f"  - [{event['level']}] {event['event_type']}: {event['message']}")
 
 
+def print_post_run_analysis(limit: int | None = None, since: str | None = None) -> None:
+    """Print a detailed post-session analysis from the SQLite logger.
+
+    Shows:
+    - Completed round-trip trades (buy→sell) with per-trade PnL and fees
+    - Open positions left over at session end
+    - Equity curve statistics (start, end, peak, max drawdown)
+    - Blocked/cancelled entry breakdown from operational events
+
+    Args:
+        limit: Max number of closed trades to show in the table.
+        since: ISO date string (YYYY-MM-DD) to filter to trades on or after that date.
+    """
+    import json as _json
+    from collections import Counter
+
+    logger_store = TradeLogger(database_path=settings.database_path)
+    all_trades = list(reversed(logger_store.list_trades(limit=None)))
+    all_snapshots = list(reversed(logger_store.list_equity_snapshots(limit=None)))
+    all_events = list(reversed(logger_store.list_events(limit=None)))
+
+    # Apply date filter
+    if since:
+        def _after(ts: str) -> bool:
+            return str(ts)[:10] >= since
+        all_trades    = [t for t in all_trades    if _after(t["timestamp"])]
+        all_snapshots = [s for s in all_snapshots if _after(s["timestamp"])]
+        all_events    = [e for e in all_events    if _after(e["timestamp"])]
+
+    # --- Pair buys and sells to compute per-trade PnL ---
+    buys: list[dict] = []
+    closed_trades: list[dict] = []
+    for trade in all_trades:
+        if trade["side"] == "buy":
+            buys.append(trade)
+        elif trade["side"] == "sell" and buys:
+            entry = buys.pop(0)
+            pnl = (trade["price"] - entry["price"]) * trade["size"] - entry["fee"] - trade["fee"]
+            closed_trades.append({
+                "entry_time": entry["timestamp"],
+                "exit_time": trade["timestamp"],
+                "entry_price": entry["price"],
+                "exit_price": trade["price"],
+                "size": trade["size"],
+                "entry_fee": entry["fee"],
+                "exit_fee": trade["fee"],
+                "total_fees": entry["fee"] + trade["fee"],
+                "gross_pnl": (trade["price"] - entry["price"]) * trade["size"],
+                "net_pnl": pnl,
+            })
+    open_positions = list(buys)
+
+    # --- Equity curve stats ---
+    equities = [s["equity"] for s in all_snapshots]
+    start_equity = equities[0] if equities else 0.0
+    end_equity = equities[-1] if equities else 0.0
+    peak_equity = max(equities) if equities else 0.0
+    trough_equity = min(equities) if equities else 0.0
+    max_drawdown = peak_equity - trough_equity
+    max_drawdown_pct = max_drawdown / peak_equity if peak_equity > 0 else 0.0
+    total_pnl = end_equity - start_equity
+
+    # --- Entry decision stats from events ---
+    blocked_reasons: Counter = Counter()
+    allowed_count = 0
+    blocked_count = 0
+    cancelled_reasons: Counter = Counter()
+    cancelled_count = 0
+    for event in all_events:
+        etype = event.get("event_type", "")
+        meta_raw = event.get("metadata") or "{}"
+        try:
+            meta = _json.loads(meta_raw) if isinstance(meta_raw, str) else (meta_raw or {})
+        except (_json.JSONDecodeError, TypeError):
+            meta = {}
+        if etype == "entry_decision":
+            if meta.get("allowed"):
+                allowed_count += 1
+            else:
+                blocked_count += 1
+                reason = str(meta.get("reason") or "unknown")
+                blocked_reasons[reason] += 1
+        elif etype == "order_lifecycle":
+            status = str(meta.get("status") or "")
+            if status == "CANCELED":
+                cancelled_count += 1
+                reason = str(meta.get("reason") or "unknown")
+                cancelled_reasons[reason] += 1
+
+    # --- Print ---
+    sep = "-" * 60
+    since_label = f" (since {since})" if since else ""
+    print("\n" + sep)
+    print(f"POST-RUN ANALYSIS{since_label}")
+    print(sep)
+
+    print(f"\nEQUITY SUMMARY")
+    print(f"  Start equity : {start_equity:.4f}")
+    print(f"  End equity   : {end_equity:.4f}")
+    print(f"  Peak equity  : {peak_equity:.4f}")
+    pnl_pct_text = f"{total_pnl / start_equity:.2%}" if start_equity > 0 else "n/a"
+    print(f"  Net PnL      : {total_pnl:+.4f} ({pnl_pct_text})")
+    print(f"  Max drawdown : {max_drawdown:.4f} ({max_drawdown_pct:.2%})")
+
+    print(f"\nTRADE SUMMARY")
+    print(f"  Total raw fills   : {len(all_trades)}")
+    print(f"  Closed round-trips: {len(closed_trades)}")
+    print(f"  Open positions    : {len(open_positions)}")
+    if closed_trades:
+        wins = [t for t in closed_trades if t["net_pnl"] > 0]
+        losses = [t for t in closed_trades if t["net_pnl"] <= 0]
+        total_gross = sum(t["gross_pnl"] for t in closed_trades)
+        total_fees  = sum(t["total_fees"] for t in closed_trades)
+        total_net   = sum(t["net_pnl"] for t in closed_trades)
+        avg_net     = total_net / len(closed_trades)
+        print(f"  Wins / Losses     : {len(wins)} / {len(losses)}")
+        print(f"  Win rate          : {len(wins)/len(closed_trades):.1%}")
+        print(f"  Total gross PnL   : {total_gross:+.4f}")
+        print(f"  Total fees paid   : {total_fees:.4f}")
+        print(f"  Total net PnL     : {total_net:+.4f}")
+        print(f"  Avg net per trade : {avg_net:+.4f}")
+
+    n = limit or 20
+    if closed_trades:
+        print(f"\nCLOSED TRADES (last {min(n, len(closed_trades))})")
+        print(f"  {'Entry time':<28} {'Exit time':<28} {'Size':>8} {'Entry':>10} {'Exit':>10} {'Fees':>8} {'Net PnL':>10}")
+        for t in closed_trades[-n:]:
+            print(f"  {t['entry_time']!s:<28} {t['exit_time']!s:<28} {t['size']:>8.5f} {t['entry_price']:>10.2f} {t['exit_price']:>10.2f} {t['total_fees']:>8.4f} {t['net_pnl']:>+10.4f}")
+
+    if open_positions:
+        print(f"\nUNCLOSED BUYS (no matching sell, showing last {min(5, len(open_positions))})")
+        for b in open_positions[-5:]:
+            print(f"  {b['timestamp']}  size={b['size']:.5f}  price={b['price']:.2f}  fee={b['fee']:.4f}")
+
+    print(f"\nENTRY DECISIONS")
+    print(f"  Allowed : {allowed_count}")
+    print(f"  Blocked : {blocked_count}")
+    if blocked_reasons:
+        print(f"  Blocked breakdown:")
+        for reason, count in blocked_reasons.most_common():
+            print(f"    {reason:30s}: {count}")
+
+    print(f"\nCANCELLED ORDERS")
+    print(f"  Count : {cancelled_count}")
+    if cancelled_reasons:
+        print(f"  Reason breakdown:")
+        for reason, count in cancelled_reasons.most_common():
+            print(f"    {reason:30s}: {count}")
+
+    print(sep)
+
+
 def main() -> None:
     """Initialize the runtime and run either the data pipeline or a demo backtest."""
     parser = argparse.ArgumentParser(description="CryptoQuantMFT runtime")
@@ -558,6 +710,9 @@ def main() -> None:
     parser.add_argument("--live-plot", action="store_true", help="Write a continuously updating equity/trade plot to disk during the runtime")
     parser.add_argument("--live-plot-path", default=None, help="Optional file path for the runtime live plot image")
     parser.add_argument("--resume-runtime", action="store_true", help="Load the runtime state from a checkpoint file before starting")
+    parser.add_argument("--post-run-analysis", action="store_true", help="Print a post-session trade analysis: round-trip PnL, blocked/cancelled breakdown, equity stats")
+    parser.add_argument("--since-today", action="store_true", help="Filter --post-run-analysis to today's data only")
+    parser.add_argument("--since", default=None, help="Filter --post-run-analysis to data on or after this date (YYYY-MM-DD)")
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
     args = parser.parse_args()
@@ -628,6 +783,9 @@ def main() -> None:
             print_health_dashboard(limit=args.report_limit, runtime_config=runtime_config, orchestrator=orchestrator)
         if args.report:
             print_trade_report(limit=args.report_limit)
+        if args.post_run_analysis:
+            _since = args.since or (datetime.now().strftime("%Y-%m-%d") if args.since_today else None)
+            print_post_run_analysis(limit=args.report_limit, since=_since)
         if args.daily_summary:
             summary_date = None
             if args.daily_summary_date:
@@ -657,6 +815,11 @@ def main() -> None:
 
     if args.report:
         print_trade_report(limit=args.report_limit)
+        return
+
+    if args.post_run_analysis:
+        _since = args.since or (datetime.now().strftime("%Y-%m-%d") if args.since_today else None)
+        print_post_run_analysis(limit=args.report_limit, since=_since)
         return
 
     if args.daily_summary:
