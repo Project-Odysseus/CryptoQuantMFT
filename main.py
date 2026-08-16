@@ -70,13 +70,16 @@ def build_runtime_orchestrator(
     pipeline = MarketDataPipeline(store=store, interval_seconds=market_data_interval_seconds)
 
     if runtime_config.use_mock_connector:
-        pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))
+        pipeline.add_connector(MockExchangeConnector(symbol="BTC/EUR"))
     else:
-        exchange_name = (runtime_config.exchange or "auto").lower()
+        exchange_name = (runtime_config.exchange or "kraken").lower()
         if exchange_name in {"auto", "kraken"}:
             pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
-        if exchange_name in {"auto", "firi"} and settings.firi_api_key:
+        elif exchange_name == "firi" and settings.firi_api_key:
             pipeline.add_connector(FiriConnector(symbol="BTC/NOK"))
+        elif exchange_name == "firi":
+            logger.warning("runtime_firi_api_key_missing falling back to kraken")
+            pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
 
     logger.info(
         "runtime_market_data_config interval_seconds={} connector={} use_mock={}",
@@ -113,6 +116,11 @@ def build_runtime_orchestrator(
         execution_adapter=execution_router.adapter,
     )
     strategy = resolve_strategy(runtime_config.strategy_name, **runtime_config.strategy_params)
+    # Derive the primary trading symbol from the first connector so bars and
+    # live-price tracking stay consistent with a single currency.
+    primary_symbol: str | None = None
+    if pipeline.connectors:
+        primary_symbol = getattr(pipeline.connectors[0], "symbol", None)
     orchestrator = RuntimeOrchestrator(
         pipeline=pipeline,
         execution_engine=engine,
@@ -127,6 +135,7 @@ def build_runtime_orchestrator(
         checkpoint_path=runtime_config.state_path,
         live_plot=runtime_config.live_plot,
         live_plot_path=runtime_config.live_plot_path,
+        trading_symbol=primary_symbol,
     )
     return orchestrator, pipeline
 

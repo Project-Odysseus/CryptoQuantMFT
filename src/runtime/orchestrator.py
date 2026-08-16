@@ -105,6 +105,7 @@ class RuntimeOrchestrator:
         checkpoint_path: str | Path | None = None,
         live_plot: bool = False,
         live_plot_path: str | Path | None = None,
+        trading_symbol: str | None = None,
     ) -> None:
         """Initialize the object with its runtime state."""
         if mode not in {"paper", "live_dry_run", "live"}:
@@ -115,6 +116,9 @@ class RuntimeOrchestrator:
         self.strategy = strategy or moving_average_crossover_strategy(short_window=3, long_window=6)
         self.strategy_name = strategy_name or "moving_average_crossover"
         self.strategy_params = dict(strategy_params or {})
+        # Symbol this runtime instance trades.  Bars from other symbols are
+        # discarded so mixed-currency pipelines do not corrupt the price series.
+        self.trading_symbol: str | None = trading_symbol
         self.circuit_breaker = CircuitBreaker()
         self.kill_switch_controller = KillSwitchController(state_file=kill_switch_state_file, trade_logger=trade_logger)
         self.execution_engine = execution_engine or PaperTradingEngine(
@@ -321,15 +325,23 @@ class RuntimeOrchestrator:
         if snapshots:
             self.watchdog.checkin_data()
             for snap in snapshots:
+                snap_symbol = getattr(snap, "symbol", None)
+                # Only track live price for the primary trading symbol
+                if self.trading_symbol and snap_symbol and snap_symbol != self.trading_symbol:
+                    continue
                 for attr in ("last", "price", "close"):
                     val = getattr(snap, attr, None)
                     if isinstance(val, (int, float)) and val > 0:
                         self._latest_live_price = float(val)
-                        self._latest_live_price_source = getattr(snap, "exchange", None) or getattr(snap, "symbol", "unknown")
+                        self._latest_live_price_source = getattr(snap, "exchange", None) or snap_symbol or "unknown"
                         break
         if new_bars:
             self.watchdog.checkin_data()
 
+        # Filter bars to the primary trading symbol so mixed-currency pipelines
+        # do not corrupt the price series fed into the paper engine.
+        if self.trading_symbol:
+            new_bars = [b for b in new_bars if getattr(b, "symbol", self.trading_symbol) == self.trading_symbol]
         self._bar_history.extend(new_bars)
         signals = self._build_signals(self._bar_history)
         if self.mode == "live":
