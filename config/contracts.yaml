@@ -1,0 +1,42 @@
+# Futures Contract Specifications Registry
+# Format: symbol, exchange, contract_size, multiplier, tick_size, margin_initial, margin_maintenance
+
+# TODO: Add contract specifications in YAML format
+
+# Example structure:
+# crypto_futures:
+#   BTC:
+#     exchange: "Kraken"
+#     description: "Bitcoin Micro Futures"
+#     contract_size: 1
+#     multiplier: 1
+#     tick_size: 1
+#     margin_initial: 0.02
+#     margin_maintenance: 0.01
+#     active_months: "all"
+#     currency: "USD"
+#
+# equity_futures:
+#   ES:
+#     exchange: "CME"
+#     description: "S&P 500 E-mini"
+#     contract_size: 50
+#     multiplier: 50
+#     tick_size: 0.25
+#     margin_initial: 0.06
+#     margin_maintenance: 0.05
+#     active_months: "ZHJMU"
+#     currency: "USD"
+#
+# commodity_futures:
+#   CL:
+#     exchange: "NYMEX"
+#     description: "Crude Oil"
+#     contract_size: 1000
+#     multiplier: 0.01
+#     tick_size: 0.01
+#     margin_initial: 0.075
+#     margin_maintenance: 0.055
+#     active_months: "FHKMNUVXZ"
+#     currency: "USD"
+#     contract_unit: "barrels"
