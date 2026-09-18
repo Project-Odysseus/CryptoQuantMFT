@@ -22,6 +22,7 @@ class RuntimeConfig:
     watchdog_timeout_seconds: float = 30.0
     watchdog_restarts: int = 0
     exchange: str | None = None
+    trading_symbol: str | None = None
     kill_switch: bool = False
     kill_switch_reason: str = "manual"
     live_plot: bool = False
@@ -46,6 +47,7 @@ class RuntimeConfig:
             "watchdog_timeout_seconds": self.watchdog_timeout_seconds,
             "watchdog_restarts": self.watchdog_restarts,
             "exchange": self.exchange,
+            "trading_symbol": self.trading_symbol,
             "kill_switch": self.kill_switch,
             "kill_switch_reason": self.kill_switch_reason,
             "live_plot": self.live_plot,
@@ -67,6 +69,7 @@ class RuntimeConfig:
             watchdog_timeout_seconds=float(payload.get("watchdog_timeout_seconds", 30.0)),
             watchdog_restarts=int(payload.get("watchdog_restarts", 0)),
             exchange=payload.get("exchange"),
+            trading_symbol=payload.get("trading_symbol"),
             kill_switch=bool(payload.get("kill_switch", False)),
             kill_switch_reason=str(payload.get("kill_switch_reason", "manual")),
             live_plot=bool(payload.get("live_plot", False)),
@@ -178,6 +181,12 @@ def build_runtime_config_from_args(args: argparse.Namespace, argv: list[str] | N
             effective_argv,
             getattr(args, "execution_exchange", "auto"),
             loaded_config.exchange if loaded_config is not None else None,
+        ),
+        trading_symbol=_resolve_cli_value(
+            effective_argv,
+            "--trading-symbol",
+            getattr(args, "trading_symbol", None),
+            loaded_config.trading_symbol if loaded_config is not None else None,
         ),
         kill_switch=bool(getattr(args, "kill_switch", False)),
         kill_switch_reason=_resolve_cli_value(

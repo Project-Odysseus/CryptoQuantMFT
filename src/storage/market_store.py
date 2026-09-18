@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -21,6 +22,7 @@ class MarketStore:
         self.parquet_path = Path(parquet_path or self.database_path.with_suffix(".parquet"))
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.parquet_path.parent.mkdir(parents=True, exist_ok=True)
+        self._parquet_dirty = False
         self._initialize_schema()
 
     def _initialize_schema(self) -> None:
@@ -71,7 +73,7 @@ class MarketStore:
             )
             connection.commit()
 
-        self._write_parquet()
+        self._parquet_dirty = True
         return int(cursor.lastrowid)
 
     def list_ticks(self, limit: int | None = 10) -> list[dict[str, Any]]:
@@ -105,18 +107,28 @@ class MarketStore:
                 "ask": ask,
                 "last": last,
                 "volume": volume,
-                "raw_json": raw_json,
+                "raw_json": self._deserialize_raw(raw_json),
             }
             for exchange, symbol, timestamp, bid, ask, last, volume, raw_json in rows
         ]
 
     def read_parquet_ticks(self) -> list[dict[str, Any]]:
         """Load persisted ticks from parquet when available."""
+        self._sync_parquet_if_needed()
         if not self.parquet_path.exists():
             return []
 
         dataframe = pd.read_parquet(self.parquet_path)
-        return dataframe.to_dict(orient="records")
+        records = dataframe.to_dict(orient="records")
+        for record in records:
+            record["raw_json"] = self._deserialize_raw(record.get("raw_json"))
+        return records
+
+    def _sync_parquet_if_needed(self) -> None:
+        if not self._parquet_dirty and self.parquet_path.exists():
+            return
+        self._write_parquet()
+        self._parquet_dirty = False
 
     def _write_parquet(self) -> None:
         rows = self.list_ticks(limit=None)
@@ -125,10 +137,34 @@ class MarketStore:
             empty_frame.to_parquet(self.parquet_path, index=False)
             return
 
-        dataframe = pd.DataFrame(rows)
+        parquet_rows = [
+            {
+                **row,
+                "raw_json": self._serialize_raw(row.get("raw_json")),
+            }
+            for row in rows
+        ]
+        dataframe = pd.DataFrame(parquet_rows)
         dataframe.to_parquet(self.parquet_path, index=False)
 
     def _serialize_raw(self, raw: dict[str, Any] | None) -> str | None:
         if raw is None:
             return None
-        return str(raw)
+        return json.dumps(raw, default=self._json_default, sort_keys=True)
+
+    def _deserialize_raw(self, raw_json: Any) -> Any:
+        if raw_json is None:
+            return None
+        if isinstance(raw_json, dict):
+            return raw_json
+        if isinstance(raw_json, str):
+            try:
+                return json.loads(raw_json)
+            except json.JSONDecodeError:
+                return raw_json
+        return raw_json
+
+    def _json_default(self, value: Any) -> Any:
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return str(value)

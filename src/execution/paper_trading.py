@@ -20,6 +20,8 @@ class PaperOrder:
     timestamp: datetime
     side: str
     size: float
+    symbol: str | None = None
+    exchange: str | None = None
     status: str = "PENDING_SUBMIT"
     filled_size: float = 0.0
     avg_fill_price: float = 0.0
@@ -252,8 +254,8 @@ class PaperTradingEngine:
                         self.trade_logger.log_trade(
                             timestamp=timestamp,
                             source="paper_trading",
-                            exchange="mock",
-                            pair="BTC/NOK",
+                            exchange=order.exchange or _get_exchange(bar) or self.exchange_name,
+                            pair=order.symbol or _get_symbol(bar) or "unknown",
                             side=order.side,
                             price=execution_price,
                             size=fill_size,
@@ -264,7 +266,7 @@ class PaperTradingEngine:
 
             if not active_orders:
                 if position_size > 0.0 and signal < 0.0:
-                    order = self._create_order(timestamp=timestamp, side="sell", size=position_size)
+                    order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar)
                     active_orders.append(order)
                     orders.append(order)
                     cash, position_size, avg_entry_price = self._maybe_route_order(
@@ -279,7 +281,7 @@ class PaperTradingEngine:
                     if order.status in {"FILLED", "CANCELED"}:
                         active_orders.remove(order)
                 elif position_size < 0.0 and signal > 0.0:
-                    order = self._create_order(timestamp=timestamp, side="buy", size=abs(position_size))
+                    order = self._create_order(timestamp=timestamp, side="buy", size=abs(position_size), bar=bar)
                     active_orders.append(order)
                     orders.append(order)
                     cash, position_size, avg_entry_price = self._maybe_route_order(
@@ -333,7 +335,7 @@ class PaperTradingEngine:
                             risk_position_size=risk_decision.position_size,
                         )
                         if order_size > 0.0:
-                            order = self._create_order(timestamp=timestamp, side="buy", size=order_size)
+                            order = self._create_order(timestamp=timestamp, side="buy", size=order_size, bar=bar)
                             active_orders.append(order)
                             orders.append(order)
                             cash, position_size, avg_entry_price = self._maybe_route_order(
@@ -387,7 +389,7 @@ class PaperTradingEngine:
                             risk_position_size=risk_decision.position_size,
                         )
                         if order_size > 0.0:
-                            order = self._create_order(timestamp=timestamp, side="sell", size=order_size)
+                            order = self._create_order(timestamp=timestamp, side="sell", size=order_size, bar=bar)
                             active_orders.append(order)
                             orders.append(order)
                             cash, position_size, avg_entry_price = self._maybe_route_order(
@@ -556,9 +558,16 @@ class PaperTradingEngine:
             metadata=payload,
         )
 
-    def _create_order(self, *, timestamp: datetime, side: str, size: float) -> PaperOrder:
+    def _create_order(self, *, timestamp: datetime, side: str, size: float, bar: Any | None = None) -> PaperOrder:
         self._order_counter += 1
-        return PaperOrder(id=f"order-{self._order_counter}", timestamp=timestamp, side=side, size=size)
+        return PaperOrder(
+            id=f"order-{self._order_counter}",
+            timestamp=timestamp,
+            side=side,
+            size=size,
+            symbol=_get_symbol(bar),
+            exchange=_get_exchange(bar) or self.exchange_name,
+        )
 
     def _maybe_route_order(
         self,
@@ -580,6 +589,7 @@ class PaperTradingEngine:
             size=order.size,
             price=price,
             timestamp=timestamp,
+            symbol=order.symbol,
         )
         order.execution_status = report.status
         order.execution_message = report.message
@@ -655,8 +665,8 @@ class PaperTradingEngine:
             self.trade_logger.log_trade(
                 timestamp=timestamp,
                 source="paper_trading",
-                exchange=self.execution_adapter.name,
-                pair="BTC/NOK",
+                exchange=order.exchange or getattr(self.execution_adapter, "exchange_name", None) or self.execution_adapter.name,
+                pair=order.symbol or "unknown",
                 side=order.side,
                 price=execution_price,
                 size=fill_size,
@@ -757,6 +767,30 @@ def _get_close(bar: Any) -> float:
     if isinstance(bar, dict):
         return float(bar["close"])
     raise TypeError("bars must expose a close attribute or be dictionaries with a close key")
+
+
+def _get_symbol(bar: Any) -> str | None:
+    if bar is None:
+        return None
+    if hasattr(bar, "symbol"):
+        value = getattr(bar, "symbol")
+        return str(value) if value is not None else None
+    if isinstance(bar, dict):
+        value = bar.get("symbol")
+        return str(value) if value is not None else None
+    return None
+
+
+def _get_exchange(bar: Any) -> str | None:
+    if bar is None:
+        return None
+    if hasattr(bar, "exchange"):
+        value = getattr(bar, "exchange")
+        return str(value) if value is not None else None
+    if isinstance(bar, dict):
+        value = bar.get("exchange")
+        return str(value) if value is not None else None
+    return None
 
 
 def _get_timestamp(bar: Any) -> datetime:

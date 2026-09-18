@@ -79,3 +79,24 @@ def test_trade_logger_writes_daily_summary(tmp_path: Path) -> None:
     assert summary["alert_count"] == 1
     assert summary["runtime_status"] == "healthy"
     assert summary["research_status"] == "parallel_lane_pending"
+
+
+def test_trade_logger_round_trips_structured_event_metadata(tmp_path: Path) -> None:
+    """Operational event metadata should be stored as JSON and returned as a structured object."""
+    logger = TradeLogger(database_path=tmp_path / "trades.db")
+    timestamp = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+    logger.log_event(
+        timestamp=timestamp,
+        level="INFO",
+        event_type="runtime_execution_context",
+        message="context updated",
+        source="runtime",
+        metadata={"timestamp": timestamp, "path": tmp_path / "state.json", "latest_signal": 1.0},
+    )
+
+    events = logger.list_events(limit=1)
+
+    assert events[0]["metadata"]["timestamp"] == timestamp.isoformat()
+    assert events[0]["metadata"]["path"] == str(tmp_path / "state.json")
+    assert events[0]["metadata"]["latest_signal"] == 1.0

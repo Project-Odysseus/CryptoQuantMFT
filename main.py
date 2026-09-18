@@ -30,10 +30,11 @@ async def run_pipeline(iterations: int = 3, interval_seconds: float = 1.0) -> No
     store = MarketStore(database_path=settings.database_path)
     pipeline = MarketDataPipeline(store=store, interval_seconds=max(1, int(round(interval_seconds))))
 
-    pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
+    kraken_symbol = _resolve_trading_symbol(exchange="kraken")
+    pipeline.add_connector(KrakenConnector(symbol=kraken_symbol))
 
     if settings.firi_api_key:
-        pipeline.add_connector(FiriConnector(symbol="BTC/NOK"))
+        pipeline.add_connector(FiriConnector(symbol=_resolve_trading_symbol(exchange="firi")))
 
     for index in range(iterations):
         snapshots = await pipeline.run_once()
@@ -69,18 +70,20 @@ def build_runtime_orchestrator(
     market_data_interval_seconds = max(1, int(round(runtime_config.interval_seconds)))
     store = MarketStore(database_path=settings.database_path)
     pipeline = MarketDataPipeline(store=store, interval_seconds=market_data_interval_seconds)
+    trading_symbol = runtime_config.trading_symbol or _resolve_trading_symbol(exchange=runtime_config.exchange)
 
     if runtime_config.use_mock_connector:
-        pipeline.add_connector(MockExchangeConnector(symbol="BTC/EUR"))
+        pipeline.add_connector(MockExchangeConnector(symbol=trading_symbol))
     else:
         exchange_name = (runtime_config.exchange or "kraken").lower()
         if exchange_name in {"auto", "kraken"}:
-            pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
+            pipeline.add_connector(KrakenConnector(symbol=trading_symbol))
         elif exchange_name == "firi" and settings.firi_api_key:
-            pipeline.add_connector(FiriConnector(symbol="BTC/NOK"))
+            pipeline.add_connector(FiriConnector(symbol=trading_symbol))
         elif exchange_name == "firi":
             logger.warning("runtime_firi_api_key_missing falling back to kraken")
-            pipeline.add_connector(KrakenConnector(symbol="BTC/EUR"))
+            fallback_symbol = runtime_config.trading_symbol or _resolve_trading_symbol(exchange="kraken")
+            pipeline.add_connector(KrakenConnector(symbol=fallback_symbol))
 
     logger.info(
         "runtime_market_data_config interval_seconds={} connector={} use_mock={}",
@@ -139,6 +142,13 @@ def build_runtime_orchestrator(
         trading_symbol=primary_symbol,
     )
     return orchestrator, pipeline
+
+
+def _resolve_trading_symbol(*, exchange: str | None = None) -> str:
+    normalized_exchange = (exchange or "kraken").lower()
+    if normalized_exchange == "firi":
+        return "BTC/NOK"
+    return "BTC/EUR"
 
 
 async def run_runtime_orchestrator(
@@ -703,6 +713,7 @@ def main() -> None:
     parser.add_argument("--runtime-iterations", type=int, default=3, help="Number of runtime cycles to execute")
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi"], default="auto", help="Exchange routing target for the runtime execution adapter")
+    parser.add_argument("--trading-symbol", default=None, help="Trading symbol for the runtime connector and execution context, e.g. BTC/EUR or BTC/NOK")
     parser.add_argument("--use-mock-connector", action="store_true", help="Use the mock exchange connector for the runtime loop")
     parser.add_argument("--watchdog-timeout", type=float, default=30.0, help="Seconds without a completed cycle or fresh data before the watchdog triggers")
     parser.add_argument("--watchdog-restarts", type=int, default=0, help="Number of times to restart the runtime after a watchdog timeout")

@@ -139,7 +139,7 @@ class TradeLogger:
                     event_type,
                     message,
                     source,
-                    str(metadata or {}),
+                    self._serialize_json(metadata or {}),
                 ),
             )
             connection.commit()
@@ -239,10 +239,28 @@ class TradeLogger:
                 "event_type": event_type,
                 "message": message,
                 "source": source,
-                "metadata": metadata,
+                "metadata": self._deserialize_json(metadata),
             }
             for timestamp, level, event_type, message, source, metadata in rows
         ]
+
+    def _serialize_json(self, payload: Any) -> str:
+        return json.dumps(payload, default=self._json_default, sort_keys=True)
+
+    def _deserialize_json(self, payload: str | None) -> Any:
+        if payload is None:
+            return None
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError:
+            return payload
+
+    def _json_default(self, value: Any) -> Any:
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, Path):
+            return str(value)
+        return str(value)
 
     def write_daily_summary(
         self,

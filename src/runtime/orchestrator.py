@@ -145,7 +145,10 @@ class RuntimeOrchestrator:
         self.stale_quote_threshold_seconds = max(30.0, float(interval_seconds) * 10.0)
         self.heartbeat_timeout_seconds = max(2 * self.stale_quote_threshold_seconds, float(watchdog_timeout_seconds))
         self.last_heartbeat_at: datetime | None = None
-        self.account_state_tracker = SessionAccountStateTracker(exchange_name="paper" if mode == "paper" else None)
+        self.account_state_tracker = SessionAccountStateTracker(
+            exchange_name="paper" if mode == "paper" else None,
+            trading_symbol=self.trading_symbol,
+        )
         if getattr(self.execution_engine, "circuit_breaker", None) is None:
             self.execution_engine.circuit_breaker = self.circuit_breaker
         if getattr(self.execution_engine, "kill_switch_controller", None) is None:
@@ -165,6 +168,8 @@ class RuntimeOrchestrator:
             self.mode = str(self.runtime_config.mode)
             self.strategy_name = str(self.runtime_config.strategy_name)
             self.strategy_params = dict(self.runtime_config.strategy_params or {})
+            self.trading_symbol = self.runtime_config.trading_symbol
+            self.account_state_tracker.trading_symbol = self.trading_symbol or self.account_state_tracker.trading_symbol
             if self.runtime_config.state_path:
                 self.checkpoint_path = Path(self.runtime_config.state_path)
                 self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,6 +228,7 @@ class RuntimeOrchestrator:
             mode=self.mode,
             strategy_name=self.strategy_name,
             strategy_params=dict(self.strategy_params),
+            trading_symbol=self.trading_symbol,
             state_path=self.checkpoint_path,
         ).to_dict()
 
@@ -371,6 +377,7 @@ class RuntimeOrchestrator:
             execution_result=execution_result,
             adapter=adapter,
             exchange_name=exchange_name or ("paper" if self.mode == "paper" else None),
+            trading_symbol=self.trading_symbol,
         )
 
         cycle = RuntimeCycleResult(
@@ -932,6 +939,8 @@ class RuntimeOrchestrator:
         entry_price_text = "n/a" if entry_price is None else f"{float(entry_price):.4f}"
         mark_price_text = "n/a" if mark_price is None else f"{float(mark_price):.4f}"
         live_price_text = "n/a" if self._latest_live_price is None else f"{self._latest_live_price:.4f}"
+        base_currency = str(account_state.get("base_currency", "USD"))
+        cash_balance = float(account_state.get("balances", {}).get(base_currency, 0.0))
         lines = [
             "=== Runtime health snapshot ===",
             f"cycle: {self.health.cycles_completed}",
@@ -939,7 +948,7 @@ class RuntimeOrchestrator:
             f"healthy: {health_report['healthy']}",
             f"strategy: {self.strategy_name}",
             f"signals: {len(cycle.signals)} bars: {len(cycle.bars)} trades: {len(trades)} orders: {len(orders)}",
-            f"equity: {final_equity:.4f} cash: {account_state.get('balances', {}).get('USD', 0.0):.4f}",
+            f"equity: {final_equity:.4f} cash: {cash_balance:.4f} {base_currency}",
             f"live_price: {live_price_text} (source={self._latest_live_price_source})",
             f"position: side={position_side} size={position_size:.6f} entry_price={entry_price_text} mark_price={mark_price_text} notional={position_size * float(mark_price if mark_price is not None else 0.0):.4f} realized_pnl={realized_pnl:.4f} unrealized_pnl={unrealized_pnl:.4f} total_pnl={realized_pnl + unrealized_pnl:.4f} fees_paid={fees_paid:.4f}",
             f"reconciliation: {account_state.get('reconciliation_status', 'unknown')}",

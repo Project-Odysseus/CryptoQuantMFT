@@ -35,6 +35,7 @@ class ExecutionOrder:
     order_id: str
     side: str
     size: float
+    symbol: str | None = None
     price: float | None = None
     timestamp: datetime | None = None
     status: str = "SUBMITTED"
@@ -75,7 +76,7 @@ class ExecutionAdapter:
                 return None
         return None
 
-    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
         """Submit an order through the adapter and capture the execution result."""
         raise NotImplementedError
 
@@ -228,6 +229,7 @@ class ExecutionAdapter:
                         order_id=order_id,
                         side=str(payload.get("side", "unknown") or "unknown"),
                         size=self._coerce_float(payload.get("size")) or 0.0,
+                        symbol=str(payload.get("symbol")) if payload.get("symbol") is not None else None,
                         price=self._coerce_float(payload.get("price")),
                         timestamp=datetime.now(),
                         status=str(payload.get("status", "SUBMITTED") or "SUBMITTED").upper(),
@@ -301,6 +303,7 @@ class ExecutionAdapter:
             return
 
         base_currency = self._base_currency
+        position_symbol = self._position_symbol(order.symbol)
         self._balances.setdefault(base_currency, 0.0)
         if order.side == "buy":
             fill_delta = filled_size - previous_fill_size
@@ -309,7 +312,7 @@ class ExecutionAdapter:
             price = float(fill_price or order.price or 0.0)
             fee_delta = max(0.0, (fee or 0.0) - previous_fee)
             self._balances[base_currency] = self._balances.get(base_currency, 0.0) - (fill_delta * price) - fee_delta
-            self._positions["BTC"] = self._positions.get("BTC", 0.0) + fill_delta
+            self._positions[position_symbol] = self._positions.get(position_symbol, 0.0) + fill_delta
         elif order.side == "sell":
             fill_delta = filled_size - previous_fill_size
             if fill_delta <= 0.0:
@@ -317,7 +320,19 @@ class ExecutionAdapter:
             price = float(fill_price or order.price or 0.0)
             fee_delta = max(0.0, (fee or 0.0) - previous_fee)
             self._balances[base_currency] = self._balances.get(base_currency, 0.0) + (fill_delta * price) - fee_delta
-            self._positions["BTC"] = max(0.0, self._positions.get("BTC", 0.0) - fill_delta)
+            self._positions[position_symbol] = max(0.0, self._positions.get(position_symbol, 0.0) - fill_delta)
+            if self._positions[position_symbol] == 0.0:
+                self._positions.pop(position_symbol, None)
+
+    def _position_symbol(self, symbol: str | None) -> str:
+        if not symbol:
+            return "BTC"
+        normalized = str(symbol).strip().upper()
+        for separator in ("/", "-", "_", ":"):
+            if separator in normalized:
+                base_asset = normalized.split(separator, 1)[0].strip()
+                return base_asset or normalized
+        return normalized
 
 
 class SandboxExecutionAdapter(ExecutionAdapter):
@@ -336,7 +351,7 @@ class SandboxExecutionAdapter(ExecutionAdapter):
         self._remote_balances = dict(self._balances)
         self._remote_positions = dict(self._positions)
 
-    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
         """Submit an order through the adapter and capture the execution result."""
         if size <= 0:
             return ExecutionReport(order_id=order_id, status="REJECTED", message="size must be positive")
@@ -348,6 +363,7 @@ class SandboxExecutionAdapter(ExecutionAdapter):
             order_id=order_id,
             side=side,
             size=size,
+            symbol=symbol,
             price=price,
             timestamp=timestamp,
             status="FILLED",
@@ -455,7 +471,7 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
 
-    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
         """Submit an order through the adapter and capture the execution result."""
         if size <= 0:
             return ExecutionReport(order_id=order_id, status="REJECTED", message="size must be positive")
@@ -464,6 +480,7 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
             order_id=order_id,
             side=side,
             size=size,
+            symbol=symbol,
             price=price,
             timestamp=timestamp,
             status="SUBMITTED",
@@ -515,7 +532,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             api_secret=api_secret if api_secret is not None else settings.kraken_secret,
         )
 
-    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
         """Submit an order through the adapter and capture the execution result."""
         if size <= 0:
             return ExecutionReport(order_id=order_id, status="REJECTED", message="size must be positive")
@@ -524,6 +541,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             order_id=order_id,
             side=side,
             size=size,
+            symbol=symbol,
             price=price,
             timestamp=timestamp,
             status="SUBMITTED",
@@ -540,7 +558,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             payload = self._private_request(
                 endpoint="AddOrder",
                 params={
-                    "pair": self._normalize_symbol("BTC/EUR"),
+                    "pair": self._normalize_symbol(symbol or "BTC/EUR"),
                     "type": self._normalize_side(side),
                     "ordertype": "limit",
                     "price": str(price),
@@ -705,7 +723,7 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
             api_secret=None,
         )
 
-    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
         """Submit an order through the adapter and capture the execution result."""
         if size <= 0:
             return ExecutionReport(order_id=order_id, status="REJECTED", message="size must be positive")
@@ -714,6 +732,7 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
             order_id=order_id,
             side=side,
             size=size,
+            symbol=symbol,
             price=price,
             timestamp=timestamp,
             status="SUBMITTED",
@@ -727,16 +746,19 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
             return ExecutionReport(order_id=order_id, status="SUBMITTED", message="staged locally because Firi credentials are not configured")
 
         try:
+            request_data: dict[str, Any] = {
+                "side": self._normalize_side(side),
+                "amount": size,
+                "price": price,
+                "type": "limit",
+            }
+            if symbol:
+                request_data["market"] = symbol.replace("/", "")
             payload = self._request_json(
                 "POST",
                 "https://api.firi.com/v2/orders",
                 headers={"X-API-KEY": self.api_key, "Content-Type": "application/json"},
-                data={
-                    "side": self._normalize_side(side),
-                    "amount": size,
-                    "price": price,
-                    "type": "limit",
-                },
+                data=request_data,
             )
         except RuntimeError as exc:
             order.status = "SUBMITTED"
@@ -869,7 +891,7 @@ class LiveExecutionAdapter(ExecutionAdapter):
         super().__init__()
         self.exchange_name = exchange_name
 
-    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime) -> ExecutionReport:
+    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
         """Submit an order through the adapter and capture the execution result."""
         return ExecutionReport(order_id=order_id, status="REJECTED", message=f"Live execution for {self.exchange_name} is not implemented yet")
 

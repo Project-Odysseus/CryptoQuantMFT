@@ -29,10 +29,11 @@ class ReconciliationEntry:
 class SessionAccountStateTracker:
     """Track balances, positions, and reconciliation state for the current session."""
 
-    def __init__(self, *, exchange_name: str | None = None, base_currency: str | None = None) -> None:
+    def __init__(self, *, exchange_name: str | None = None, base_currency: str | None = None, trading_symbol: str | None = None) -> None:
         """Initialize the object with its runtime state."""
         self.exchange_name = exchange_name or "paper"
-        self.base_currency = base_currency or self._default_currency(exchange_name)
+        self.trading_symbol = trading_symbol or "BTC/USD"
+        self.base_currency = base_currency or self._default_currency(exchange_name, self.trading_symbol)
         self.balances: dict[str, float] = {self.base_currency: 0.0}
         self.positions: dict[str, float] = {}
         self.unsettled_orders: dict[str, dict[str, Any]] = {}
@@ -47,12 +48,15 @@ class SessionAccountStateTracker:
         execution_result: Any | None = None,
         adapter: Any | None = None,
         exchange_name: str | None = None,
+        trading_symbol: str | None = None,
     ) -> dict[str, Any]:
         """Refresh balances, positions, and reconciliation state from runtime state."""
         if exchange_name is not None:
             self.exchange_name = exchange_name
-            self.base_currency = self.base_currency or self._default_currency(exchange_name)
+            self.base_currency = self.base_currency or self._default_currency(exchange_name, self.trading_symbol)
             self.balances.setdefault(self.base_currency, 0.0)
+        if trading_symbol is not None:
+            self.trading_symbol = trading_symbol
 
         if execution_result is not None:
             portfolio_history = getattr(execution_result, "portfolio_history", None) or []
@@ -60,10 +64,11 @@ class SessionAccountStateTracker:
                 latest_snapshot = portfolio_history[-1]
                 self.balances[self.base_currency] = float(getattr(latest_snapshot, "cash", 0.0))
                 position_size = float(getattr(latest_snapshot, "position_size", 0.0))
+                position_symbol = self._position_symbol(self.trading_symbol)
                 if position_size != 0.0:
-                    self.positions["BTC"] = position_size
+                    self.positions[position_symbol] = position_size
                 else:
-                    self.positions.pop("BTC", None)
+                    self.positions.pop(position_symbol, None)
 
         if adapter is not None:
             remote_snapshot = None
@@ -71,9 +76,10 @@ class SessionAccountStateTracker:
                 portfolio_history = getattr(execution_result, "portfolio_history", None) or []
                 if portfolio_history:
                     latest_snapshot = portfolio_history[-1]
+                    position_symbol = self._position_symbol(self.trading_symbol)
                     remote_snapshot = {
                         "balances": {self.base_currency: float(getattr(latest_snapshot, "cash", 0.0))},
-                        "positions": {"BTC": float(getattr(latest_snapshot, "position_size", 0.0))},
+                        "positions": {position_symbol: float(getattr(latest_snapshot, "position_size", 0.0))},
                     }
             self.recover_execution_state(adapter, remote_snapshot=remote_snapshot)
             self._merge_account_snapshot(adapter.get_account_snapshot())
@@ -232,9 +238,28 @@ class SessionAccountStateTracker:
             else "mismatched",
         }
 
-    def _default_currency(self, exchange_name: str | None) -> str:
+    def _default_currency(self, exchange_name: str | None, trading_symbol: str | None = None) -> str:
+        quote_currency = self._quote_currency(trading_symbol)
+        if quote_currency:
+            return quote_currency
         if exchange_name == "kraken":
             return "EUR"
         if exchange_name == "firi":
             return "NOK"
         return "USD"
+
+    def _position_symbol(self, trading_symbol: str | None) -> str:
+        normalized = str(trading_symbol or "BTC").strip().upper()
+        for separator in ("/", "-", "_", ":"):
+            if separator in normalized:
+                base_asset = normalized.split(separator, 1)[0].strip()
+                return base_asset or normalized
+        return normalized
+
+    def _quote_currency(self, trading_symbol: str | None) -> str | None:
+        normalized = str(trading_symbol or "").strip().upper()
+        for separator in ("/", "-", "_", ":"):
+            if separator in normalized:
+                quote_asset = normalized.split(separator, 1)[1].strip()
+                return quote_asset or None
+        return None

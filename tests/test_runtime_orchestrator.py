@@ -19,12 +19,14 @@ from src.storage.trade_logger import TradeLogger
 
 def test_build_runtime_orchestrator_uses_runtime_interval_for_market_data_pipeline(tmp_path: Path) -> None:
     """The runtime pipeline should use the configured interval for bar aggregation."""
-    runtime_config = RuntimeConfig(interval_seconds=3.0, use_mock_connector=True, state_path=tmp_path / "runtime.state.json")
+    runtime_config = RuntimeConfig(interval_seconds=3.0, use_mock_connector=True, trading_symbol="ETH/EUR", state_path=tmp_path / "runtime.state.json")
 
     orchestrator, pipeline = build_runtime_orchestrator(config=runtime_config, mode="paper")
 
     assert orchestrator.interval_seconds == 3.0
     assert pipeline.aggregator.interval_seconds == 3
+    assert orchestrator.trading_symbol == "ETH/EUR"
+    assert orchestrator.account_state_tracker.base_currency == "EUR"
 
 
 @pytest.mark.asyncio

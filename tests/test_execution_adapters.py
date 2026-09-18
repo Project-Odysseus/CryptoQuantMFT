@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from src.execution.adapters import ExecutionRouter, FiriExecutionAdapter, KrakenExecutionAdapter
+from src.execution.adapters import ExecutionRouter, FiriExecutionAdapter, KrakenExecutionAdapter, SandboxExecutionAdapter
 from src.execution.reconciliation import SessionAccountStateTracker
 
 
@@ -145,6 +145,28 @@ def test_session_account_state_tracker_surfaces_recovery_summary() -> None:
     assert summary["recovered_order_count"] == 1
     assert tracker.get_summary()["recovery_summary"]["recovered_order_count"] == 1
     assert tracker.get_summary()["account_reconciliation"]["remote_balances"]["NOK"] == 950.0
+
+
+def test_sandbox_adapter_tracks_positions_from_order_symbol() -> None:
+    """Adapter account reconciliation should derive the asset key from the traded symbol."""
+    adapter = SandboxExecutionAdapter(exchange_name="firi")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._base_currency = "EUR"
+
+    report = adapter.submit_order(
+        order_id="eth-buy",
+        side="buy",
+        size=1.0,
+        price=200.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="ETH/EUR",
+    )
+
+    snapshot = adapter.get_account_snapshot()
+
+    assert report.status == "FILLED"
+    assert snapshot["positions"]["ETH"] == 1.0
+    assert "BTC" not in snapshot["positions"]
 
 
 def test_execution_router_builds_exchange_specific_adapter() -> None:

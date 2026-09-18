@@ -57,7 +57,7 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [ ] Phase D: add end-to-end acceptance tests for paper -> live_dry_run promotion and failure handling (stale data, order rejection, reconciliation mismatch, cancel failure)
 
 - [ ] **Priority 4: Strategy Runtime Reliability**
-  - [ ] Treat paper mode as the source-of-truth validation lane before any live promotion
+  - [x] Treat paper mode as the source-of-truth validation lane before any live promotion
   - [x] Add a “known-good” baseline strategy/runtime config that is used for paper-mode validation every time
   - [x] Persist and surface enough context to debug blocked entries:
     - [x] selected strategy and params
@@ -288,7 +288,7 @@ The recommended path is to run one conservative production-like paper-trading la
   - [ ] Keep one stable baseline strategy active for paper trading only
   - [ ] Run the runtime using live market data with paper execution and the current risk controls
   - [ ] Enforce exchange-specific caps (position size, notional, open orders, open positions)
-  - [ ] Maintain a single source of truth for runtime state: health report, trade logger, reconciliation status, and kill-switch state
+  - [x] Maintain a single source of truth for runtime state: health report, trade logger, reconciliation status, and kill-switch state
   - [ ] Make the runtime easy to monitor with a clear CLI dashboard and a small operational checklist for each run
   - [ ] Use the same risk config and execution path every day so changes are comparable across sessions
   - [ ] Urgency: High
