@@ -4,6 +4,110 @@ A production-grade, event-driven quantitative trading system in Python designed 
 
 ---
 
+## Current Critical Path: Make the Strategy Runtime Actually Runnable
+
+This section captures the highest-priority gaps found by reviewing the docs, codebase, and current tests. The immediate goal is not to start trading yet; it is to make the repository reliably runnable for backtests, paper/runtime strategy execution, and Kraken live-dry-run preparation.
+
+- [ ] **Priority 0: Reproducible Local Environment**
+  - [ ] Add a committed environment definition (`environment.yml`, `requirements.txt`, or `pyproject.toml`) covering the currently required runtime/test dependencies:
+    - [ ] `pydantic`
+    - [ ] `pydantic-settings`
+    - [ ] `loguru`
+    - [ ] `numpy`
+    - [ ] `pandas`
+    - [ ] `matplotlib`
+    - [ ] `pytest`
+  - [ ] Declare and enforce the supported Python version for this repo
+    - [ ] Either standardize on Python 3.10+ (current code uses `@dataclass(slots=True)`)
+    - [ ] Or remove/replace the Python-3.10-only features if Python 3.9 support is required
+  - [ ] Add a fast bootstrap path so a clean machine can install dependencies and run the baseline commands without guesswork
+  - [ ] Add an environment validation command/checklist before runtime work begins
+
+- [ ] **Priority 1: Clean Secrets and Runtime Bootstrap**
+  - [ ] Replace real-looking values in `.env.example` with safe placeholders and rotate any exposed secrets outside the repository
+  - [ ] Document the minimum required environment variables for:
+    - [ ] demo backtests
+    - [ ] mock runtime
+    - [ ] Kraken live-dry-run
+    - [ ] future live trading
+  - [ ] Add a preflight checklist that confirms credentials/config are present without placing orders
+
+- [ ] **Priority 2: Restore a Runnable Baseline**
+  - [ ] Make the repository pass at least test collection in a clean environment
+  - [ ] Make these baseline commands work end-to-end:
+    - [ ] `python main.py --demo-backtest`
+    - [ ] `python main.py --walk-forward`
+    - [ ] `python main.py --runtime paper --use-mock-connector --runtime-iterations 3 --dashboard --report`
+  - [ ] Add smoke tests for the CLI entry points above so “strategy runs at all” is continuously verified
+  - [ ] Audit and fix stale imports, missing modules, and drift between tests and implementation before adding new strategy complexity
+
+- [ ] **Priority 3: Close the Live-Execution Gap Without Trading**
+  - [ ] Implement the missing `live` runtime path in `RuntimeOrchestrator` instead of raising `NotImplementedError`
+  - [ ] Keep the first live exchange milestone at **Kraken live-dry-run only**
+    - [ ] exercise real Kraken authentication, order submission, cancel, and status lookup paths without enabling production trading
+    - [ ] confirm symbol mapping, balances, order IDs, and reconciliation shape against Kraken responses
+    - [ ] verify kill-switch and cancel paths against exchange-shaped state before any real order is allowed
+  - [ ] Add a hard safety gate so live trading cannot be enabled accidentally during development
+  - [ ] Add a manual approval checklist that must pass before moving from `paper` to `live_dry_run`, and from `live_dry_run` to `live`
+  - [ ] Execution plan:
+    - [ ] Phase A: adapter-level validation against Kraken private endpoints with read-only verification of authentication and non-destructive request/response handling
+    - [ ] Phase B: enable `live_dry_run` orchestrator flow to use the exchange adapter and reconciliation stack end to end without placing production orders
+    - [ ] Phase C: add explicit runtime guards for `--runtime live`, including a second confirmation mechanism, strict low-risk caps, and forced kill-switch readiness checks
+    - [ ] Phase D: add end-to-end acceptance tests for paper -> live_dry_run promotion and failure handling (stale data, order rejection, reconciliation mismatch, cancel failure)
+
+- [ ] **Priority 4: Strategy Runtime Reliability**
+  - [ ] Add a “known-good” baseline strategy/runtime config that is used for paper-mode validation every time
+  - [ ] Persist and surface enough context to debug blocked entries:
+    - [ ] selected strategy and params
+    - [ ] latest bars/signal
+    - [ ] risk decision reason
+    - [ ] execution adapter response
+  - [ ] Add end-to-end paper-runtime acceptance criteria:
+    - [ ] startup checks pass
+    - [ ] snapshots persist
+    - [ ] bars are produced
+    - [ ] signals are generated
+    - [ ] risk decisions are logged
+    - [ ] orders/trades/equity snapshots persist
+    - [ ] dashboard/report output remains readable
+
+- [ ] **Priority 5: Resolve the Incomplete Futures Track**
+  - [ ] Decide whether futures support is part of the near-term critical path or should be explicitly deferred behind the spot/Kraken runtime
+  - [ ] If futures remains in scope, finish the incomplete futures implementation:
+    - [ ] `src/execution/contracts/futures_contract.py`
+    - [ ] `src/execution/contracts/registry.py`
+    - [ ] `src/execution/sizing/contract_sizer.py`
+    - [ ] `config/contracts.yaml`
+  - [ ] Add the missing futures unit/integration tests instead of leaving placeholder `pass` test files
+  - [ ] Resolve the stale futures integration reference to `src.portfolio.portfolio_manager_v2` by either implementing the portfolio module or replacing/removing the obsolete test path
+  - [ ] Complete the unfinished sections in `docs/FUTURES_GUIDE.md` once the futures scope and APIs are real
+  - [ ] Futures implementation plan:
+    - [ ] Phase A: define the contract data model invariants and fill `config/contracts.yaml` with real contract examples used by tests
+    - [ ] Phase B: implement registry load/list/validate behavior for YAML-backed contract lookup
+    - [ ] Phase C: implement notional, rounding, and margin calculations in `FuturesContractSizer`
+    - [ ] Phase D: decide how futures integrate with the existing execution/risk/runtime stack before adding portfolio-level behavior
+    - [ ] Phase E: finish docs and replace placeholder tests with executable unit/integration coverage
+
+- [ ] **Priority 5A: Resolve the stale `src.portfolio` reference**
+  - [ ] Current finding: `tests/integration/test_futures_portfolio_integration.py` references `src.portfolio.portfolio_manager_v2`, but that module does not exist in the current tree or git history
+  - [ ] Choose one resolution path and then implement it:
+    - [ ] Option 1: add a minimal `src/portfolio/portfolio_manager_v2.py` only if futures work really needs a separate portfolio layer
+    - [ ] Option 2: rewrite `tests/integration/test_futures_portfolio_integration.py` to target the current execution/risk/runtime architecture instead of a missing portfolio module
+    - [ ] Option 3: explicitly defer that integration test behind a futures milestone and mark it accordingly so the baseline suite can run cleanly
+  - [ ] Preferred path unless futures architecture changes: Option 2 or Option 3, because the repo already centers runtime state around `PaperTradingEngine`, `ExecutionAdapter`, `RiskManager`, and `SessionAccountStateTracker`
+  - [ ] Add a follow-up test policy so placeholder integration tests do not break the default suite during unrelated runtime work
+
+- [ ] **Priority 6: Keep Docs and Roadmap in Sync With Reality**
+  - [ ] Update the architecture map and runbook whenever the runtime path, recovery flow, or live/dry-run behavior changes
+  - [ ] Add a short “current maturity / what is safe to run” section to the roadmap or docs so future work does not assume live trading is already production-ready
+  - [ ] Track readiness by milestone:
+    - [ ] baseline backtest runnable
+    - [ ] mock runtime runnable
+    - [ ] live-dry-run with Kraken runnable
+    - [ ] live trading checklist complete
+
+---
+
 ## Phase 1: Core Architecture & Environment Setup
 - [x] **Repository & Environment Isolation**
   - [x] Initialize Git repository with strict `.gitignore` (`.env`, `*.parquet`, `*.db`, `logs/`, `__pycache__/`)
