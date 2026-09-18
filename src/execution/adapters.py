@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import time
 import urllib.parse
 import urllib.request
@@ -579,7 +580,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
                     "type": self._normalize_side(side),
                     "ordertype": "limit",
                     "price": str(price),
-                    "volume": str(size),
+                    "volume": self._format_decimal(size),
                 },
             )
         except RuntimeError as exc:
@@ -714,6 +715,119 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             raise RuntimeError(self._format_api_errors(errors))
         return self._normalize_remote_orders_payload(payload)
 
+    def fetch_asset_pair_metadata(self, *, symbol: str) -> dict[str, Any]:
+        """Fetch Kraken pair metadata including minimum size and precision rules."""
+        pair_code = self._normalize_symbol(symbol)
+        payload = self._request_json("GET", "https://api.kraken.com/0/public/AssetPairs", params={"pair": pair_code})
+        errors = self._extract_api_errors(payload)
+        if errors:
+            raise RuntimeError(self._format_api_errors(errors))
+        if not isinstance(payload, dict):
+            raise RuntimeError("Unexpected Kraken asset-pair payload")
+        result = payload.get("result", {})
+        if not isinstance(result, dict) or not result:
+            raise RuntimeError(f"Kraken did not return asset-pair metadata for {symbol}")
+        pair_key = pair_code if pair_code in result else next(iter(result.keys()))
+        raw_metadata = result.get(pair_key)
+        if not isinstance(raw_metadata, dict):
+            raise RuntimeError(f"Kraken asset-pair metadata was malformed for {symbol}")
+        return {
+            "pair_code": str(pair_key),
+            "symbol": symbol.upper(),
+            "wsname": raw_metadata.get("wsname"),
+            "altname": raw_metadata.get("altname"),
+            "status": str(raw_metadata.get("status", "unknown")),
+            "ordermin": self._coerce_float(raw_metadata.get("ordermin")) or 0.0,
+            "costmin": self._coerce_float(raw_metadata.get("costmin")) or 0.0,
+            "tick_size": self._coerce_float(raw_metadata.get("tick_size")) or 0.0,
+            "pair_decimals": int(raw_metadata.get("pair_decimals", 0) or 0),
+            "lot_decimals": int(raw_metadata.get("lot_decimals", 0) or 0),
+            "raw": raw_metadata,
+        }
+
+    def fetch_ticker_snapshot(self, *, symbol: str) -> dict[str, Any]:
+        """Fetch the latest Kraken ticker for the requested symbol."""
+        pair_code = self._normalize_symbol(symbol)
+        payload = self._request_json("GET", "https://api.kraken.com/0/public/Ticker", params={"pair": pair_code})
+        errors = self._extract_api_errors(payload)
+        if errors:
+            raise RuntimeError(self._format_api_errors(errors))
+        if not isinstance(payload, dict):
+            raise RuntimeError("Unexpected Kraken ticker payload")
+        result = payload.get("result", {})
+        if not isinstance(result, dict) or not result:
+            raise RuntimeError(f"Kraken did not return ticker data for {symbol}")
+        ticker_key = pair_code if pair_code in result else next(iter(result.keys()))
+        market = result.get(ticker_key)
+        if not isinstance(market, dict):
+            raise RuntimeError(f"Kraken ticker payload was malformed for {symbol}")
+        ask = self._coerce_float((market.get("a") or [None])[0])
+        bid = self._coerce_float((market.get("b") or [None])[0])
+        last = self._coerce_float((market.get("c") or [None])[0])
+        if ask is None or bid is None or last is None:
+            raise RuntimeError(f"Kraken ticker data was incomplete for {symbol}")
+        return {
+            "pair_code": str(ticker_key),
+            "symbol": symbol.upper(),
+            "ask": ask,
+            "bid": bid,
+            "last": last,
+            "raw": market,
+        }
+
+    def preview_quote_order(self, *, symbol: str, quote_amount: float, side: str = "buy") -> dict[str, Any]:
+        """Preview a notional-sized Kraken order using validate=true without placing it."""
+        normalized_side = self._normalize_side(side)
+        if normalized_side != "buy":
+            raise ValueError("quote-order preview currently supports buy orders only")
+        if quote_amount <= 0.0:
+            raise ValueError("quote_amount must be positive")
+
+        pair_metadata = self.fetch_asset_pair_metadata(symbol=symbol)
+        ticker = self.fetch_ticker_snapshot(symbol=symbol)
+        balance_snapshot = self.fetch_balance_snapshot()
+        quote_currency = self._quote_asset(symbol)
+        available_quote_balance = float(balance_snapshot.get("balances", {}).get(quote_currency, 0.0))
+        reference_price = float(ticker["ask"])
+        raw_size = quote_amount / reference_price
+        rounded_size = self._round_down(raw_size, decimals=int(pair_metadata["lot_decimals"]))
+        estimated_cost = rounded_size * reference_price
+        minimum_size = float(pair_metadata["ordermin"])
+        minimum_cost = float(pair_metadata["costmin"])
+        sufficient_balance = available_quote_balance >= quote_amount
+        meets_minimum_size = rounded_size >= minimum_size and rounded_size > 0.0
+        meets_minimum_cost = estimated_cost >= minimum_cost and estimated_cost > 0.0
+
+        validation: dict[str, Any] | None = None
+        validation_error: str | None = None
+        if sufficient_balance and meets_minimum_size and meets_minimum_cost:
+            try:
+                validation = self.validate_order_request(symbol=symbol, side=normalized_side, size=rounded_size)
+            except Exception as exc:
+                validation_error = str(exc)
+
+        return {
+            "symbol": symbol.upper(),
+            "side": normalized_side,
+            "quote_currency": quote_currency,
+            "requested_quote_amount": float(quote_amount),
+            "available_quote_balance": available_quote_balance,
+            "reference_price": reference_price,
+            "raw_size": raw_size,
+            "rounded_size": rounded_size,
+            "estimated_cost": estimated_cost,
+            "minimum_size": minimum_size,
+            "minimum_cost": minimum_cost,
+            "pair_metadata": pair_metadata,
+            "ticker": ticker,
+            "sufficient_balance": sufficient_balance,
+            "meets_minimum_size": meets_minimum_size,
+            "meets_minimum_cost": meets_minimum_cost,
+            "validation": validation,
+            "validation_error": validation_error,
+            "can_submit": sufficient_balance and meets_minimum_size and meets_minimum_cost and validation_error is None and validation is not None,
+        }
+
     def validate_order_request(self, *, symbol: str, side: str, size: float) -> dict[str, Any]:
         """Exercise Kraken's validate-only order path without placing a live order."""
         if size <= 0:
@@ -725,7 +839,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
                 "pair": self._normalize_symbol(symbol),
                 "type": self._normalize_side(side),
                 "ordertype": "market",
-                "volume": str(size),
+                "volume": self._format_decimal(size),
                 "validate": "true",
             },
         )
@@ -748,6 +862,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             "side": self._normalize_side(side),
             "size": size,
             "description": description,
+            "result": result,
         }
 
     def verify_dry_run(
@@ -1061,6 +1176,20 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         if normalized in {"sell", "short"}:
             return "sell"
         raise ValueError(f"unsupported side: {side}")
+
+    def _quote_asset(self, symbol: str) -> str:
+        normalized = symbol.strip().upper()
+        for separator in ("/", "-", "_", ":"):
+            if separator in normalized:
+                return normalized.split(separator, 1)[1].strip()
+        return self._base_currency
+
+    def _round_down(self, value: float, *, decimals: int) -> float:
+        factor = 10 ** max(0, decimals)
+        return math.floor(value * factor) / factor if factor > 0 else math.floor(value)
+
+    def _format_decimal(self, value: float) -> str:
+        return f"{value:.10f}".rstrip("0").rstrip(".")
 
     def _probe_private_endpoint(
         self,

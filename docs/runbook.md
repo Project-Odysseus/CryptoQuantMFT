@@ -52,6 +52,14 @@ python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR
 
 This verifies Kraken private-endpoint authentication, balance/open/closed-order normalization, status/cancel request handling, and the validate-only order path without placing a production order. It also previews which open Kraken orders the kill switch would attempt to cancel after recovering exchange-shaped order state locally.
 
+11. Before the first real Kraken order, preview the intended tiny BTC/EUR buy without sending it:
+
+```bash
+python main.py --kraken-preview-order --kraken-preview-symbol BTC/EUR --kraken-preview-quote-amount 3
+```
+
+This fetches live Kraken pair minimums and precision, checks your EUR balance, estimates the BTC size from the current ask, rounds to Kraken lot precision, and only calls `AddOrder` with `validate=true`.
+
 ## Daily operational checks
 
 After a run starts, verify the following:
@@ -128,6 +136,7 @@ This checklist is intentionally stricter. Completing it does **not** mean the re
 - Run `python main.py --dashboard --report` and confirm the persisted runtime state is readable.
 - Run the paper baseline again if there is any doubt about current repo state.
 - Run `python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR` and confirm all checks pass before trusting exchange credentials or payload normalization.
+- Run `python main.py --kraken-preview-order --kraken-preview-symbol BTC/EUR --kraken-preview-quote-amount <eur_amount>` and confirm the intended notional clears Kraken minimum size/cost rules before attempting any first live order.
 - Confirm the verification output's kill-switch preview matches expectations for any currently open Kraken orders.
 - Seed the EUR fiat pool before the first real Kraken trade with `python main.py --tax-log-fiat-eur <amount> --tax-fx-rate <eur_nok_rate> --tax-reference initial_capital`.
 - Confirm the Norwegian tax ledger stays readable with `python main.py --tax-report --tax-year <year>` and export it before any production rollout.

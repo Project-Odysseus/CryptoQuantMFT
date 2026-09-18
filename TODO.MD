@@ -47,6 +47,7 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] Implement the missing `live` runtime path in `RuntimeOrchestrator` instead of raising `NotImplementedError`
   - [ ] Keep the first live exchange milestone at **Kraken live-dry-run only**
     - [x] exercise real Kraken authentication, order submission, cancel, and status lookup paths without enabling production trading
+    - [x] add a manual quote-order preview command that validates tiny BTC/EUR orders by EUR notional without sending them
     - [ ] confirm symbol mapping, balances, order IDs, and reconciliation shape against Kraken responses
       - [x] add a non-destructive closed-order history probe so real Kraken order payloads can be recovered and inspected without placing orders
       - [ ] re-run verification when the Kraken account has at least one historical or open order so real symbol/order-id mapping can be confirmed from populated exchange data
@@ -93,6 +94,7 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [x] realized PnL/fee logging from runtime execution records
   - [ ] Live-readiness rule: do not move from `live_dry_run` to real live trading until the tax-ledger path is implemented and validated end to end
     - [x] add manual EUR fiat-pool seeding via CLI before the first real Kraken trade
+    - [x] add a manual Kraken preview flow that checks notional sizing, minimum order rules, and `validate=true` acceptance before the first live order
     - [ ] seed the real EUR starting balance/cost basis before the first live order
     - [ ] verify the first real Kraken fill produces correct `REALIZED_PNL` / `TRADING_FEE` / `FIAT_CONVERSION` rows and annual summary output
     - [ ] export the first real trading year ledger and spot-check it against exchange history

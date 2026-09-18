@@ -867,6 +867,70 @@ def _run_kraken_dry_run_verification(
     return verification
 
 
+def _run_kraken_order_preview(
+    *,
+    trade_logger: TradeLogger,
+    symbol: str,
+    side: str,
+    quote_amount: float,
+) -> dict[str, Any]:
+    """Preview a Kraken order by quote notional using validate=true without sending it."""
+    adapter = KrakenExecutionAdapter()
+    preview = adapter.preview_quote_order(symbol=symbol, quote_amount=quote_amount, side=side)
+
+    trade_logger.log_event(
+        timestamp=datetime.now(timezone.utc),
+        level="INFO",
+        event_type="kraken_order_preview",
+        message="Kraken order preview completed without submission",
+        source="main",
+        metadata={
+            "symbol": preview.get("symbol"),
+            "side": preview.get("side"),
+            "requested_quote_amount": preview.get("requested_quote_amount"),
+            "quote_currency": preview.get("quote_currency"),
+            "rounded_size": preview.get("rounded_size"),
+            "estimated_cost": preview.get("estimated_cost"),
+            "can_submit": preview.get("can_submit"),
+            "has_validation": preview.get("validation") is not None,
+            "validation_error": preview.get("validation_error"),
+        },
+    )
+
+    metadata = preview["pair_metadata"]
+    validation = preview.get("validation")
+    print("Kraken order preview")
+    print("--------------------")
+    print("Mode: validate-only (no order submitted)")
+    print(f"Symbol: {preview['symbol']}")
+    print(f"Side: {preview['side']}")
+    print(f"Pair code: {metadata['pair_code']}")
+    print(f"Pair status: {metadata['status']}")
+    print(f"Available {preview['quote_currency']}: {preview['available_quote_balance']:.8f}")
+    print(f"Requested {preview['quote_currency']} notional: {preview['requested_quote_amount']:.8f}")
+    print(f"Reference ask price: {preview['reference_price']:.8f}")
+    print(f"Raw base size: {preview['raw_size']:.10f}")
+    print(f"Rounded base size: {preview['rounded_size']:.10f}")
+    print(f"Estimated order cost: {preview['estimated_cost']:.8f} {preview['quote_currency']}")
+    print(f"Minimum base size: {preview['minimum_size']:.10f}")
+    print(f"Minimum order cost: {preview['minimum_cost']:.8f} {preview['quote_currency']}")
+    print(f"Lot decimals: {metadata['lot_decimals']}")
+    print(f"Price decimals: {metadata['pair_decimals']}")
+    print(f"Tick size: {metadata['tick_size']:.8f}")
+    print("Checks:")
+    print(f"  - balance sufficient: {'yes' if preview['sufficient_balance'] else 'no'}")
+    print(f"  - minimum size met: {'yes' if preview['meets_minimum_size'] else 'no'}")
+    print(f"  - minimum cost met: {'yes' if preview['meets_minimum_cost'] else 'no'}")
+    if validation is not None:
+        print("Kraken validate=true response: accepted")
+        print(f"  - description: {validation.get('description') or 'n/a'}")
+    elif preview.get("validation_error"):
+        print(f"Kraken validate=true response: rejected ({preview['validation_error']})")
+    else:
+        print("Kraken validate=true response: skipped (pre-checks failed)")
+    return preview
+
+
 def main() -> None:
     """Initialize the runtime and run either the data pipeline or a demo backtest."""
     parser = argparse.ArgumentParser(description="CryptoQuantMFT runtime")
@@ -917,6 +981,10 @@ def main() -> None:
     parser.add_argument("--kraken-verify-symbol", default=None, help="Symbol to use for Kraken validate-only order verification, e.g. BTC/EUR")
     parser.add_argument("--kraken-verify-size", type=float, default=0.0002, help="Order size used for Kraken validate-only verification")
     parser.add_argument("--kraken-verify-order-id", default=None, help="Optional Kraken order id to use for a real status-lookup probe during dry-run verification")
+    parser.add_argument("--kraken-preview-order", action="store_true", help="Preview a Kraken order by quote notional using validate=true without submitting it")
+    parser.add_argument("--kraken-preview-symbol", default=None, help="Symbol to use for Kraken order preview, e.g. BTC/EUR")
+    parser.add_argument("--kraken-preview-side", choices=["buy"], default="buy", help="Order side for Kraken preview; currently buy only")
+    parser.add_argument("--kraken-preview-quote-amount", type=float, default=3.0, help="Quote-currency notional for Kraken preview, e.g. 3.0 for 3 EUR on BTC/EUR")
     parser.add_argument("--tax-report", action="store_true", help="Print the Norwegian tax summary for the selected year")
     parser.add_argument("--tax-year", type=int, default=datetime.now(timezone.utc).year, help="Tax year used by --tax-report and tax exports")
     parser.add_argument("--tax-export-path", default=None, help="Optional CSV/JSON path to export tax-ledger rows for the selected tax year")
@@ -947,6 +1015,15 @@ def main() -> None:
             symbol=args.kraken_verify_symbol or runtime_config.trading_symbol or "BTC/EUR",
             size=args.kraken_verify_size,
             probe_order_id=args.kraken_verify_order_id,
+        )
+        return
+
+    if args.kraken_preview_order:
+        _run_kraken_order_preview(
+            trade_logger=logger_store,
+            symbol=args.kraken_preview_symbol or runtime_config.trading_symbol or "BTC/EUR",
+            side=args.kraken_preview_side,
+            quote_amount=args.kraken_preview_quote_amount,
         )
         return
 

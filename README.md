@@ -5,7 +5,7 @@ CryptoQuantMFT is a Python trading-framework prototype for researching, backtest
 ## Current state
 
 - **Stable today:** demo backtests, walk-forward evaluation, paper runtime, runtime health reporting, reconciliation, checkpoints, and kill-switch controls
-- **Validated against Kraken without trading:** private-endpoint auth, balances, open/closed order lookups, status/cancel probes, validate-only order requests, and kill-switch preview
+- **Validated against Kraken without trading:** private-endpoint auth, balances, open/closed order lookups, status/cancel probes, validate-only order requests, kill-switch preview, and manual quote-order preview
 - **Now in place for go-live prep:** Norwegian tax-ledger foundation with Norges Bank EUR/NOK rates, FIFO EUR cost-basis tracking, yearly summary/export, and year-end holdings valuation
 - **Not yet signed off for production trading:** populated real-order reconciliation and post-trade tax-ledger validation against actual Kraken fills
 
@@ -94,6 +94,14 @@ python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR
 
 This checks private-endpoint auth, balances, open/closed orders, status/cancel handling, and a `validate=true` order request without placing a real order.
 
+Preview a small Kraken BTC/EUR buy by EUR notional without sending it:
+
+```bash
+python main.py --kraken-preview-order --kraken-preview-symbol BTC/EUR --kraken-preview-quote-amount 3
+```
+
+This fetches live pair rules, current price, your EUR balance, rounds the BTC size to Kraken precision, and only runs `AddOrder` with `validate=true`.
+
 Seed the EUR fiat pool before the first real Kraken trade:
 
 ```bash
@@ -118,7 +126,8 @@ python main.py --report --report-limit 20
 
 1. Keep paper mode stable and rerun Kraken verification.
 2. Seed the EUR fiat pool for tax basis tracking.
-3. Execute a small real Kraken trade later.
-4. Immediately verify reconciliation, order IDs, fees, and tax-ledger rows from that real fill.
+3. Run a manual `--kraken-preview-order` for the intended tiny order size.
+4. Execute a small real Kraken trade later.
+5. Immediately verify reconciliation, order IDs, fees, and tax-ledger rows from that real fill.
 
-Until step 4 is checked, treat the project as **pre-live but close**.
+Until step 5 is checked, treat the project as **pre-live but close**.
