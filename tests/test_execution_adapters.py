@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 from datetime import datetime
+import pytest
 
 from src.execution.adapters import ExecutionRouter, FiriExecutionAdapter, KrakenExecutionAdapter, SandboxExecutionAdapter
 from src.execution.reconciliation import SessionAccountStateTracker
@@ -320,6 +324,148 @@ def test_kraken_adapter_uses_remote_order_id_for_cancel(monkeypatch) -> None:
 
     assert cancel_report.status == "CANCELED"
     assert calls[-1] == ("CancelOrder", {"txid": "abc123"})
+
+
+def test_kraken_adapter_verify_dry_run_exercises_private_endpoints_non_destructively(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dry-run verification should authenticate, normalize state, and probe non-destructive private endpoints."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((endpoint, params))
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "1000.0", "XXBT": "0.1"}}
+        if endpoint == "OpenOrders":
+            return {
+                "error": [],
+                "result": {
+                    "open": {
+                        "abc123": {
+                            "status": "open",
+                            "vol": "0.1",
+                            "vol_exec": "0.0",
+                            "price": "25000.0",
+                            "descr": {"pair": "XXBTZEUR", "type": "buy"},
+                        }
+                    }
+                },
+            }
+        if endpoint == "QueryOrders":
+            return {
+                "error": [],
+                "result": {
+                    "abc123": {
+                        "status": "open",
+                        "vol": "0.1",
+                        "vol_exec": "0.0",
+                        "price": "25000.0",
+                        "descr": {"pair": "XXBTZEUR", "type": "buy"},
+                    }
+                },
+            }
+        if endpoint == "CancelOrder":
+            return {"error": ["EOrder:Unknown order"]}
+        if endpoint == "AddOrder":
+            return {"error": [], "result": {"descr": {"order": "buy 0.0002 BTC/EUR @ market"}}}
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    summary = adapter.verify_dry_run(symbol="BTC/EUR", size=0.0002)
+
+    assert summary["status"] == "passed"
+    assert summary["balance_snapshot"]["balances"]["EUR"] == 1000.0
+    assert summary["balance_snapshot"]["positions"]["BTC"] == 0.1
+    assert summary["open_order_count"] == 1
+    assert [check["name"] for check in summary["checks"]] == [
+        "balance_snapshot",
+        "open_orders",
+        "order_status",
+        "cancel_order",
+        "validate_order",
+    ]
+    assert calls[2] == ("QueryOrders", {"txid": "abc123", "trades": "false"})
+    assert calls[3] == ("CancelOrder", {"txid": "DRYRUNVERIFY-CANCEL"})
+
+
+def test_kraken_adapter_verify_dry_run_uses_expected_unknown_order_probes_when_no_open_orders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without open orders, the verification should still exercise status/cancel paths safely."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "1000.0"}}
+        if endpoint == "OpenOrders":
+            return {"error": [], "result": {"open": {}}}
+        if endpoint in {"QueryOrders", "CancelOrder"}:
+            return {"error": ["EOrder:Unknown order"]}
+        if endpoint == "AddOrder":
+            return {"error": [], "result": {"descr": {"order": "buy 0.0002 BTC/EUR @ market"}}}
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    summary = adapter.verify_dry_run(symbol="BTC/EUR", size=0.0002)
+
+    assert summary["status"] == "passed"
+    status_check = next(check for check in summary["checks"] if check["name"] == "order_status")
+    cancel_check = next(check for check in summary["checks"] if check["name"] == "cancel_order")
+    assert status_check["ok"] is True
+    assert cancel_check["ok"] is True
+    assert "expected non-destructive error" in status_check["message"]
+
+
+def test_kraken_adapter_verify_dry_run_fails_without_credentials() -> None:
+    """Verification should fail fast when Kraken credentials are missing."""
+    adapter = KrakenExecutionAdapter(api_key="", api_secret="")
+
+    summary = adapter.verify_dry_run()
+
+    assert summary["status"] == "failed"
+    assert summary["checks"][0]["name"] == "credentials"
+    assert summary["checks"][0]["ok"] is False
+
+
+def test_kraken_private_request_uses_base64_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kraken private requests should use the base64-encoded HMAC signature Kraken expects."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret=base64.b64encode(b"secret-bytes").decode("utf-8"))
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        self: KrakenExecutionAdapter,
+        method: str,
+        url: str,
+        *,
+        params=None,
+        headers=None,
+        data=None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["url"] = url
+        captured["headers"] = headers or {}
+        captured["data"] = data
+        return {"error": [], "result": {}}
+
+    monkeypatch.setattr("src.execution.adapters.time.time", lambda: 1700000000.123)
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
+
+    adapter._private_request(endpoint="Balance", params={})
+
+    nonce = str(int(1700000000.123 * 1000))
+    encoded_body = f"nonce={nonce}".encode("utf-8")
+    sha256_digest = hashlib.sha256(f"{nonce}{encoded_body.decode('utf-8')}".encode("utf-8")).digest()
+    expected_signature = base64.b64encode(
+        hmac.new(
+            b"secret-bytes",
+            b"/0/private/Balance" + sha256_digest,
+            hashlib.sha512,
+        ).digest()
+    ).decode("utf-8")
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://api.kraken.com/0/private/Balance"
+    assert captured["data"] == {"nonce": nonce}
+    assert captured["headers"]["API-Sign"] == expected_signature
 
 
 def test_firi_adapter_uses_rest_endpoints_for_submit_and_status(monkeypatch) -> None:

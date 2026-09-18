@@ -77,9 +77,10 @@ class SessionAccountStateTracker:
                 if portfolio_history:
                     latest_snapshot = portfolio_history[-1]
                     position_symbol = self._position_symbol(self.trading_symbol)
+                    position_size = float(getattr(latest_snapshot, "position_size", 0.0))
                     remote_snapshot = {
                         "balances": {self.base_currency: float(getattr(latest_snapshot, "cash", 0.0))},
-                        "positions": {position_symbol: float(getattr(latest_snapshot, "position_size", 0.0))},
+                        "positions": {position_symbol: position_size} if position_size != 0.0 else {},
                     }
             self.recover_execution_state(adapter, remote_snapshot=remote_snapshot)
             self._merge_account_snapshot(adapter.get_account_snapshot())

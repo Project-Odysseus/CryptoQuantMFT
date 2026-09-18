@@ -43,6 +43,7 @@ def test_build_runtime_orchestrator_defaults_live_dry_run_to_kraken_exchange(tmp
     assert orchestrator.execution_engine.execution_adapter.exchange_name == "kraken"
     assert orchestrator.execution_engine.exchange_name == "kraken"
     assert orchestrator.trading_symbol == "BTC/EUR"
+    assert orchestrator.get_health_report()["account_state"]["exchange"] == "kraken"
 
 
 def test_build_runtime_orchestrator_falls_back_to_kraken_dry_run_when_firi_credentials_are_missing(
@@ -101,6 +102,7 @@ async def test_runtime_orchestrator_live_dry_run_tracks_exchange_account_state(t
     assert health_report["account_state"]["exchange"] == "kraken"
     assert health_report["account_state"]["base_currency"] == "EUR"
     assert health_report["account_state"]["balances"]["EUR"] >= 0.0
+    assert health_report["account_state"]["reconciliation_status"] == "matched"
 
 
 @pytest.mark.asyncio

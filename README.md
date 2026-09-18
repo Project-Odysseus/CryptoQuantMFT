@@ -122,6 +122,14 @@ Run the exchange-shaped dry-run promotion lane:
 python main.py --runtime live_dry_run --execution-exchange kraken --runtime-iterations 3 --dashboard --report
 ```
 
+Run a non-destructive Kraken private-endpoint verification before any live promotion:
+
+```bash
+python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR
+```
+
+This probe authenticates against Kraken private endpoints, fetches balances and open orders, exercises status/cancel request handling safely, and uses Kraken's `validate=true` order path so no production order is placed.
+
 `--runtime live` is now guarded on purpose: it requires `--enable-live-trading`, the exact confirmation token `--live-confirmation ENABLE_LIVE_TRADING`, an explicit non-auto `--execution-exchange`, and a ready/inactive kill-switch state before the CLI will even attempt the live path.
 
 Show recent persisted runtime activity:

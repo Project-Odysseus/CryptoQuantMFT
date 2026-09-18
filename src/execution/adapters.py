@@ -10,7 +10,7 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from config import settings
@@ -680,6 +680,165 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         normalized_orders = self._normalize_remote_orders_payload(remote_orders)
         return super().recover_execution_state(remote_snapshot=normalized_snapshot, remote_orders=normalized_orders or None)
 
+    def fetch_balance_snapshot(self) -> dict[str, Any]:
+        """Fetch and normalize the current Kraken account balance snapshot."""
+        payload = self._private_request(endpoint="Balance", params={})
+        errors = self._extract_api_errors(payload)
+        if errors:
+            raise RuntimeError(self._format_api_errors(errors))
+        normalized = self._normalize_balance_snapshot_payload(payload)
+        if normalized is None:
+            raise RuntimeError("Kraken balance snapshot was empty")
+        return normalized
+
+    def fetch_open_orders(self) -> list[dict[str, Any]]:
+        """Fetch and normalize the current Kraken open-order snapshot."""
+        payload = self._private_request(endpoint="OpenOrders", params={"trades": "false"})
+        errors = self._extract_api_errors(payload)
+        if errors:
+            raise RuntimeError(self._format_api_errors(errors))
+        return self._normalize_remote_orders_payload(payload)
+
+    def validate_order_request(self, *, symbol: str, side: str, size: float) -> dict[str, Any]:
+        """Exercise Kraken's validate-only order path without placing a live order."""
+        if size <= 0:
+            raise ValueError("size must be positive")
+
+        payload = self._private_request(
+            endpoint="AddOrder",
+            params={
+                "pair": self._normalize_symbol(symbol),
+                "type": self._normalize_side(side),
+                "ordertype": "market",
+                "volume": str(size),
+                "validate": "true",
+            },
+        )
+        errors = self._extract_api_errors(payload)
+        if errors:
+            raise RuntimeError(self._format_api_errors(errors))
+
+        result = payload.get("result", {}) if isinstance(payload, dict) else {}
+        description = None
+        if isinstance(result, dict):
+            descr = result.get("descr")
+            if isinstance(descr, dict):
+                description = descr.get("order")
+            elif descr is not None:
+                description = str(descr)
+
+        return {
+            "validated": True,
+            "symbol": symbol,
+            "side": self._normalize_side(side),
+            "size": size,
+            "description": description,
+        }
+
+    def verify_dry_run(
+        self,
+        *,
+        symbol: str = "BTC/EUR",
+        side: str = "buy",
+        size: float = 0.0002,
+        probe_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run non-destructive Kraken private-endpoint verification for live_dry_run readiness."""
+        summary: dict[str, Any] = {
+            "exchange": self.exchange_name,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "symbol": symbol,
+            "side": side,
+            "size": size,
+            "credentials_configured": bool(self.api_key and self.api_secret),
+            "checks": [],
+        }
+        if not summary["credentials_configured"]:
+            summary["status"] = "failed"
+            summary["checks"].append(
+                {
+                    "name": "credentials",
+                    "ok": False,
+                    "message": "Kraken credentials are not configured",
+                }
+            )
+            return summary
+
+        checks: list[dict[str, Any]] = []
+
+        balance_snapshot: dict[str, Any] | None = None
+        try:
+            balance_snapshot = self.fetch_balance_snapshot()
+            checks.append(
+                {
+                    "name": "balance_snapshot",
+                    "ok": True,
+                    "message": "authenticated balance snapshot retrieved",
+                    "balances": balance_snapshot.get("balances", {}),
+                    "positions": balance_snapshot.get("positions", {}),
+                }
+            )
+        except Exception as exc:
+            checks.append({"name": "balance_snapshot", "ok": False, "message": str(exc)})
+
+        open_orders: list[dict[str, Any]] = []
+        try:
+            open_orders = self.fetch_open_orders()
+            checks.append(
+                {
+                    "name": "open_orders",
+                    "ok": True,
+                    "message": f"retrieved {len(open_orders)} open orders",
+                    "open_order_count": len(open_orders),
+                }
+            )
+        except Exception as exc:
+            checks.append({"name": "open_orders", "ok": False, "message": str(exc)})
+
+        status_probe_order_id = probe_order_id
+        expected_status_errors: tuple[str, ...] = ()
+        if status_probe_order_id is None and open_orders:
+            status_probe_order_id = str(open_orders[0].get("remote_order_id") or open_orders[0].get("order_id") or "")
+        if not status_probe_order_id:
+            status_probe_order_id = "DRYRUNVERIFY-STATUS"
+            expected_status_errors = ("unknown order", "invalid order")
+        checks.append(
+            self._probe_private_endpoint(
+                name="order_status",
+                endpoint="QueryOrders",
+                params={"txid": status_probe_order_id, "trades": "false"},
+                expected_errors=expected_status_errors,
+            )
+        )
+
+        checks.append(
+            self._probe_private_endpoint(
+                name="cancel_order",
+                endpoint="CancelOrder",
+                params={"txid": "DRYRUNVERIFY-CANCEL"},
+                expected_errors=("unknown order", "invalid order"),
+            )
+        )
+
+        try:
+            validation = self.validate_order_request(symbol=symbol, side=side, size=size)
+            checks.append(
+                {
+                    "name": "validate_order",
+                    "ok": True,
+                    "message": "Kraken validate-only order probe succeeded",
+                    "description": validation.get("description"),
+                }
+            )
+        except Exception as exc:
+            checks.append({"name": "validate_order", "ok": False, "message": str(exc)})
+
+        summary["checks"] = checks
+        summary["balance_snapshot"] = balance_snapshot or {}
+        summary["open_order_count"] = len(open_orders)
+        summary["status"] = "passed" if all(bool(check.get("ok")) for check in checks) else "failed"
+        return summary
+
     def _private_request(self, *, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
         if not self.api_key or not self.api_secret:
             raise RuntimeError("Kraken credentials not configured")
@@ -697,10 +856,10 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             secret_bytes,
             f"/0/private/{endpoint}".encode("utf-8") + sha256_digest,
             hashlib.sha512,
-        ).hexdigest()
+        ).digest()
         headers = {
             "API-Key": self.api_key,
-            "API-Sign": signature,
+            "API-Sign": base64.b64encode(signature).decode("utf-8"),
             "Content-Type": "application/x-www-form-urlencoded",
         }
         return self._request_json(
@@ -850,6 +1009,46 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         if normalized in {"sell", "short"}:
             return "sell"
         raise ValueError(f"unsupported side: {side}")
+
+    def _probe_private_endpoint(
+        self,
+        *,
+        name: str,
+        endpoint: str,
+        params: dict[str, Any],
+        expected_errors: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        try:
+            payload = self._private_request(endpoint=endpoint, params=params)
+        except Exception as exc:
+            return {"name": name, "ok": False, "message": str(exc)}
+
+        errors = self._extract_api_errors(payload)
+        if not errors:
+            return {"name": name, "ok": True, "message": f"{endpoint} succeeded"}
+
+        normalized_errors = [str(error).lower() for error in errors]
+        if expected_errors and any(expected in error for expected in expected_errors for error in normalized_errors):
+            return {
+                "name": name,
+                "ok": True,
+                "message": f"{endpoint} returned expected non-destructive error",
+                "errors": errors,
+            }
+        return {"name": name, "ok": False, "message": self._format_api_errors(errors), "errors": errors}
+
+    def _extract_api_errors(self, payload: Any) -> list[str]:
+        if not isinstance(payload, dict):
+            return []
+        raw_errors = payload.get("error")
+        if isinstance(raw_errors, list):
+            return [str(error) for error in raw_errors if str(error).strip()]
+        if isinstance(raw_errors, str) and raw_errors.strip():
+            return [raw_errors]
+        return []
+
+    def _format_api_errors(self, errors: list[str]) -> str:
+        return "; ".join(error for error in errors if error) or "Kraken API returned an unknown error"
 
 
 class FiriExecutionAdapter(ExchangeExecutionAdapter):

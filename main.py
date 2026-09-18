@@ -8,11 +8,12 @@ import signal
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from config import settings
 from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, evaluate_walk_forward, resolve_strategy, run_backtest
 from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
-from src.execution import ExecutionRouter, PaperTradingEngine
+from src.execution import ExecutionRouter, KrakenExecutionAdapter, PaperTradingEngine
 from src.risk.controls import DEFAULT_EXCHANGE_RISK_LIMITS, RiskControlConfig, RiskManager
 from src.risk.kill_switch import KillSwitchController
 from src.data.historical import fetch_kraken_ohlcv
@@ -739,6 +740,61 @@ def print_post_run_analysis(limit: int | None = None, since: str | None = None) 
     print(sep)
 
 
+def _run_kraken_dry_run_verification(
+    *,
+    trade_logger: TradeLogger,
+    symbol: str,
+    size: float,
+    probe_order_id: str | None,
+) -> dict[str, Any]:
+    """Run a non-destructive Kraken private-endpoint verification and print the result."""
+    adapter = KrakenExecutionAdapter()
+    verification = adapter.verify_dry_run(symbol=symbol, size=size, probe_order_id=probe_order_id)
+
+    trade_logger.log_event(
+        timestamp=datetime.now(timezone.utc),
+        level="INFO" if verification.get("status") == "passed" else "WARNING",
+        event_type="kraken_dry_run_verification",
+        message=f"Kraken dry-run verification {verification.get('status', 'unknown')}",
+        source="main",
+        metadata={
+            "status": verification.get("status"),
+            "symbol": symbol,
+            "size": size,
+            "probe_order_id": probe_order_id,
+            "check_results": [
+                {
+                    "name": check.get("name"),
+                    "ok": check.get("ok"),
+                    "message": check.get("message"),
+                }
+                for check in verification.get("checks", [])
+            ],
+        },
+    )
+
+    print("Kraken dry-run verification")
+    print("---------------------------")
+    print(f"Status: {verification.get('status', 'unknown')}")
+    print(f"Symbol: {verification.get('symbol', symbol)}")
+    print(f"Size: {verification.get('size', size)}")
+    print(f"Credentials configured: {verification.get('credentials_configured', False)}")
+    if verification.get("balance_snapshot"):
+        balances = verification["balance_snapshot"].get("balances", {})
+        positions = verification["balance_snapshot"].get("positions", {})
+        print(f"Balance currencies: {len(balances)}")
+        print(f"Open position symbols: {len(positions)}")
+    print(f"Open orders observed: {verification.get('open_order_count', 0)}")
+    print("Checks:")
+    for check in verification.get("checks", []):
+        marker = "PASS" if check.get("ok") else "FAIL"
+        print(f"  - [{marker}] {check.get('name')}: {check.get('message')}")
+
+    if verification.get("status") != "passed":
+        raise SystemExit("Kraken dry-run verification failed")
+    return verification
+
+
 def main() -> None:
     """Initialize the runtime and run either the data pipeline or a demo backtest."""
     parser = argparse.ArgumentParser(description="CryptoQuantMFT runtime")
@@ -785,6 +841,10 @@ def main() -> None:
     parser.add_argument("--since", default=None, help="Filter --post-run-analysis to data on or after this date (YYYY-MM-DD)")
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
+    parser.add_argument("--kraken-verify-dry-run", action="store_true", help="Run a non-destructive Kraken private-endpoint verification for live_dry_run readiness")
+    parser.add_argument("--kraken-verify-symbol", default=None, help="Symbol to use for Kraken validate-only order verification, e.g. BTC/EUR")
+    parser.add_argument("--kraken-verify-size", type=float, default=0.0002, help="Order size used for Kraken validate-only verification")
+    parser.add_argument("--kraken-verify-order-id", default=None, help="Optional Kraken order id to use for a real status-lookup probe during dry-run verification")
     args = parser.parse_args()
     runtime_config = build_runtime_config_from_args(args, argv=sys.argv[1:])
 
@@ -800,6 +860,15 @@ def main() -> None:
         print("Kill switch activated")
         print(f"Reason: {state['reason']}")
         print(f"Orders cancelled: {len(state['orders_cancelled'])}")
+        return
+
+    if args.kraken_verify_dry_run:
+        _run_kraken_dry_run_verification(
+            trade_logger=logger_store,
+            symbol=args.kraken_verify_symbol or runtime_config.trading_symbol or "BTC/EUR",
+            size=args.kraken_verify_size,
+            probe_order_id=args.kraken_verify_order_id,
+        )
         return
 
     if args.l2_simulator:

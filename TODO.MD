@@ -46,7 +46,7 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] Break Priority 3 into tracked implementation subtasks in `todo_important.md`
   - [x] Implement the missing `live` runtime path in `RuntimeOrchestrator` instead of raising `NotImplementedError`
   - [ ] Keep the first live exchange milestone at **Kraken live-dry-run only**
-    - [ ] exercise real Kraken authentication, order submission, cancel, and status lookup paths without enabling production trading
+    - [x] exercise real Kraken authentication, order submission, cancel, and status lookup paths without enabling production trading
     - [ ] confirm symbol mapping, balances, order IDs, and reconciliation shape against Kraken responses
     - [ ] verify kill-switch and cancel paths against exchange-shaped state before any real order is allowed
   - [x] Add a hard safety gate so live trading cannot be enabled accidentally during development
@@ -59,10 +59,35 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] Subtask 6: add acceptance coverage for promotion and failure handling
   - [x] Subtask 7: implement the guarded `live` runtime path in the orchestrator
   - [ ] Execution plan:
-    - [ ] Phase A: adapter-level validation against Kraken private endpoints with read-only verification of authentication and non-destructive request/response handling
+    - [x] Phase A: adapter-level validation against Kraken private endpoints with read-only verification of authentication and non-destructive request/response handling
     - [x] Phase B: enable `live_dry_run` orchestrator flow to use the exchange adapter and reconciliation stack end to end without placing production orders
     - [x] Phase C: add explicit runtime guards for `--runtime live`, including a second confirmation mechanism, strict low-risk caps, and forced kill-switch readiness checks
     - [x] Phase D: add end-to-end acceptance tests for paper -> live_dry_run promotion and failure handling (stale data, order rejection, reconciliation mismatch, cancel failure)
+
+- [ ] **Priority 3A: Norwegian Tax Logging Readiness Before Live Trading**
+  - [ ] Replace the current generic EUR/NOK spot-rate helper with a Norges Bank-backed daily FX source and local cache
+    - [ ] fetch official EUR/NOK middle rates from `https://data.norges-bank.no/api/data/EXR/B.EUR.NOK.SP?format=sdmx-json`
+    - [ ] store daily rates locally with trade-date lookup instead of only "latest rate" caching
+    - [ ] fall back to the last preceding business day for weekends and bank holidays
+  - [ ] Add a dedicated tax ledger schema for realized crypto and fiat tax events
+    - [ ] persist `id`, `timestamp_utc`, `transaction_type`, `symbol`, `amount_eur`, `norges_bank_fx_rate`, `amount_nok`, and `cost_basis_nok`
+    - [ ] keep tax-ledger writes separate from generic operational events so exports stay deterministic
+  - [ ] Emit tax-ledger events at realization time instead of only relying on year-end summaries
+    - [ ] log realized trade PnL in EUR and NOK at close time
+    - [ ] log trading fees as separate taxable/deductible events
+    - [ ] log funding fees once futures/perpetuals are enabled
+    - [ ] log EUR fiat conversions and maintain the running EUR cost basis for `valutagevinst/valutatap`
+  - [ ] Add year-end holdings valuation support for Norwegian wealth tax readiness
+    - [ ] snapshot crypto holdings and EUR balances as of Dec 31st 23:59 CET
+    - [ ] convert the holdings valuation to NOK for wealth-tax reporting
+  - [ ] Add export/reporting surfaces required before any real live rollout
+    - [ ] CSV/JSON export compatible with Koinly/Divly-style tax imports
+    - [ ] year-end Skattemeldingen summary covering gains, losses, fiat FX gain/loss, and Dec 31 holdings valuation
+  - [ ] Add acceptance coverage for tax-critical edge cases
+    - [ ] weekend/holiday FX fallback
+    - [ ] EUR pool cost-basis updates across multiple conversions
+    - [ ] realized PnL/fee logging from runtime execution records
+  - [ ] Live-readiness rule: do not move from `live_dry_run` to real live trading until the tax-ledger path is implemented and validated end to end
 
 - [ ] **Priority 4: Strategy Runtime Reliability**
   - [x] Treat paper mode as the source-of-truth validation lane before any live promotion
@@ -115,7 +140,7 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [ ] Track readiness by milestone:
     - [x] baseline backtest runnable
     - [x] mock runtime runnable
-    - [ ] live-dry-run with Kraken runnable
+    - [x] live-dry-run with Kraken runnable
     - [ ] small-size live rollout approved after paper and live-dry-run validation
     - [ ] live trading checklist complete
 
@@ -419,3 +444,4 @@ The recommended path is to run one conservative production-like paper-trading la
   - [ ] Define position limits, max notional, and per-exchange risk caps before enabling live trading
   - [ ] Add a manual override / approval workflow for any change to live strategy or risk settings
   - [ ] Record who approved each deployment and what risk limits were active at the time
+  - [ ] Add Norwegian tax-operating controls: ledger completeness checks, yearly export procedure, and Dec 31 valuation checklist before any production rollout

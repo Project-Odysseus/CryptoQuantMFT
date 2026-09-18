@@ -44,6 +44,13 @@ python main.py \
 7. The health snapshot now reports entry-decision reasons, current position-side PnL, the latest bar and signal, and the latest order/adapter context so you can audit blocked fills without digging through raw logs.
 8. The live plot is written to `plots/runtime_live_plot.png` and updates each runtime cycle while the process is running.
 9. `--runtime live` is intentionally guarded: it now requires `--enable-live-trading`, `--live-confirmation ENABLE_LIVE_TRADING`, an explicit `--execution-exchange`, and a ready/inactive kill-switch state before the CLI will proceed.
+10. Before any live promotion, run the non-destructive Kraken verification probe:
+
+```bash
+python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR
+```
+
+This verifies Kraken private-endpoint authentication, balance/open-order normalization, status/cancel request handling, and the validate-only order path without placing a production order.
 
 ## Daily operational checks
 
@@ -99,7 +106,7 @@ This checklist is intentionally stricter. Completing it does **not** mean the re
 
 1. Keep `paper` as the source-of-truth baseline and `live_dry_run` as the immediate promotion lane.
 2. Confirm the exchange remains limited to the current near-term target (`kraken`).
-3. Confirm exchange symbol mapping, order IDs, balance normalization, and reconciliation payload handling have already been validated in tests and recent dry-run usage.
+3. Confirm exchange symbol mapping, order IDs, balance normalization, reconciliation payload handling, and the non-destructive Kraken verification probe have all passed recently.
 4. Confirm the kill switch is ready, inactive, and understood operationally.
 5. Confirm conservative caps remain in place for the target exchange:
    - `max_position_size <= 0.5`
@@ -112,12 +119,13 @@ This checklist is intentionally stricter. Completing it does **not** mean the re
    - `--live-confirmation ENABLE_LIVE_TRADING`
 7. Confirm `--execution-exchange` is explicit and `--use-mock-connector` is not present.
 8. Confirm you have a rollback plan: kill-switch activation, order-cancel procedure, and state inspection path.
-9. Do **not** start `live` until the remaining live-runtime implementation work is complete; today the CLI guard can pass, but the orchestrator still intentionally blocks the actual live execution path.
+9. Do **not** start `live` until recent Kraken verification, paper stability, and live-dry-run checks all pass together; the guarded live path now exists, but exchange validation is still the final confidence gate before any capital is exposed.
 
 ## Non-destructive verification steps before any promotion
 
 - Run `python main.py --dashboard --report` and confirm the persisted runtime state is readable.
 - Run the paper baseline again if there is any doubt about current repo state.
+- Run `python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR` and confirm all checks pass before trusting exchange credentials or payload normalization.
 - For dry-run work, prefer a short bounded run first (`--runtime-iterations 3`) before longer sessions.
 - If testing live guards only, verify the CLI refuses `--runtime live` without the required flags instead of trying to work around the protections.
 - If the kill switch was triggered earlier, reset and verify the state before any further promotion attempt.

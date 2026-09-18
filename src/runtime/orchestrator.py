@@ -145,8 +145,12 @@ class RuntimeOrchestrator:
         self.stale_quote_threshold_seconds = max(30.0, float(interval_seconds) * 10.0)
         self.heartbeat_timeout_seconds = max(2 * self.stale_quote_threshold_seconds, float(watchdog_timeout_seconds))
         self.last_heartbeat_at: datetime | None = None
+        initial_exchange_name = "paper" if mode == "paper" else (
+            getattr(getattr(self.execution_engine, "execution_adapter", None), "exchange_name", None)
+            or getattr(self.execution_engine, "exchange_name", None)
+        )
         self.account_state_tracker = SessionAccountStateTracker(
-            exchange_name="paper" if mode == "paper" else None,
+            exchange_name=initial_exchange_name,
             trading_symbol=self.trading_symbol,
         )
         if getattr(self.execution_engine, "circuit_breaker", None) is None:
@@ -371,7 +375,7 @@ class RuntimeOrchestrator:
             raise
 
         adapter = getattr(self.execution_engine, "execution_adapter", None)
-        exchange_name = getattr(adapter, "exchange_name", None)
+        exchange_name = getattr(adapter, "exchange_name", None) or getattr(self.execution_engine, "exchange_name", None)
         account_state_summary = self.account_state_tracker.update_from_runtime(
             execution_result=execution_result,
             adapter=adapter,
