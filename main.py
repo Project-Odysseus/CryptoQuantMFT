@@ -125,6 +125,7 @@ def build_runtime_orchestrator(
         trade_logger=trade_logger,
         execution_adapter=execution_router.adapter,
         exchange_name=effective_exchange,
+        enable_tax_logging=(runtime_config.mode == "live"),
     )
     strategy = resolve_strategy(runtime_config.strategy_name, **runtime_config.strategy_params)
     # Derive the primary trading symbol from the first connector so bars and
@@ -740,6 +741,59 @@ def print_post_run_analysis(limit: int | None = None, since: str | None = None) 
     print(sep)
 
 
+def print_tax_report(*, tax_year: int, export_path: str | None = None, export_format: str | None = None) -> None:
+    """Print the annual Norwegian tax summary and optionally export the raw ledger."""
+    logger_store = TradeLogger(database_path=settings.database_path)
+    summary = logger_store.get_tax_year_summary(tax_year)
+
+    print("Norwegian tax summary")
+    print("---------------------")
+    print(f"Tax year: {summary['tax_year']}")
+    print(f"Gross taxable gains (NOK): {summary['total_gross_taxable_gains_nok']:.4f}")
+    print(f"Gross deductible losses (NOK): {summary['total_gross_deductible_losses_nok']:.4f}")
+    print(f"Net foreign currency gain/loss (NOK): {summary['net_foreign_currency_gain_loss_nok']:.4f}")
+    print(f"Trading fees (NOK): {summary['total_trading_fees_nok']:.4f}")
+    print(f"Funding fees (NOK): {summary['total_funding_fees_nok']:.4f}")
+    print(f"Tax events: {summary['tax_event_count']}")
+
+    wealth_snapshot = summary.get("wealth_tax_snapshot")
+    if wealth_snapshot is None:
+        print("Year-end holdings valuation: not recorded")
+    else:
+        print(
+            "Year-end holdings valuation: {value_nok:.4f} NOK ({value_eur:.4f} EUR @ {fx_rate:.4f})".format(
+                value_nok=wealth_snapshot["total_value_nok"],
+                value_eur=wealth_snapshot["total_value_eur"],
+                fx_rate=wealth_snapshot["norges_bank_fx_rate"],
+            )
+        )
+
+    if export_path:
+        export_target = logger_store.export_tax_ledger(path=export_path, tax_year=tax_year, export_format=export_format)
+        print(f"Exported ledger: {export_target}")
+
+
+def record_tax_fiat_conversion(*, amount_eur: float, fx_rate: float | None, reference: str | None) -> None:
+    """Record a manual EUR fiat-pool adjustment for tax-basis tracking."""
+    logger_store = TradeLogger(database_path=settings.database_path)
+    entry_id = logger_store.log_fiat_conversion(
+        timestamp=datetime.now(timezone.utc),
+        amount_eur=amount_eur,
+        source="cli_manual_tax_entry",
+        fx_rate=fx_rate,
+        reference=reference,
+        metadata={"entered_via": "cli"},
+    )
+    print("Recorded EUR fiat conversion")
+    print("----------------------------")
+    print(f"Entry id: {entry_id}")
+    print(f"Amount EUR: {amount_eur:.8f}")
+    if fx_rate is not None:
+        print(f"FX rate: {fx_rate:.4f}")
+    if reference:
+        print(f"Reference: {reference}")
+
+
 def _run_kraken_dry_run_verification(
     *,
     trade_logger: TradeLogger,
@@ -789,6 +843,7 @@ def _run_kraken_dry_run_verification(
         print(f"Balance currencies: {len(balances)}")
         print(f"Open position symbols: {len(positions)}")
     print(f"Open orders observed: {verification.get('open_order_count', 0)}")
+    print(f"Closed orders observed: {verification.get('closed_order_count', 0)}")
     print(f"Recovered orders: {verification.get('recovered_order_count', 0)}")
     print(f"Kill-switch preview cancellations: {kill_switch_preview.get('order_count', 0)}")
     print("Checks:")
@@ -862,6 +917,13 @@ def main() -> None:
     parser.add_argument("--kraken-verify-symbol", default=None, help="Symbol to use for Kraken validate-only order verification, e.g. BTC/EUR")
     parser.add_argument("--kraken-verify-size", type=float, default=0.0002, help="Order size used for Kraken validate-only verification")
     parser.add_argument("--kraken-verify-order-id", default=None, help="Optional Kraken order id to use for a real status-lookup probe during dry-run verification")
+    parser.add_argument("--tax-report", action="store_true", help="Print the Norwegian tax summary for the selected year")
+    parser.add_argument("--tax-year", type=int, default=datetime.now(timezone.utc).year, help="Tax year used by --tax-report and tax exports")
+    parser.add_argument("--tax-export-path", default=None, help="Optional CSV/JSON path to export tax-ledger rows for the selected tax year")
+    parser.add_argument("--tax-export-format", choices=["csv", "json"], default=None, help="Optional format override for --tax-export-path")
+    parser.add_argument("--tax-log-fiat-eur", type=float, default=None, help="Manually record a EUR pool increase/decrease for tax basis tracking; positive acquires EUR, negative spends EUR")
+    parser.add_argument("--tax-fx-rate", type=float, default=None, help="Optional EUR/NOK rate override used with --tax-log-fiat-eur")
+    parser.add_argument("--tax-reference", default=None, help="Optional reference recorded with manual tax-ledger entries")
     args = parser.parse_args()
     runtime_config = build_runtime_config_from_args(args, argv=sys.argv[1:])
 
@@ -885,6 +947,22 @@ def main() -> None:
             symbol=args.kraken_verify_symbol or runtime_config.trading_symbol or "BTC/EUR",
             size=args.kraken_verify_size,
             probe_order_id=args.kraken_verify_order_id,
+        )
+        return
+
+    if args.tax_report:
+        print_tax_report(
+            tax_year=args.tax_year,
+            export_path=args.tax_export_path,
+            export_format=args.tax_export_format,
+        )
+        return
+
+    if args.tax_log_fiat_eur is not None:
+        record_tax_fiat_conversion(
+            amount_eur=args.tax_log_fiat_eur,
+            fx_rate=args.tax_fx_rate,
+            reference=args.tax_reference,
         )
         return
 

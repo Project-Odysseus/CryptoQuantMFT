@@ -427,3 +427,62 @@ def test_paper_trading_engine_logs_runtime_symbol_and_exchange_for_trades() -> N
     assert logger.trades
     assert logger.trades[0]["exchange"] == "kraken"
     assert logger.trades[0]["pair"] == "ETH/EUR"
+
+
+def test_paper_trading_engine_enables_tax_logging_only_when_requested() -> None:
+    """Live-mode tax logging should be opt-in at the execution engine layer."""
+    class FakeTradeLogger:
+        def __init__(self) -> None:
+            self.trades: list[dict[str, object]] = []
+
+        def log_event(self, **_: object) -> int:
+            return 1
+
+        def log_trade(self, **kwargs: object) -> int:
+            self.trades.append(kwargs)
+            return 1
+
+        def log_equity_snapshot(self, **_: object) -> int:
+            return 1
+
+    logger = FakeTradeLogger()
+    bars = [
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        ),
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+            open=101.0,
+            high=101.0,
+            low=101.0,
+            close=101.0,
+            volume=10.0,
+        ),
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc),
+            open=102.0,
+            high=102.0,
+            low=102.0,
+            close=102.0,
+            volume=10.0,
+        ),
+    ]
+
+    PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, trade_logger=logger, enable_tax_logging=True).run(bars, [1.0, 0.0, 0.0])
+
+    assert logger.trades
+    assert logger.trades[0]["record_tax_event"] is True

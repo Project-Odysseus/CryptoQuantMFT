@@ -100,3 +100,83 @@ def test_trade_logger_round_trips_structured_event_metadata(tmp_path: Path) -> N
     assert events[0]["metadata"]["timestamp"] == timestamp.isoformat()
     assert events[0]["metadata"]["path"] == str(tmp_path / "state.json")
     assert events[0]["metadata"]["latest_signal"] == 1.0
+
+
+def test_trade_logger_builds_tax_ledger_for_eur_trades_and_fiat_pool(tmp_path: Path) -> None:
+    """EUR-denominated trades should create tax-ledger entries with FIFO basis tracking."""
+    logger = TradeLogger(database_path=tmp_path / "trades.db")
+    logger.fx_rate_collector.get_rate = lambda pair="EUR/NOK", at=None: 11.0  # type: ignore[method-assign]
+    buy_time = datetime(2024, 1, 2, 10, 0, tzinfo=timezone.utc)
+    sell_time = datetime(2024, 1, 3, 10, 0, tzinfo=timezone.utc)
+
+    logger.log_fiat_conversion(
+        timestamp=buy_time,
+        amount_eur=1000.0,
+        source="manual_seed",
+        fx_rate=11.0,
+        reference="initial_capital",
+    )
+    logger.log_trade(
+        timestamp=buy_time,
+        source="live_trading",
+        exchange="kraken",
+        pair="BTC/EUR",
+        side="buy",
+        price=100.0,
+        size=2.0,
+        fee=1.0,
+        record_tax_event=True,
+    )
+    logger.log_trade(
+        timestamp=sell_time,
+        source="live_trading",
+        exchange="kraken",
+        pair="BTC/EUR",
+        side="sell",
+        price=120.0,
+        size=1.0,
+        fee=1.0,
+        record_tax_event=True,
+    )
+
+    tax_events = logger.list_tax_events(tax_year=2024)
+    summary = logger.get_tax_year_summary(2024)
+
+    realized_pnl_event = next(event for event in tax_events if event["transaction_type"] == "REALIZED_PNL")
+    fee_events = [event for event in tax_events if event["transaction_type"] == "TRADING_FEE"]
+    fiat_events = [event for event in tax_events if event["transaction_type"] == "FIAT_CONVERSION"]
+
+    assert realized_pnl_event["amount_eur"] == 20.0
+    assert realized_pnl_event["amount_nok"] == 220.0
+    assert len(fee_events) == 2
+    assert len(fiat_events) == 5
+    assert summary["total_gross_taxable_gains_nok"] == 220.0
+    assert summary["total_gross_deductible_losses_nok"] == 22.0
+    assert summary["net_foreign_currency_gain_loss_nok"] == 0.0
+
+
+def test_trade_logger_exports_tax_ledger_and_persists_year_end_holdings(tmp_path: Path) -> None:
+    """The tax-ledger export and year-end valuation should be persisted for later reporting."""
+    logger = TradeLogger(database_path=tmp_path / "trades.db")
+    logger.fx_rate_collector.get_rate = lambda pair="EUR/NOK", at=None: 11.5  # type: ignore[method-assign]
+    timestamp = datetime(2024, 12, 31, 22, 59, tzinfo=timezone.utc)
+
+    logger.log_fiat_conversion(
+        timestamp=timestamp,
+        amount_eur=500.0,
+        source="manual_seed",
+        fx_rate=11.5,
+        reference="initial_capital",
+    )
+    holdings = logger.write_year_end_holdings(
+        timestamp=timestamp,
+        holdings={"EUR": 500.0, "BTC": 0.1},
+        prices_eur={"BTC": 40000.0},
+    )
+    export_path = logger.export_tax_ledger(path=tmp_path / "tax_2024.json", tax_year=2024)
+    summary = logger.get_tax_year_summary(2024)
+
+    assert export_path.exists() is True
+    assert holdings["total_value_eur"] == 4500.0
+    assert holdings["total_value_nok"] == 51750.0
+    assert summary["wealth_tax_snapshot"]["total_value_nok"] == 51750.0

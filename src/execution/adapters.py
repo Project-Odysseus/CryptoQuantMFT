@@ -706,6 +706,14 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             raise RuntimeError(self._format_api_errors(errors))
         return self._normalize_remote_orders_payload(payload)
 
+    def fetch_closed_orders(self) -> list[dict[str, Any]]:
+        """Fetch and normalize recent Kraken closed-order history."""
+        payload = self._private_request(endpoint="ClosedOrders", params={"trades": "false"})
+        errors = self._extract_api_errors(payload)
+        if errors:
+            raise RuntimeError(self._format_api_errors(errors))
+        return self._normalize_remote_orders_payload(payload)
+
     def validate_order_request(self, *, symbol: str, side: str, size: float) -> dict[str, Any]:
         """Exercise Kraken's validate-only order path without placing a live order."""
         if size <= 0:
@@ -802,12 +810,26 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         except Exception as exc:
             checks.append({"name": "open_orders", "ok": False, "message": str(exc)})
 
+        closed_orders: list[dict[str, Any]] = []
+        try:
+            closed_orders = self.fetch_closed_orders()
+            checks.append(
+                {
+                    "name": "closed_orders",
+                    "ok": True,
+                    "message": f"retrieved {len(closed_orders)} closed orders",
+                    "closed_order_count": len(closed_orders),
+                }
+            )
+        except Exception as exc:
+            checks.append({"name": "closed_orders", "ok": False, "message": str(exc)})
+
         recovery_summary: dict[str, Any] | None = None
         if balance_snapshot is not None:
             try:
                 recovery_summary = self.recover_execution_state(
                     remote_snapshot=balance_snapshot,
-                    remote_orders=open_orders,
+                    remote_orders=open_orders or closed_orders,
                 )
                 checks.append(
                     {
@@ -824,6 +846,8 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         expected_status_errors: tuple[str, ...] = ()
         if status_probe_order_id is None and open_orders:
             status_probe_order_id = str(open_orders[0].get("remote_order_id") or open_orders[0].get("order_id") or "")
+        if status_probe_order_id is None and closed_orders:
+            status_probe_order_id = str(closed_orders[0].get("remote_order_id") or closed_orders[0].get("order_id") or "")
         if not status_probe_order_id:
             status_probe_order_id = "DRYRUNVERIFY-STATUS"
             expected_status_errors = ("unknown order", "invalid order")
@@ -861,6 +885,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         summary["checks"] = checks
         summary["balance_snapshot"] = balance_snapshot or {}
         summary["open_order_count"] = len(open_orders)
+        summary["closed_order_count"] = len(closed_orders)
         summary["recovered_order_ids"] = (recovery_summary or {}).get("recovered_order_ids", [])
         summary["recovered_order_count"] = (recovery_summary or {}).get("recovered_order_count", 0)
         summary["status"] = "passed" if all(bool(check.get("ok")) for check in checks) else "failed"

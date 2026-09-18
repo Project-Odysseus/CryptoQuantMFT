@@ -56,7 +56,7 @@ This file breaks **Priority 3: Close the Live-Execution Gap Without Trading** in
   - **Completed changes**
     - Added explicit runbook checklists for `paper -> live_dry_run` and `live_dry_run -> live`.
     - Added a concrete exchange-shaped `live_dry_run` command for Kraken as the near-term promotion lane.
-    - Documented that live still remains blocked at the orchestrator layer until the remaining implementation work is finished.
+    - Documented the operator checks required before any guarded `live` attempt and before any later promotion with real capital.
 
 - [x] **Subtask 6: Add acceptance coverage for promotion and failure handling**
   - [x] Add tests for `paper -> live_dry_run` promotion behavior
@@ -65,7 +65,7 @@ This file breaks **Priority 3: Close the Live-Execution Gap Without Trading** in
   - **Completed changes**
     - Added promotion coverage showing `paper` keeps no execution adapter while `live_dry_run` adds exchange-shaped sandbox routing.
     - Added acceptance coverage for dry-run rejection context, kill-switch cancel failure capture, and the guarded-live rejection boundary.
-    - Kept explicit coverage that the runtime still refuses true `live` execution until the remaining implementation work is finished.
+    - Kept explicit coverage that guarded `live` stays behind the CLI safety gates and conservative exchange caps.
 
 - [x] **Subtask 7: Implement the guarded `live` runtime path**
   - [x] Replace the current `NotImplementedError` hard-stop in `RuntimeOrchestrator` with a guarded live execution flow
@@ -75,3 +75,10 @@ This file breaks **Priority 3: Close the Live-Execution Gap Without Trading** in
     - Replaced the old live-mode hard stop with an incremental exchange-backed cycle path instead of replaying the full paper history every runtime loop.
     - Kept `live_dry_run` and `live` on the same exchange-backed execution model so staged orders can remain `SUBMITTED/OPEN` across cycles without being auto-canceled as fake paper rejections.
     - Added coverage proving guarded `live` can run through the orchestrator path while still staying behind the CLI safety gates and without requiring this session to place real orders.
+
+- [ ] **Remaining Priority 3 closeout checks**
+  - [x] Add a non-destructive Kraken verification command covering auth, balances, open/closed orders, status/cancel probes, and validate-only order requests
+  - [x] Add a kill-switch preview against recovered Kraken order state
+  - [ ] Re-run Kraken verification when the account contains at least one real historical or open order
+  - [ ] Confirm recovered real Kraken order IDs, symbol mapping, and reconciliation state from populated exchange data
+  - [ ] Confirm kill-switch preview targets the expected real open Kraken orders

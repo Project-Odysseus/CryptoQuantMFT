@@ -48,6 +48,8 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [ ] Keep the first live exchange milestone at **Kraken live-dry-run only**
     - [x] exercise real Kraken authentication, order submission, cancel, and status lookup paths without enabling production trading
     - [ ] confirm symbol mapping, balances, order IDs, and reconciliation shape against Kraken responses
+      - [x] add a non-destructive closed-order history probe so real Kraken order payloads can be recovered and inspected without placing orders
+      - [ ] re-run verification when the Kraken account has at least one historical or open order so real symbol/order-id mapping can be confirmed from populated exchange data
     - [ ] verify kill-switch and cancel paths against exchange-shaped state before any real order is allowed
       - [x] add a non-destructive kill-switch preview against recovered Kraken open-order state
       - [ ] re-run that preview while at least one real Kraken open order exists so the cancel target list is validated against a populated exchange order book
@@ -67,29 +69,33 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [x] Phase D: add end-to-end acceptance tests for paper -> live_dry_run promotion and failure handling (stale data, order rejection, reconciliation mismatch, cancel failure)
 
 - [ ] **Priority 3A: Norwegian Tax Logging Readiness Before Live Trading**
-  - [ ] Replace the current generic EUR/NOK spot-rate helper with a Norges Bank-backed daily FX source and local cache
-    - [ ] fetch official EUR/NOK middle rates from `https://data.norges-bank.no/api/data/EXR/B.EUR.NOK.SP?format=sdmx-json`
-    - [ ] store daily rates locally with trade-date lookup instead of only "latest rate" caching
-    - [ ] fall back to the last preceding business day for weekends and bank holidays
-  - [ ] Add a dedicated tax ledger schema for realized crypto and fiat tax events
-    - [ ] persist `id`, `timestamp_utc`, `transaction_type`, `symbol`, `amount_eur`, `norges_bank_fx_rate`, `amount_nok`, and `cost_basis_nok`
-    - [ ] keep tax-ledger writes separate from generic operational events so exports stay deterministic
+  - [x] Replace the current generic EUR/NOK spot-rate helper with a Norges Bank-backed daily FX source and local cache
+    - [x] fetch official EUR/NOK middle rates from `https://data.norges-bank.no/api/data/EXR/B.EUR.NOK.SP?format=sdmx-json`
+    - [x] store daily rates locally with trade-date lookup instead of only "latest rate" caching
+    - [x] fall back to the last preceding business day for weekends and bank holidays
+  - [x] Add a dedicated tax ledger schema for realized crypto and fiat tax events
+    - [x] persist `id`, `timestamp_utc`, `transaction_type`, `symbol`, `amount_eur`, `norges_bank_fx_rate`, `amount_nok`, and `cost_basis_nok`
+    - [x] keep tax-ledger writes separate from generic operational events so exports stay deterministic
   - [ ] Emit tax-ledger events at realization time instead of only relying on year-end summaries
-    - [ ] log realized trade PnL in EUR and NOK at close time
-    - [ ] log trading fees as separate taxable/deductible events
+    - [x] log realized trade PnL in EUR and NOK at close time
+    - [x] log trading fees as separate taxable/deductible events
     - [ ] log funding fees once futures/perpetuals are enabled
-    - [ ] log EUR fiat conversions and maintain the running EUR cost basis for `valutagevinst/valutatap`
-  - [ ] Add year-end holdings valuation support for Norwegian wealth tax readiness
-    - [ ] snapshot crypto holdings and EUR balances as of Dec 31st 23:59 CET
-    - [ ] convert the holdings valuation to NOK for wealth-tax reporting
-  - [ ] Add export/reporting surfaces required before any real live rollout
-    - [ ] CSV/JSON export compatible with Koinly/Divly-style tax imports
-    - [ ] year-end Skattemeldingen summary covering gains, losses, fiat FX gain/loss, and Dec 31 holdings valuation
-  - [ ] Add acceptance coverage for tax-critical edge cases
-    - [ ] weekend/holiday FX fallback
-    - [ ] EUR pool cost-basis updates across multiple conversions
-    - [ ] realized PnL/fee logging from runtime execution records
+    - [x] log EUR fiat conversions and maintain the running EUR cost basis for `valutagevinst/valutatap`
+  - [x] Add year-end holdings valuation support for Norwegian wealth tax readiness
+    - [x] snapshot crypto holdings and EUR balances as of Dec 31st 23:59 CET
+    - [x] convert the holdings valuation to NOK for wealth-tax reporting
+  - [x] Add export/reporting surfaces required before any real live rollout
+    - [x] CSV/JSON export compatible with Koinly/Divly-style tax imports
+    - [x] year-end Skattemeldingen summary covering gains, losses, fiat FX gain/loss, and Dec 31 holdings valuation
+  - [x] Add acceptance coverage for tax-critical edge cases
+    - [x] weekend/holiday FX fallback
+    - [x] EUR pool cost-basis updates across multiple conversions
+    - [x] realized PnL/fee logging from runtime execution records
   - [ ] Live-readiness rule: do not move from `live_dry_run` to real live trading until the tax-ledger path is implemented and validated end to end
+    - [x] add manual EUR fiat-pool seeding via CLI before the first real Kraken trade
+    - [ ] seed the real EUR starting balance/cost basis before the first live order
+    - [ ] verify the first real Kraken fill produces correct `REALIZED_PNL` / `TRADING_FEE` / `FIAT_CONVERSION` rows and annual summary output
+    - [ ] export the first real trading year ledger and spot-check it against exchange history
 
 - [ ] **Priority 4: Strategy Runtime Reliability**
   - [x] Treat paper mode as the source-of-truth validation lane before any live promotion

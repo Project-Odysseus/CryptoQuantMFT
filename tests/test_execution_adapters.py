@@ -350,6 +350,8 @@ def test_kraken_adapter_verify_dry_run_exercises_private_endpoints_non_destructi
                     }
                 },
             }
+        if endpoint == "ClosedOrders":
+            return {"error": [], "result": {"closed": {}}}
         if endpoint == "QueryOrders":
             return {
                 "error": [],
@@ -380,6 +382,7 @@ def test_kraken_adapter_verify_dry_run_exercises_private_endpoints_non_destructi
     assert [check["name"] for check in summary["checks"]] == [
         "balance_snapshot",
         "open_orders",
+        "closed_orders",
         "recovery_state",
         "order_status",
         "cancel_order",
@@ -387,8 +390,8 @@ def test_kraken_adapter_verify_dry_run_exercises_private_endpoints_non_destructi
     ]
     assert summary["recovered_order_count"] == 1
     assert summary["recovered_order_ids"] == ["abc123"]
-    assert calls[2] == ("QueryOrders", {"txid": "abc123", "trades": "false"})
-    assert calls[3] == ("CancelOrder", {"txid": "DRYRUNVERIFY-CANCEL"})
+    assert calls[3] == ("QueryOrders", {"txid": "abc123", "trades": "false"})
+    assert calls[4] == ("CancelOrder", {"txid": "DRYRUNVERIFY-CANCEL"})
 
 
 def test_kraken_adapter_verify_dry_run_uses_expected_unknown_order_probes_when_no_open_orders(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -400,6 +403,8 @@ def test_kraken_adapter_verify_dry_run_uses_expected_unknown_order_probes_when_n
             return {"error": [], "result": {"ZEUR": "1000.0"}}
         if endpoint == "OpenOrders":
             return {"error": [], "result": {"open": {}}}
+        if endpoint == "ClosedOrders":
+            return {"error": [], "result": {"closed": {}}}
         if endpoint in {"QueryOrders", "CancelOrder"}:
             return {"error": ["EOrder:Unknown order"]}
         if endpoint == "AddOrder":
@@ -417,6 +422,67 @@ def test_kraken_adapter_verify_dry_run_uses_expected_unknown_order_probes_when_n
     assert status_check["ok"] is True
     assert cancel_check["ok"] is True
     assert "expected non-destructive error" in status_check["message"]
+
+
+def test_kraken_adapter_verify_dry_run_uses_closed_order_history_for_recovery_and_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Closed-order history should still validate symbol/order-id normalization when no open orders exist."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((endpoint, params))
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "900.0"}}
+        if endpoint == "OpenOrders":
+            return {"error": [], "result": {"open": {}}}
+        if endpoint == "ClosedOrders":
+            return {
+                "error": [],
+                "result": {
+                    "closed": {
+                        "closed123": {
+                            "status": "closed",
+                            "vol": "0.05",
+                            "vol_exec": "0.05",
+                            "price": "30000.0",
+                            "fee": "1.50",
+                            "descr": {"pair": "XXBTZEUR", "type": "sell"},
+                        }
+                    }
+                },
+            }
+        if endpoint == "QueryOrders":
+            return {
+                "error": [],
+                "result": {
+                    "closed123": {
+                        "status": "closed",
+                        "vol": "0.05",
+                        "vol_exec": "0.05",
+                        "price": "30000.0",
+                        "fee": "1.50",
+                        "descr": {"pair": "XXBTZEUR", "type": "sell"},
+                    }
+                },
+            }
+        if endpoint == "CancelOrder":
+            return {"error": ["EOrder:Invalid order"]}
+        if endpoint == "AddOrder":
+            return {"error": [], "result": {"descr": {"order": "buy 0.0002 BTC/EUR @ market"}}}
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    summary = adapter.verify_dry_run(symbol="BTC/EUR", size=0.0002)
+
+    assert summary["status"] == "passed"
+    assert summary["open_order_count"] == 0
+    assert summary["closed_order_count"] == 1
+    assert summary["recovered_order_count"] == 1
+    assert summary["recovered_order_ids"] == ["closed123"]
+    assert calls[3] == ("QueryOrders", {"txid": "closed123", "trades": "false"})
+    assert adapter.list_orders()[0].symbol == "BTC/EUR"
+    assert adapter.list_orders()[0].remote_order_id == "closed123"
 
 
 def test_kraken_adapter_verify_dry_run_fails_without_credentials() -> None:

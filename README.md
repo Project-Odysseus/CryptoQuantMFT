@@ -1,56 +1,20 @@
 # CryptoQuantMFT
 
-CryptoQuantMFT is a Python-based quantitative trading framework for researching, backtesting, and operationally testing crypto strategies with a strong emphasis on system design, risk controls, and runtime safety.
+CryptoQuantMFT is a Python trading-framework prototype for researching, backtesting, paper-running, and carefully validating a future Kraken live path. The current source of truth is **paper mode**, with **Kraken `live_dry_run`** as the promotion lane and explicit safety gates around real `live` mode.
 
-It is built as more than a notebook project: the repository models the full path from market-data ingestion to signal generation, trade simulation, persistence, monitoring, and recovery.
+## Current state
 
-## Why this project stands out
+- **Stable today:** demo backtests, walk-forward evaluation, paper runtime, runtime health reporting, reconciliation, checkpoints, and kill-switch controls
+- **Validated against Kraken without trading:** private-endpoint auth, balances, open/closed order lookups, status/cancel probes, validate-only order requests, and kill-switch preview
+- **Now in place for go-live prep:** Norwegian tax-ledger foundation with Norges Bank EUR/NOK rates, FIFO EUR cost-basis tracking, yearly summary/export, and year-end holdings valuation
+- **Not yet signed off for production trading:** populated real-order reconciliation and post-trade tax-ledger validation against actual Kraken fills
 
-- **End-to-end trading architecture**: data pipeline, strategy layer, risk controls, execution, persistence, and operational tooling live in one codebase.
-- **Research + runtime coverage**: supports both offline strategy evaluation and paper/live-dry-run style runtime workflows.
-- **Risk-aware design**: includes drawdown guards, volatility-aware sizing, stale-quote checks, spread/slippage gates, and a kill-switch path.
-- **Operational thinking**: runtime checkpoints, health reporting, reconciliation hooks, backups, and reporting are treated as first-class concerns.
-- **Modular engineering**: components are organized so connectors, strategies, execution adapters, and risk logic can evolve independently.
+## What the repo can do
 
-## What this demonstrates
-
-This repository is a strong portfolio project for roles spanning:
-
-- quantitative developer / quant engineering
-- algorithmic trading infrastructure
-- Python backend engineering
-- systems-oriented software engineering
-- data-driven product prototyping
-
-In practical terms, it shows the ability to:
-
-- design layered, testable Python systems
-- build stateful runtime workflows instead of one-off scripts
-- model real-world constraints around execution, observability, and failure recovery
-- balance experimentation with operational safeguards
-
-## Current capabilities
-
-### Research and backtesting
-- Synthetic and exchange-sourced backtests
-- Strategy selection through a central registry
-- Walk-forward evaluation support
-- Event-driven L2-style simulator for sequential market replay
-- Performance analytics and plotting
-
-### Runtime and execution
-- Paper-trading workflow and live-dry-run routing
-- Exchange connector scaffolding for Kraken and Firi
-- Execution routing and sandbox adapter support
-- Trade logging, equity snapshots, and operational event persistence
-- Session/account reconciliation hooks
-
-### Risk and safety
-- Volatility-aware position sizing
-- Drawdown and exposure controls
-- Spread, slippage, and stale-quote entry guards
-- Watchdog-driven runtime monitoring
-- Manual kill switch and resumable runtime state
+- **Research/backtesting:** synthetic and Kraken-sourced backtests, walk-forward runs, L2-style event simulation, analytics, and plotting
+- **Runtime/execution:** `paper`, `live_dry_run`, and guarded `live` runtime modes; exchange-shaped adapters for Kraken/Firi; persistence for trades, equity, events, and runtime state
+- **Risk/safety:** volatility-aware sizing, drawdown/exposure limits, spread/slippage/staleness guards, watchdog monitoring, reconciliation, and kill-switch controls
+- **Tax readiness:** Norwegian tax-event storage for EUR-quoted live trades, EUR fiat-pool tracking, annual summary export, and year-end wealth snapshot support
 
 ## Architecture at a glance
 
@@ -116,20 +80,31 @@ Run the committed baseline paper-runtime config:
 python main.py --runtime paper --runtime-config-path config/runtime.paper.json --dashboard --report
 ```
 
-Run the exchange-shaped dry-run promotion lane:
+Run the exchange-shaped Kraken dry-run promotion lane:
 
 ```bash
 python main.py --runtime live_dry_run --execution-exchange kraken --runtime-iterations 3 --dashboard --report
 ```
 
-Run a non-destructive Kraken private-endpoint verification before any live promotion:
+Run the non-destructive Kraken verification before any live promotion:
 
 ```bash
 python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR
 ```
 
-This probe authenticates against Kraken private endpoints, fetches balances and open orders, exercises status/cancel request handling safely, and uses Kraken's `validate=true` order path so no production order is placed.
-It also recovers any currently open Kraken orders into local adapter state and prints a **kill-switch preview** showing which exchange-shaped orders would be cancelled if the kill switch had to fire.
+This checks private-endpoint auth, balances, open/closed orders, status/cancel handling, and a `validate=true` order request without placing a real order.
+
+Seed the EUR fiat pool before the first real Kraken trade:
+
+```bash
+python main.py --tax-log-fiat-eur 1000 --tax-fx-rate 11.50 --tax-reference initial_capital
+```
+
+Print the Norwegian tax summary and optionally export the ledger:
+
+```bash
+python main.py --tax-report --tax-year 2026 --tax-export-path exports/tax_2026.csv
+```
 
 `--runtime live` is now guarded on purpose: it requires `--enable-live-trading`, the exact confirmation token `--live-confirmation ENABLE_LIVE_TRADING`, an explicit non-auto `--execution-exchange`, and a ready/inactive kill-switch state before the CLI will even attempt the live path.
 
@@ -139,8 +114,11 @@ Show recent persisted runtime activity:
 python main.py --report --report-limit 20
 ```
 
-## Project positioning
+## Path to first safe live trade
 
-CryptoQuantMFT is best understood as a **well-structured trading systems prototype**: ambitious in scope, realistic about safety, and intentionally modular so that research, execution, and operational hardening can progress in parallel.
+1. Keep paper mode stable and rerun Kraken verification.
+2. Seed the EUR fiat pool for tax basis tracking.
+3. Execute a small real Kraken trade later.
+4. Immediately verify reconciliation, order IDs, fees, and tax-ledger rows from that real fill.
 
-That combination makes it useful both as an engineering foundation and as a portfolio artifact that communicates system-level thinking.
+Until step 4 is checked, treat the project as **pre-live but close**.

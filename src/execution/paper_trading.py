@@ -100,6 +100,7 @@ class PaperTradingEngine:
         circuit_breaker: CircuitBreaker | None = None,
         kill_switch_controller: KillSwitchController | None = None,
         exchange_name: str | None = None,
+        enable_tax_logging: bool = False,
     ) -> None:
         """Initialize the object with its runtime state."""
         if initial_cash <= 0:
@@ -122,6 +123,7 @@ class PaperTradingEngine:
         self.circuit_breaker = circuit_breaker
         self.kill_switch_controller = kill_switch_controller
         self.exchange_name = exchange_name or getattr(execution_adapter, "exchange_name", None) or getattr(execution_adapter, "name", None) or "paper"
+        self.enable_tax_logging = enable_tax_logging
         self._order_counter = 0
 
     def run(self, bars: Sequence[Any], signals: Sequence[float | int | str | None]) -> PaperTradingResult:
@@ -262,6 +264,7 @@ class PaperTradingEngine:
                             fee=cost,
                             role_maker_taker="taker",
                             latency_ms=0,
+                            record_tax_event=self.enable_tax_logging,
                         )
 
             if not active_orders:
@@ -803,6 +806,7 @@ class PaperTradingEngine:
                 fee=cost,
                 role_maker_taker="taker",
                 latency_ms=0,
+                record_tax_event=self.enable_tax_logging,
             )
         return cash, position_size, avg_entry_price
 
@@ -870,6 +874,7 @@ class PaperTradingEngine:
                 fee=cost,
                 role_maker_taker="taker",
                 latency_ms=0,
+                record_tax_event=self.enable_tax_logging,
             )
         return PaperTrade(
             order_id=order.id,
