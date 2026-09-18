@@ -445,6 +445,136 @@ class PaperTradingEngine:
             entry_decisions=entry_decisions,
         )
 
+    def run_exchange_cycle(self, bars: Sequence[Any], signals: Sequence[float | int | str | None]) -> PaperTradingResult:
+        """Process only the latest bar against adapter-backed state for live-style execution."""
+        if len(bars) != len(signals):
+            raise ValueError("bars and signals must be the same length")
+        if not bars:
+            return PaperTradingResult()
+        if self.execution_adapter is None:
+            raise ValueError("exchange-backed cycles require an execution adapter")
+
+        bar = bars[-1]
+        signal = _normalize_signal(signals[-1])
+        price = _get_close(bar)
+        timestamp = _get_timestamp(bar)
+        symbol = _get_symbol(bar)
+        entry_decisions: list[dict[str, Any]] = []
+        trades: list[PaperTrade] = []
+        cycle_orders: list[PaperOrder] = []
+        adapter_orders = list(getattr(self.execution_adapter, "list_orders", lambda: [])() or [])
+        open_orders = [
+            order for order in adapter_orders if getattr(order, "status", None) not in {"FILLED", "CANCELED", "REJECTED", "NOT_FOUND"}
+        ]
+        cash, position_size, avg_entry_price, fees_paid = self._current_account_state(price=price, symbol=symbol)
+        current_equity = cash + (position_size * price if position_size else 0.0)
+
+        if open_orders:
+            self._record_entry_decision(
+                decisions=entry_decisions,
+                signal=signal,
+                side="buy" if signal >= 0.0 else "sell",
+                allowed=False,
+                reason="open_orders_pending",
+                price=price,
+                timestamp=timestamp,
+                order_size=0.0,
+                cash=cash,
+                position_size=position_size,
+                equity=current_equity,
+            )
+        elif position_size > 0.0 and signal < 0.0:
+            exit_order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar)
+            cycle_orders.append(exit_order)
+            maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)
+            if maybe_trade is not None:
+                trades.append(maybe_trade)
+        elif signal > 0.0 and position_size <= 0.0:
+            risk_decision = self._evaluate_risk(
+                bars=list(bars),
+                equity=current_equity,
+                peak_equity=max(self.initial_cash, current_equity),
+                current_position=position_size,
+                current_bar=bar,
+                bar_index=len(bars) - 1,
+                signal_side="buy",
+                current_notional=max(0.0, position_size * price),
+                open_positions=1 if position_size != 0.0 else 0,
+                exchange_name=self.exchange_name,
+                exchange_position_size=position_size,
+                current_exchange_notional=max(0.0, position_size * price),
+                exchange_open_positions=1 if position_size != 0.0 else 0,
+                open_orders_count=0,
+            )
+            self._record_entry_decision(
+                decisions=entry_decisions,
+                signal=signal,
+                side="buy",
+                allowed=risk_decision.allow_entry,
+                reason=getattr(risk_decision, "reason", None),
+                price=price,
+                timestamp=timestamp,
+                order_size=risk_decision.position_size,
+                cash=cash,
+                position_size=position_size,
+                equity=current_equity,
+                risk_details=self._build_risk_details(bars=list(bars), price=price, equity=current_equity, risk_decision=risk_decision),
+            )
+            if risk_decision.allow_entry:
+                order_size = self._resolve_order_size(
+                    price=price,
+                    cash=cash,
+                    equity=current_equity,
+                    requested_size=self.default_order_size,
+                    risk_position_size=risk_decision.position_size,
+                )
+                if order_size > 0.0:
+                    entry_order = self._create_order(timestamp=timestamp, side="buy", size=order_size, bar=bar)
+                    cycle_orders.append(entry_order)
+                    maybe_trade = self._route_exchange_order(order=entry_order, price=price, timestamp=timestamp)
+                    if maybe_trade is not None:
+                        trades.append(maybe_trade)
+        elif signal < 0.0 and position_size <= 0.0:
+            self._record_entry_decision(
+                decisions=entry_decisions,
+                signal=signal,
+                side="sell",
+                allowed=False,
+                reason="spot_shorting_disabled",
+                price=price,
+                timestamp=timestamp,
+                order_size=0.0,
+                cash=cash,
+                position_size=position_size,
+                equity=current_equity,
+            )
+
+        cash, position_size, avg_entry_price, fees_paid = self._current_account_state(price=price, symbol=symbol)
+        portfolio_snapshot = self._build_exchange_portfolio_snapshot(
+            timestamp=timestamp,
+            price=price,
+            cash=cash,
+            position_size=position_size,
+            avg_entry_price=avg_entry_price,
+            fees_paid=fees_paid,
+        )
+        if self.trade_logger is not None:
+            self.trade_logger.log_equity_snapshot(
+                timestamp=timestamp,
+                source="paper_trading",
+                equity=portfolio_snapshot.equity,
+                cash=portfolio_snapshot.cash,
+                position_size=portfolio_snapshot.position_size,
+            )
+
+        return PaperTradingResult(
+            orders=self._merge_cycle_orders(cycle_orders),
+            trades=trades,
+            equity_curve=[portfolio_snapshot.equity],
+            portfolio_history=[portfolio_snapshot],
+            entry_decisions=entry_decisions,
+        )
+
     def _record_entry_decision(
         self,
         *,
@@ -676,6 +806,155 @@ class PaperTradingEngine:
             )
         return cash, position_size, avg_entry_price
 
+    def _route_exchange_order(self, *, order: PaperOrder, price: float, timestamp: datetime) -> PaperTrade | None:
+        report = self.execution_adapter.submit_order(
+            order_id=order.id,
+            side=order.side,
+            size=order.size,
+            price=price,
+            timestamp=timestamp,
+            symbol=order.symbol,
+        )
+        order.execution_status = report.status
+        order.execution_message = report.message
+        order.last_updated_at = timestamp
+
+        if report.status in {"SUBMITTED", "OPEN"}:
+            order.status = report.status
+            self._log_order_event(
+                order=order,
+                timestamp=timestamp,
+                event_type="order_lifecycle",
+                message="order submitted to execution adapter",
+                reason=None,
+            )
+            return None
+
+        if report.status not in {"FILLED", "PARTIALLY_FILLED"}:
+            order.status = "CANCELED"
+            order.last_reason = report.message or "execution_adapter_rejected_order"
+            self._log_order_event(
+                order=order,
+                timestamp=timestamp,
+                event_type="order_lifecycle",
+                message="order canceled before fill",
+                reason=order.last_reason,
+            )
+            return None
+
+        fill_size = min(order.size, report.filled_size or order.size)
+        execution_price = report.fill_price or price
+        cost = report.fee
+        order.filled_size = fill_size
+        order.avg_fill_price = execution_price
+        order.fees += cost
+        order.status = report.status
+        self._log_order_event(
+            order=order,
+            timestamp=timestamp,
+            event_type="order_lifecycle",
+            message="order filled via execution adapter",
+            fill_price=execution_price,
+            fill_size=fill_size,
+            fee=cost,
+        )
+        if self.trade_logger is not None:
+            self.trade_logger.log_trade(
+                timestamp=timestamp,
+                source="paper_trading",
+                exchange=order.exchange or getattr(self.execution_adapter, "exchange_name", None) or self.execution_adapter.name,
+                pair=order.symbol or "unknown",
+                side=order.side,
+                price=execution_price,
+                size=fill_size,
+                fee=cost,
+                role_maker_taker="taker",
+                latency_ms=0,
+            )
+        return PaperTrade(
+            order_id=order.id,
+            timestamp=timestamp,
+            side=order.side,
+            price=execution_price,
+            size=fill_size,
+            fee=cost,
+            cost=cost,
+        )
+
+    def _current_account_state(self, *, price: float, symbol: str | None) -> tuple[float, float, float | None, float]:
+        account_snapshot = getattr(self.execution_adapter, "get_account_snapshot", lambda: {})() or {}
+        balances = account_snapshot.get("balances", {}) or {}
+        positions = account_snapshot.get("positions", {}) or {}
+        base_currency = getattr(self.execution_adapter, "_base_currency", None) or _get_quote_asset(symbol) or "USD"
+        position_symbol = _get_position_asset(symbol)
+        cash = float(balances.get(base_currency, 0.0))
+        position_size = float(positions.get(position_symbol, 0.0)) if position_symbol is not None else 0.0
+        avg_entry_price = price if position_size > 0.0 else None
+        fees_paid = 0.0
+        adapter_orders = list(getattr(self.execution_adapter, "list_orders", lambda: [])() or [])
+        for existing_order in adapter_orders:
+            fees_paid += float(getattr(existing_order, "fee", 0.0) or 0.0)
+        return cash, position_size, avg_entry_price, fees_paid
+
+    def _build_exchange_portfolio_snapshot(
+        self,
+        *,
+        timestamp: datetime,
+        price: float,
+        cash: float,
+        position_size: float,
+        avg_entry_price: float | None,
+        fees_paid: float,
+    ) -> PortfolioSnapshot:
+        equity = cash + (position_size * price if position_size else 0.0)
+        unrealized_pnl = 0.0
+        position_side = "flat"
+        if position_size > 0.0:
+            position_side = "long"
+            if avg_entry_price is not None:
+                unrealized_pnl = (position_size * price) - (position_size * avg_entry_price)
+        return PortfolioSnapshot(
+            timestamp=timestamp,
+            cash=cash,
+            position_size=position_size,
+            avg_entry_price=avg_entry_price,
+            equity=equity,
+            unrealized_pnl=unrealized_pnl,
+            realized_pnl=0.0,
+            position_side=position_side,
+            mark_price=price,
+            fees_paid=fees_paid,
+        )
+
+    def _snapshot_adapter_orders(self) -> list[PaperOrder]:
+        snapshot_orders: list[PaperOrder] = []
+        for adapter_order in list(getattr(self.execution_adapter, "list_orders", lambda: [])() or []):
+            timestamp = getattr(adapter_order, "timestamp", None) or datetime.now()
+            snapshot_orders.append(
+                PaperOrder(
+                    id=str(getattr(adapter_order, "order_id", "unknown")),
+                    timestamp=timestamp,
+                    side=str(getattr(adapter_order, "side", "unknown")),
+                    size=float(getattr(adapter_order, "size", 0.0) or 0.0),
+                    symbol=getattr(adapter_order, "symbol", None),
+                    exchange=getattr(adapter_order, "exchange", self.exchange_name),
+                    status=str(getattr(adapter_order, "status", "UNKNOWN")),
+                    filled_size=float(getattr(adapter_order, "filled_size", 0.0) or 0.0),
+                    avg_fill_price=float(getattr(adapter_order, "fill_price", 0.0) or 0.0),
+                    fees=float(getattr(adapter_order, "fee", 0.0) or 0.0),
+                    last_reason=getattr(adapter_order, "last_reason", None),
+                    execution_status=getattr(adapter_order, "remote_status", None) or getattr(adapter_order, "status", None),
+                    execution_message=getattr(adapter_order, "message", None),
+                )
+            )
+        return snapshot_orders
+
+    def _merge_cycle_orders(self, cycle_orders: Sequence[PaperOrder]) -> list[PaperOrder]:
+        merged: dict[str, PaperOrder] = {order.id: order for order in cycle_orders}
+        for snapshot_order in self._snapshot_adapter_orders():
+            merged[snapshot_order.id] = snapshot_order
+        return list(merged.values())
+
     def _evaluate_risk(
         self,
         *,
@@ -790,6 +1069,24 @@ def _get_exchange(bar: Any) -> str | None:
     if isinstance(bar, dict):
         value = bar.get("exchange")
         return str(value) if value is not None else None
+    return None
+
+
+def _get_position_asset(symbol: str | None) -> str | None:
+    normalized = str(symbol or "").strip().upper()
+    for separator in ("/", "-", "_", ":"):
+        if separator in normalized:
+            base_asset = normalized.split(separator, 1)[0].strip()
+            return base_asset or None
+    return normalized or None
+
+
+def _get_quote_asset(symbol: str | None) -> str | None:
+    normalized = str(symbol or "").strip().upper()
+    for separator in ("/", "-", "_", ":"):
+        if separator in normalized:
+            quote_asset = normalized.split(separator, 1)[1].strip()
+            return quote_asset or None
     return None
 
 

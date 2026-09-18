@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from main import build_runtime_orchestrator
+from config import settings
 from src.data.exchanges import MockExchangeConnector
 from src.data.pipeline import MarketDataPipeline
 from src.execution.paper_trading import PortfolioSnapshot
@@ -27,6 +28,146 @@ def test_build_runtime_orchestrator_uses_runtime_interval_for_market_data_pipeli
     assert pipeline.aggregator.interval_seconds == 3
     assert orchestrator.trading_symbol == "ETH/EUR"
     assert orchestrator.account_state_tracker.base_currency == "EUR"
+
+
+def test_build_runtime_orchestrator_defaults_live_dry_run_to_kraken_exchange(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Live dry run should default to Kraken-shaped adapter state when no exchange is explicitly chosen."""
+    monkeypatch.setattr(settings, "database_path", tmp_path / "runtime.db")
+    runtime_config = RuntimeConfig(mode="live_dry_run", use_mock_connector=True, state_path=tmp_path / "runtime.state.json")
+
+    orchestrator, pipeline = build_runtime_orchestrator(config=runtime_config, mode="live_dry_run")
+
+    assert pipeline.connectors[0].symbol == "BTC/EUR"
+    assert orchestrator.execution_engine.execution_adapter is not None
+    assert orchestrator.execution_engine.execution_adapter.name == "sandbox"
+    assert orchestrator.execution_engine.execution_adapter.exchange_name == "kraken"
+    assert orchestrator.execution_engine.exchange_name == "kraken"
+    assert orchestrator.trading_symbol == "BTC/EUR"
+
+
+def test_build_runtime_orchestrator_falls_back_to_kraken_dry_run_when_firi_credentials_are_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dry-run lane should align adapter and market-data exchange after Firi fallback."""
+    monkeypatch.setattr(settings, "database_path", tmp_path / "runtime.db")
+    monkeypatch.setattr(settings, "firi_api_key", "")
+    runtime_config = RuntimeConfig(mode="live_dry_run", exchange="firi", state_path=tmp_path / "runtime.state.json")
+
+    orchestrator, pipeline = build_runtime_orchestrator(config=runtime_config, mode="live_dry_run")
+
+    assert getattr(pipeline.connectors[0], "name", None) == "kraken"
+    assert pipeline.connectors[0].symbol == "BTC/EUR"
+    assert orchestrator.execution_engine.execution_adapter is not None
+    assert orchestrator.execution_engine.execution_adapter.exchange_name == "kraken"
+
+
+def test_build_runtime_orchestrator_promotes_paper_to_live_dry_run_without_live_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Promotion to live_dry_run should add exchange-shaped dry-run routing without enabling live execution."""
+    monkeypatch.setattr(settings, "database_path", tmp_path / "runtime.db")
+    paper_config = RuntimeConfig(mode="paper", exchange="kraken", use_mock_connector=True, state_path=tmp_path / "paper.state.json")
+    dry_run_config = RuntimeConfig(mode="live_dry_run", exchange="kraken", use_mock_connector=True, state_path=tmp_path / "dry.state.json")
+
+    paper_orchestrator, _paper_pipeline = build_runtime_orchestrator(config=paper_config, mode="paper")
+    dry_run_orchestrator, _dry_run_pipeline = build_runtime_orchestrator(config=dry_run_config, mode="live_dry_run")
+
+    assert paper_orchestrator.execution_engine.execution_adapter is None
+    assert dry_run_orchestrator.execution_engine.execution_adapter is not None
+    assert dry_run_orchestrator.execution_engine.execution_adapter.name == "sandbox"
+    assert dry_run_orchestrator.mode == "live_dry_run"
+
+
+@pytest.mark.asyncio
+async def test_runtime_orchestrator_live_dry_run_tracks_exchange_account_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Live dry run should persist exchange-shaped adapter state without enabling live execution."""
+    monkeypatch.setattr(settings, "database_path", tmp_path / "runtime.db")
+    runtime_config = RuntimeConfig(
+        mode="live_dry_run",
+        exchange="kraken",
+        use_mock_connector=True,
+        trading_symbol="BTC/EUR",
+        state_path=tmp_path / "runtime.state.json",
+    )
+    orchestrator, _pipeline = build_runtime_orchestrator(config=runtime_config, mode="live_dry_run")
+
+    cycle = await orchestrator.run_once()
+    health_report = orchestrator.get_health_report()
+
+    assert cycle.mode == "live_dry_run"
+    assert orchestrator.execution_engine.execution_adapter is not None
+    assert health_report["account_state"]["exchange"] == "kraken"
+    assert health_report["account_state"]["base_currency"] == "EUR"
+    assert health_report["account_state"]["balances"]["EUR"] >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_runtime_orchestrator_live_dry_run_records_order_rejection_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dry-run rejection paths should persist order context instead of placing live trades."""
+    monkeypatch.setattr(settings, "database_path", tmp_path / "runtime.db")
+    runtime_config = RuntimeConfig(
+        mode="live_dry_run",
+        exchange="kraken",
+        use_mock_connector=True,
+        trading_symbol="BTC/EUR",
+        state_path=tmp_path / "runtime.state.json",
+    )
+    orchestrator, _pipeline = build_runtime_orchestrator(config=runtime_config, mode="live_dry_run")
+
+    class RejectingAdapter:
+        name = "sandbox"
+        exchange_name = "kraken"
+
+        def submit_order(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(status="REJECTED", message="risk gate rejected order", fill_price=None, filled_size=None, fee=0.0)
+
+        def list_orders(self) -> list[SimpleNamespace]:
+            return []
+
+        def get_account_snapshot(self) -> dict[str, object]:
+            return {"balances": {"EUR": 1000.0}, "positions": {}}
+
+        def get_order_status(self, *, order_id: str) -> SimpleNamespace:
+            return SimpleNamespace(status="REJECTED", fill_price=None, filled_size=None, fee=0.0, message="rejected")
+
+        def reconcile_account_state(self, *, balances=None, positions=None) -> dict[str, object]:
+            return {
+                "matched": True,
+                "balance_mismatches": {},
+                "position_mismatches": {},
+                "remote_balances": balances or {"EUR": 1000.0},
+                "remote_positions": positions or {},
+                "merged_balances": balances or {"EUR": 1000.0},
+                "merged_positions": positions or {},
+            }
+
+        def recover_execution_state(self, *, remote_snapshot=None, remote_orders=None) -> dict[str, object]:
+            return {
+                "account_reconciliation": self.reconcile_account_state(
+                    balances=(remote_snapshot or {}).get("balances"),
+                    positions=(remote_snapshot or {}).get("positions"),
+                ),
+                "recovered_order_ids": [],
+                "recovered_order_count": 0,
+                "recovery_status": "idle",
+            }
+
+    orchestrator.execution_engine.execution_adapter = RejectingAdapter()
+    orchestrator.execution_engine.risk_manager = None
+    orchestrator.strategy = lambda history, index, current_bar: 1.0
+
+    await orchestrator.run_once()
+    report = orchestrator.get_operational_report()
+
+    assert report["runtime"]["mode"] == "live_dry_run"
+    assert report["latest_cycle"]["latest_order"]["status"] == "CANCELED"
+    assert report["latest_cycle"]["latest_order"]["reason"] == "risk gate rejected order"
+    assert report["reconciliation"]["status"] == "matched"
 
 
 @pytest.mark.asyncio
@@ -364,3 +505,34 @@ async def test_runtime_orchestrator_persists_execution_context_event(tmp_path: P
     assert context_events
     assert "strategy_name" in context_events[0]["metadata"]
     assert "latest_signal" in context_events[0]["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_orchestrator_live_mode_uses_exchange_cycle_without_fake_fill_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live mode should keep staged exchange orders open instead of treating them as canceled fake fills."""
+    monkeypatch.setattr(settings, "database_path", tmp_path / "runtime.db")
+    runtime_config = RuntimeConfig(
+        mode="live",
+        exchange="kraken",
+        use_mock_connector=True,
+        trading_symbol="BTC/EUR",
+        state_path=tmp_path / "runtime.state.json",
+    )
+    orchestrator, _pipeline = build_runtime_orchestrator(config=runtime_config, mode="live")
+    orchestrator.execution_engine.risk_manager = None
+    orchestrator.strategy = lambda history, index, current_bar: 1.0
+    orchestrator.execution_engine.execution_adapter.api_key = ""
+    orchestrator.execution_engine.execution_adapter.api_secret = ""
+    orchestrator.execution_engine.execution_adapter._balances = {"EUR": 1000.0}
+    orchestrator.execution_engine.execution_adapter._remote_balances = {"EUR": 1000.0}
+
+    cycle = await orchestrator.run_once()
+    latest_order = cycle.execution_result.orders[-1]
+
+    assert cycle.mode == "live"
+    assert latest_order.status == "SUBMITTED"
+    assert latest_order.execution_status == "SUBMITTED"
+    assert "not configured" in (latest_order.execution_message or "").lower()

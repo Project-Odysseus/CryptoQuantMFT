@@ -350,13 +350,12 @@ class RuntimeOrchestrator:
             new_bars = [b for b in new_bars if getattr(b, "symbol", self.trading_symbol) == self.trading_symbol]
         self._bar_history.extend(new_bars)
         signals = self._build_signals(self._bar_history)
-        if self.mode == "live":
-            self._mark_unhealthy("live execution adapters are not implemented")
-            self.request_shutdown(reason="live_not_implemented")
-            raise NotImplementedError("Live execution adapters are not implemented yet; use paper or live_dry_run")
 
         try:
-            execution_result = self.execution_engine.run(self._bar_history, signals)
+            if self.mode == "paper":
+                execution_result = self.execution_engine.run(self._bar_history, signals)
+            else:
+                execution_result = self.execution_engine.run_exchange_cycle(self._bar_history, signals)
         except Exception as exc:
             self._mark_unhealthy(f"execution cycle failed: {exc}")
             self.request_shutdown(reason=f"execution_error:{exc}")
