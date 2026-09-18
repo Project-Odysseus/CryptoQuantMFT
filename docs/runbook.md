@@ -29,10 +29,20 @@ python main.py \
   --daily-summary
 ```
 
-4. For a deterministic smoke test before a real paper run, add `--use-mock-connector`.
-5. Confirm the startup banner, the health snapshot, and the first operational events before leaving the runtime unattended.
-6. The health snapshot now reports entry-decision reasons, current position-side PnL, and the latest trade/alert context so you can audit blocked fills without digging through raw logs.
-7. The live plot is written to `plots/runtime_live_plot.png` and updates each runtime cycle while the process is running.
+4. For the repository’s known-good paper baseline, use the committed config:
+
+```bash
+python main.py \
+  --runtime paper \
+  --runtime-config-path config/runtime.paper.json \
+  --dashboard \
+  --report
+```
+
+5. For a deterministic smoke test before a real paper run, add `--use-mock-connector`.
+6. Confirm the startup banner, the health snapshot, and the first operational events before leaving the runtime unattended.
+7. The health snapshot now reports entry-decision reasons, current position-side PnL, the latest bar and signal, and the latest order/adapter context so you can audit blocked fills without digging through raw logs.
+8. The live plot is written to `plots/runtime_live_plot.png` and updates each runtime cycle while the process is running.
 
 ## Daily operational checks
 

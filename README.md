@@ -110,6 +110,12 @@ Run a deterministic paper-runtime smoke test:
 python main.py --runtime paper --use-mock-connector --runtime-iterations 3 --dashboard --report
 ```
 
+Run the committed baseline paper-runtime config:
+
+```bash
+python main.py --runtime paper --runtime-config-path config/runtime.paper.json --dashboard --report
+```
+
 Show recent persisted runtime activity:
 
 ```bash

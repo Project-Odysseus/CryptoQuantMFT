@@ -1,0 +1,17 @@
+{
+  "config_path": "config/runtime.paper.json",
+  "exchange": null,
+  "interval_seconds": 1.0,
+  "iterations": 3,
+  "kill_switch": false,
+  "kill_switch_reason": "manual",
+  "live_plot": false,
+  "live_plot_path": null,
+  "mode": "paper",
+  "state_path": "data/runtime_state.paper.json",
+  "strategy_name": "moving_average_crossover",
+  "strategy_params": {},
+  "use_mock_connector": true,
+  "watchdog_restarts": 0,
+  "watchdog_timeout_seconds": 30.0
+}

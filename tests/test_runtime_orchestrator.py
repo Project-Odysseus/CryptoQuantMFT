@@ -14,6 +14,7 @@ from src.execution.paper_trading import PortfolioSnapshot
 from src.runtime.config import RuntimeConfig
 from src.runtime.orchestrator import RuntimeCycleResult, RuntimeOrchestrator
 from src.storage.market_store import MarketStore
+from src.storage.trade_logger import TradeLogger
 
 
 def test_build_runtime_orchestrator_uses_runtime_interval_for_market_data_pipeline(tmp_path: Path) -> None:
@@ -311,3 +312,53 @@ def test_runtime_orchestrator_saves_and_loads_checkpoint(tmp_path: Path) -> None
     assert restored.health.cycles_completed == 2
     assert restored.health.healthy is False
     assert "heartbeat_lost" in restored._active_alerts
+
+
+def test_runtime_operational_report_surfaces_latest_debug_context(tmp_path: Path) -> None:
+    """The operational report should expose the latest bar, signal, decision, and order context."""
+    orchestrator = RuntimeOrchestrator(pipeline=SimpleNamespace(connectors=[SimpleNamespace(name="mock")]), mode="paper", kill_switch_state_file=tmp_path / "kill-switch.json")
+    orchestrator.last_cycle = RuntimeCycleResult(
+        mode="paper",
+        bars=[SimpleNamespace(timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc), symbol="BTC/NOK", close=101.5)],
+        signals=[1.0],
+        execution_result=SimpleNamespace(
+            entry_decisions=[{"allowed": False, "reason": "spread_limit", "timestamp": datetime(2024, 1, 1, tzinfo=timezone.utc)}],
+            trades=[],
+            orders=[SimpleNamespace(status="CANCELED", execution_status="SUBMITTED", side="buy", size=0.5, last_reason="adapter_rejected", execution_message="staged locally")],
+            portfolio_history=[],
+        ),
+    )
+
+    report = orchestrator.get_operational_report()
+    latest_cycle = report["latest_cycle"]
+
+    assert latest_cycle["latest_bar"]["symbol"] == "BTC/NOK"
+    assert latest_cycle["latest_bar"]["close"] == 101.5
+    assert latest_cycle["latest_signal"] == 1.0
+    assert latest_cycle["latest_entry_decision"]["reason"] == "spread_limit"
+    assert latest_cycle["latest_order"]["status"] == "CANCELED"
+    assert latest_cycle["latest_order"]["execution_status"] == "SUBMITTED"
+
+
+@pytest.mark.asyncio
+async def test_runtime_orchestrator_persists_execution_context_event(tmp_path: Path) -> None:
+    """Each runtime cycle should persist a concise execution context event for debugging."""
+    store = MarketStore(database_path=tmp_path / "runtime.db")
+    pipeline = MarketDataPipeline(store=store, interval_seconds=60)
+    pipeline.add_connector(MockExchangeConnector(symbol="BTC/NOK"))
+
+    orchestrator = RuntimeOrchestrator(
+        pipeline=pipeline,
+        mode="paper",
+        kill_switch_state_file=tmp_path / "kill-switch.json",
+        trade_logger=TradeLogger(database_path=tmp_path / "events.db"),
+        checkpoint_path=tmp_path / "runtime.state.json",
+    )
+    await orchestrator.run_once()
+
+    events = orchestrator.trade_logger.list_events(limit=20)
+    context_events = [event for event in events if event["event_type"] == "runtime_execution_context"]
+
+    assert context_events
+    assert "strategy_name" in context_events[0]["metadata"]
+    assert "latest_signal" in context_events[0]["metadata"]

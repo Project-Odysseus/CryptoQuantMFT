@@ -319,3 +319,51 @@ def test_paper_trading_engine_logs_blocked_entry_reasons() -> None:
     PaperTradingEngine(risk_manager=BlockingRiskManager(), trade_logger=logger).run(bars, [1.0])
 
     assert any(event["event_type"] == "entry_decision" and event["metadata"]["reason"] == "spread_limit" for event in logger.events)
+
+
+def test_paper_trading_engine_logs_execution_adapter_response() -> None:
+    """Adapter fills should be logged with the adapter status and message."""
+    class FakeExecutionAdapter:
+        name = "sandbox"
+        exchange_name = "sandbox"
+
+        def submit_order(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(status="FILLED", message="filled by sandbox", fill_price=100.0, filled_size=1.0, fee=0.1)
+
+    class FakeTradeLogger:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        def log_event(self, **kwargs: object) -> int:
+            self.events.append(kwargs)
+            return 1
+
+        def log_trade(self, **_: object) -> int:
+            return 1
+
+        def log_equity_snapshot(self, **_: object) -> int:
+            return 1
+
+    logger = FakeTradeLogger()
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        )
+    ]
+
+    PaperTradingEngine(trade_logger=logger, execution_adapter=FakeExecutionAdapter()).run(bars, [1.0])
+
+    assert any(
+        event["event_type"] == "order_lifecycle"
+        and event["metadata"]["execution_status"] == "FILLED"
+        and event["metadata"]["execution_message"] == "filled by sandbox"
+        for event in logger.events
+    )

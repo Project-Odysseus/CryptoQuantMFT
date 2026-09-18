@@ -90,41 +90,125 @@ class RuntimeConfig:
         return cls.from_dict(payload)
 
 
-def build_runtime_config_from_args(args: argparse.Namespace) -> RuntimeConfig:
+def build_runtime_config_from_args(args: argparse.Namespace, argv: list[str] | None = None) -> RuntimeConfig:
     """Build a runtime configuration object from CLI arguments."""
-    strategy_params: dict[str, Any] = {}
-    if getattr(args, "strategy_params", None):
-        parsed_params = json.loads(args.strategy_params)
+    effective_argv = None if argv is None else list(argv)
+    config_path = getattr(args, "runtime_config_path", None)
+
+    loaded_config: RuntimeConfig | None = None
+    if config_path and Path(config_path).exists():
+        loaded_config = RuntimeConfig.load(config_path)
+
+    strategy_params: dict[str, Any] = dict(loaded_config.strategy_params) if loaded_config is not None else {}
+    if _argument_was_provided(effective_argv, "--strategy-params") or loaded_config is None:
+        parsed_params = json.loads(getattr(args, "strategy_params", "{}") or "{}")
         if not isinstance(parsed_params, dict):
             raise ValueError("strategy_params must be a JSON object")
         strategy_params = parsed_params
 
-    config_path = getattr(args, "runtime_config_path", None)
     state_path = getattr(args, "runtime_state_path", None)
+    if loaded_config is not None and not _argument_was_provided(effective_argv, "--runtime-state-path"):
+        state_path = loaded_config.state_path
     if state_path is None and config_path is not None:
         state_path = str(Path(config_path).with_suffix(".state.json"))
     live_plot = bool(getattr(args, "live_plot", False))
+    if loaded_config is not None and not _argument_was_provided(effective_argv, "--live-plot"):
+        live_plot = bool(loaded_config.live_plot)
     live_plot_path = getattr(args, "live_plot_path", None)
+    if loaded_config is not None and not _argument_was_provided(effective_argv, "--live-plot-path"):
+        live_plot_path = loaded_config.live_plot_path
     if live_plot and not live_plot_path:
         live_plot_path = "plots/runtime_live_plot.png"
 
     runtime_config = RuntimeConfig(
-        mode=args.runtime or "paper",
-        strategy_name=args.strategy,
+        mode=_resolve_cli_value(
+            effective_argv,
+            "--runtime",
+            getattr(args, "runtime", None),
+            loaded_config.mode if loaded_config is not None else "paper",
+        ),
+        strategy_name=_resolve_cli_value(
+            effective_argv,
+            "--strategy",
+            getattr(args, "strategy", None),
+            loaded_config.strategy_name if loaded_config is not None else "moving_average_crossover",
+        ),
         strategy_params=strategy_params,
-        iterations=args.runtime_iterations,
-        interval_seconds=args.runtime_interval,
-        use_mock_connector=args.use_mock_connector,
-        watchdog_timeout_seconds=args.watchdog_timeout,
-        watchdog_restarts=args.watchdog_restarts,
-        exchange=None if args.execution_exchange == "auto" else args.execution_exchange,
+        iterations=int(
+            _resolve_cli_value(
+                effective_argv,
+                "--runtime-iterations",
+                getattr(args, "runtime_iterations", 3),
+                loaded_config.iterations if loaded_config is not None else 3,
+            )
+        ),
+        interval_seconds=float(
+            _resolve_cli_value(
+                effective_argv,
+                "--runtime-interval",
+                getattr(args, "runtime_interval", 1.0),
+                loaded_config.interval_seconds if loaded_config is not None else 1.0,
+            )
+        ),
+        use_mock_connector=bool(
+            _resolve_cli_value(
+                effective_argv,
+                "--use-mock-connector",
+                getattr(args, "use_mock_connector", False),
+                loaded_config.use_mock_connector if loaded_config is not None else False,
+            )
+        ),
+        watchdog_timeout_seconds=float(
+            _resolve_cli_value(
+                effective_argv,
+                "--watchdog-timeout",
+                getattr(args, "watchdog_timeout", 30.0),
+                loaded_config.watchdog_timeout_seconds if loaded_config is not None else 30.0,
+            )
+        ),
+        watchdog_restarts=int(
+            _resolve_cli_value(
+                effective_argv,
+                "--watchdog-restarts",
+                getattr(args, "watchdog_restarts", 0),
+                loaded_config.watchdog_restarts if loaded_config is not None else 0,
+            )
+        ),
+        exchange=_resolve_exchange_value(
+            effective_argv,
+            getattr(args, "execution_exchange", "auto"),
+            loaded_config.exchange if loaded_config is not None else None,
+        ),
         kill_switch=bool(getattr(args, "kill_switch", False)),
-        kill_switch_reason=getattr(args, "kill_switch_reason", "manual"),
+        kill_switch_reason=_resolve_cli_value(
+            effective_argv,
+            "--kill-switch-reason",
+            getattr(args, "kill_switch_reason", "manual"),
+            loaded_config.kill_switch_reason if loaded_config is not None else "manual",
+        ),
         live_plot=live_plot,
         live_plot_path=live_plot_path,
-        config_path=config_path,
+        config_path=config_path or (str(loaded_config.config_path) if loaded_config is not None and loaded_config.config_path is not None else None),
         state_path=state_path,
     )
     if config_path:
         runtime_config.save(config_path)
     return runtime_config
+
+
+def _argument_was_provided(argv: list[str] | None, option: str) -> bool:
+    if argv is None:
+        return True
+    return any(token == option or token.startswith(f"{option}=") for token in argv)
+
+
+def _resolve_cli_value(argv: list[str] | None, option: str, cli_value: Any, loaded_value: Any) -> Any:
+    if _argument_was_provided(argv, option):
+        return cli_value
+    return loaded_value
+
+
+def _resolve_exchange_value(argv: list[str] | None, cli_value: str | None, loaded_value: str | None) -> str | None:
+    if _argument_was_provided(argv, "--execution-exchange"):
+        return None if cli_value == "auto" else cli_value
+    return loaded_value

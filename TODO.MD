@@ -58,12 +58,12 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
 
 - [ ] **Priority 4: Strategy Runtime Reliability**
   - [ ] Treat paper mode as the source-of-truth validation lane before any live promotion
-  - [ ] Add a “known-good” baseline strategy/runtime config that is used for paper-mode validation every time
-  - [ ] Persist and surface enough context to debug blocked entries:
-    - [ ] selected strategy and params
-    - [ ] latest bars/signal
-    - [ ] risk decision reason
-    - [ ] execution adapter response
+  - [x] Add a “known-good” baseline strategy/runtime config that is used for paper-mode validation every time
+  - [x] Persist and surface enough context to debug blocked entries:
+    - [x] selected strategy and params
+    - [x] latest bars/signal
+    - [x] risk decision reason
+    - [x] execution adapter response
   - [ ] Add end-to-end paper-runtime acceptance criteria:
     - [ ] startup checks pass
     - [ ] snapshots persist

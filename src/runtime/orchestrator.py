@@ -396,6 +396,7 @@ class RuntimeOrchestrator:
         self._evaluate_runtime_alerts(cycle=cycle, account_state_summary=account_state_summary, execution_result=execution_result)
         self._maybe_notify_new_trades(execution_result, previous_trade_count=previous_trade_count)
         self._update_live_plot(cycle=cycle, execution_result=execution_result)
+        self._log_execution_context(cycle=cycle, execution_result=execution_result)
         self._emit_cycle_health_snapshot(cycle)
         self._write_daily_summary()
         if self.trade_logger is not None:
@@ -534,6 +535,20 @@ class RuntimeOrchestrator:
                 source="runtime",
                 metadata={"summary": summary},
             )
+
+    def _log_execution_context(self, *, cycle: RuntimeCycleResult, execution_result: Any | None) -> None:
+        """Persist the latest strategy, market, and execution context for paper/runtime debugging."""
+        if self.trade_logger is None:
+            return
+
+        self.trade_logger.log_event(
+            timestamp=datetime.now(timezone.utc),
+            level="INFO",
+            event_type="runtime_execution_context",
+            message="runtime execution context updated",
+            source="runtime",
+            metadata=self._build_execution_context(cycle=cycle, execution_result=execution_result),
+        )
 
     def _update_live_plot(self, *, cycle: RuntimeCycleResult, execution_result: Any | None) -> None:
         """Append the latest runtime cycle to the live equity plot if enabled."""
@@ -904,6 +919,9 @@ class RuntimeOrchestrator:
         decision_summary = self._summarize_entry_decisions(entry_decisions)
         latest_decision = entry_decisions[-1] if entry_decisions else None
         data_source = self._resolve_data_source(cycle)
+        latest_bar = self._build_latest_bar_context(cycle)
+        latest_signal = self._build_latest_signal_context(cycle)
+        latest_order = self._build_latest_order_context(execution_result)
         risk_detail_text = ""
         if latest_decision is not None:
             volatility = latest_decision.get("volatility_pct")
@@ -928,6 +946,9 @@ class RuntimeOrchestrator:
             f"circuit_breaker: active={health_report['circuit_breaker']['active']} reason={health_report['circuit_breaker']['reason'] or 'none'}",
             f"kill_switch: active={health_report['kill_switch']['active']} reason={health_report['kill_switch']['reason'] or 'none'}",
             f"data_source: {data_source}",
+            f"latest_bar: timestamp={latest_bar['timestamp']} symbol={latest_bar['symbol']} close={latest_bar['close']}",
+            f"latest_signal: {latest_signal}",
+            f"latest_order: status={latest_order['status']} execution_status={latest_order['execution_status']} side={latest_order['side']} size={latest_order['size']} reason={latest_order['reason']}",
             f"entry_decisions: total={decision_summary['total']} allowed={decision_summary['allowed']} blocked={decision_summary['blocked']} reasons={decision_summary['reasons']}{risk_detail_text}",
             f"no_trade_reason: {no_trade_summary.get('reason', 'none')}",
         ]
@@ -990,12 +1011,87 @@ class RuntimeOrchestrator:
                 "bars": len(getattr(last_cycle, "bars", []) or []),
                 "trades": len(getattr(execution_result, "trades", []) or []),
                 "orders": len(getattr(execution_result, "orders", []) or []),
+                "latest_bar": self._build_latest_bar_context(last_cycle),
+                "latest_signal": self._build_latest_signal_context(last_cycle),
+                "latest_entry_decision": self._build_latest_entry_decision_context(entry_decisions),
+                "latest_order": self._build_latest_order_context(execution_result),
             },
             "entry_decisions": decision_summary,
             "no_trade_summary": no_trade_summary,
             "active_alerts": sorted(self._active_alerts),
             "recent_trades": recent_trades,
             "recent_events": recent_events,
+        }
+
+    def _build_execution_context(self, *, cycle: RuntimeCycleResult, execution_result: Any | None) -> dict[str, Any]:
+        """Build persisted runtime debug context for the latest cycle."""
+        return {
+            "mode": self.mode,
+            "strategy_name": self.strategy_name,
+            "strategy_params": dict(self.strategy_params),
+            "data_source": self._resolve_data_source(cycle),
+            "latest_bar": self._build_latest_bar_context(cycle),
+            "latest_signal": self._build_latest_signal_context(cycle),
+            "latest_entry_decision": self._build_latest_entry_decision_context(getattr(execution_result, "entry_decisions", None)),
+            "latest_order": self._build_latest_order_context(execution_result),
+        }
+
+    def _build_latest_bar_context(self, cycle: RuntimeCycleResult | None) -> dict[str, Any]:
+        latest_bar = None
+        if cycle is not None:
+            bars = list(getattr(cycle, "bars", []) or [])
+            latest_bar = bars[-1] if bars else None
+        if latest_bar is None:
+            return {"timestamp": None, "symbol": None, "close": None}
+
+        timestamp = getattr(latest_bar, "timestamp", None)
+        close = getattr(latest_bar, "close", getattr(latest_bar, "last", None))
+        symbol = getattr(latest_bar, "symbol", None)
+        if isinstance(latest_bar, dict):
+            timestamp = latest_bar.get("timestamp", timestamp)
+            close = latest_bar.get("close", latest_bar.get("last", close))
+            symbol = latest_bar.get("symbol", symbol)
+        return {
+            "timestamp": timestamp.isoformat() if hasattr(timestamp, "isoformat") else timestamp,
+            "symbol": symbol,
+            "close": None if close is None else float(close),
+        }
+
+    def _build_latest_signal_context(self, cycle: RuntimeCycleResult | None) -> float | None:
+        if cycle is None:
+            return None
+        signals = list(getattr(cycle, "signals", []) or [])
+        if not signals:
+            return None
+        return float(signals[-1])
+
+    def _build_latest_entry_decision_context(self, entry_decisions: Sequence[dict[str, Any]] | None) -> dict[str, Any] | None:
+        if not entry_decisions:
+            return None
+        latest = dict(entry_decisions[-1])
+        timestamp = latest.get("timestamp")
+        if hasattr(timestamp, "isoformat"):
+            latest["timestamp"] = timestamp.isoformat()
+        return latest
+
+    def _build_latest_order_context(self, execution_result: Any | None) -> dict[str, Any]:
+        orders = list(getattr(execution_result, "orders", []) or [])
+        if not orders:
+            return {
+                "status": "none",
+                "execution_status": None,
+                "side": None,
+                "size": 0.0,
+                "reason": "no_orders_recorded",
+            }
+
+        latest_order = orders[-1]
+        return {
+            "status": getattr(latest_order, "status", None),
+            "execution_status": getattr(latest_order, "execution_status", None),
+            "side": getattr(latest_order, "side", None),
+            "size": float(getattr(latest_order, "size", 0.0) or 0.0),
+            "reason": getattr(latest_order, "last_reason", None) or getattr(latest_order, "execution_message", None),
         }
 
     def _summarize_entry_decisions(self, entry_decisions: Sequence[dict[str, Any]] | None) -> dict[str, Any]:

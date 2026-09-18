@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import signal
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -716,7 +717,7 @@ def main() -> None:
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
     args = parser.parse_args()
-    runtime_config = build_runtime_config_from_args(args)
+    runtime_config = build_runtime_config_from_args(args, argv=sys.argv[1:])
 
     logger.info("CryptoQuantMFT startup complete")
     logger.info("database_path={}", settings.database_path)

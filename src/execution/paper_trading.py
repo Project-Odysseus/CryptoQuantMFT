@@ -28,6 +28,8 @@ class PaperOrder:
     created_at: datetime | None = None
     last_updated_at: datetime | None = None
     last_reason: str | None = None
+    execution_status: str | None = None
+    execution_message: str | None = None
 
     def __post_init__(self) -> None:
         self.created_at = self.timestamp
@@ -537,6 +539,8 @@ class PaperTradingEngine:
             "order_id": order.id,
             "side": order.side,
             "status": order.status,
+            "execution_status": order.execution_status,
+            "execution_message": order.execution_message,
             "size": order.size,
             "filled_size": order.filled_size,
             "remaining_size": order.remaining_size,
@@ -577,6 +581,8 @@ class PaperTradingEngine:
             price=price,
             timestamp=timestamp,
         )
+        order.execution_status = report.status
+        order.execution_message = report.message
         if report.status not in {"FILLED", "PARTIALLY_FILLED"}:
             order.status = "CANCELED"
             order.last_reason = report.message or "execution_adapter_rejected_order"
@@ -625,6 +631,15 @@ class PaperTradingEngine:
         order.fees += cost
         order.status = "FILLED"
         order.last_updated_at = timestamp
+        self._log_order_event(
+            order=order,
+            timestamp=timestamp,
+            event_type="order_lifecycle",
+            message="order filled via execution adapter",
+            fill_price=execution_price,
+            fill_size=fill_size,
+            fee=cost,
+        )
         trades.append(
             PaperTrade(
                 order_id=order.id,
