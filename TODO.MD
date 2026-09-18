@@ -43,18 +43,26 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [ ] Audit and fix stale imports, missing modules, and drift between tests and implementation before adding new strategy complexity
 
 - [ ] **Priority 3: Close the Live-Execution Gap Without Trading**
-  - [ ] Implement the missing `live` runtime path in `RuntimeOrchestrator` instead of raising `NotImplementedError`
+  - [x] Break Priority 3 into tracked implementation subtasks in `todo_important.md`
+  - [x] Implement the missing `live` runtime path in `RuntimeOrchestrator` instead of raising `NotImplementedError`
   - [ ] Keep the first live exchange milestone at **Kraken live-dry-run only**
     - [ ] exercise real Kraken authentication, order submission, cancel, and status lookup paths without enabling production trading
     - [ ] confirm symbol mapping, balances, order IDs, and reconciliation shape against Kraken responses
     - [ ] verify kill-switch and cancel paths against exchange-shaped state before any real order is allowed
-  - [ ] Add a hard safety gate so live trading cannot be enabled accidentally during development
-  - [ ] Add a manual approval checklist that must pass before moving from `paper` to `live_dry_run`, and from `live_dry_run` to `live`
+  - [x] Add a hard safety gate so live trading cannot be enabled accidentally during development
+  - [x] Add a manual approval checklist that must pass before moving from `paper` to `live_dry_run`, and from `live_dry_run` to `live`
+  - [x] Subtask 1: define the `live_dry_run` execution path and missing seams
+  - [x] Subtask 2: wire `live_dry_run` through the orchestrator and reconciliation stack
+  - [x] Subtask 3: harden Kraken adapter symbol/account/order-state handling
+  - [x] Subtask 4: add explicit safety gates for `--runtime live`
+  - [x] Subtask 5: document operator approval checklists for promotion
+  - [x] Subtask 6: add acceptance coverage for promotion and failure handling
+  - [x] Subtask 7: implement the guarded `live` runtime path in the orchestrator
   - [ ] Execution plan:
     - [ ] Phase A: adapter-level validation against Kraken private endpoints with read-only verification of authentication and non-destructive request/response handling
-    - [ ] Phase B: enable `live_dry_run` orchestrator flow to use the exchange adapter and reconciliation stack end to end without placing production orders
-    - [ ] Phase C: add explicit runtime guards for `--runtime live`, including a second confirmation mechanism, strict low-risk caps, and forced kill-switch readiness checks
-    - [ ] Phase D: add end-to-end acceptance tests for paper -> live_dry_run promotion and failure handling (stale data, order rejection, reconciliation mismatch, cancel failure)
+    - [x] Phase B: enable `live_dry_run` orchestrator flow to use the exchange adapter and reconciliation stack end to end without placing production orders
+    - [x] Phase C: add explicit runtime guards for `--runtime live`, including a second confirmation mechanism, strict low-risk caps, and forced kill-switch readiness checks
+    - [x] Phase D: add end-to-end acceptance tests for paper -> live_dry_run promotion and failure handling (stale data, order rejection, reconciliation mismatch, cancel failure)
 
 - [ ] **Priority 4: Strategy Runtime Reliability**
   - [x] Treat paper mode as the source-of-truth validation lane before any live promotion
