@@ -1,6 +1,6 @@
 # Priority 3 execution tracker
 
-This file breaks **Priority 3: Close the Live-Execution Gap Without Trading** into concrete subtasks. Each item should be checked off here when completed, and mirrored back into `TODO.MD`.
+This file breaks **Priority 3: Close the Live-Execution Gap Safely** into concrete subtasks. Each item should be checked off here when completed, and mirrored back into `TODO.MD`.
 
 - [x] **Subtask 1: Define the live-dry-run execution path**
   - [x] Trace the current `paper`, `live_dry_run`, and `live` runtime wiring from CLI to orchestrator to adapters
@@ -79,6 +79,12 @@ This file breaks **Priority 3: Close the Live-Execution Gap Without Trading** in
 - [ ] **Remaining Priority 3 closeout checks**
   - [x] Add a non-destructive Kraken verification command covering auth, balances, open/closed orders, status/cancel probes, and validate-only order requests
   - [x] Add a kill-switch preview against recovered Kraken order state
+  - [x] Add preview-only manual Kraken open and close-position flows
+  - [x] Add guarded manual Kraken open and close-position submission flows
+  - [ ] Add a concise account-summary/holdings surface for balances, positions, open orders, and recent live/manual actions
+  - [ ] Execute one tiny real Kraken round-trip and compare CLI output, persisted trades, tax rows, and recovered exchange history end to end
+  - [ ] Validate partial-fill and resting-open-order behavior against real Kraken state instead of immediate-fill assumptions
+  - [ ] Confirm strategy-driven live orders obey the same Kraken minimum-size, precision, and balance checks as manual orders
   - [ ] Re-run Kraken verification when the account contains at least one real historical or open order
   - [ ] Confirm recovered real Kraken order IDs, symbol mapping, and reconciliation state from populated exchange data
   - [ ] Confirm kill-switch preview targets the expected real open Kraken orders

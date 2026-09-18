@@ -6,6 +6,7 @@ CryptoQuantMFT is a Python trading-framework prototype for researching, backtest
 
 - **Stable today:** demo backtests, walk-forward evaluation, paper runtime, runtime health reporting, reconciliation, checkpoints, and kill-switch controls
 - **Validated against Kraken without trading:** private-endpoint auth, balances, open/closed order lookups, status/cancel probes, validate-only order requests, kill-switch preview, and manual quote-order preview
+- **Now available for a tightly controlled first round-trip:** manual Kraken CLI open-by-notional and close-position flows, guarded by live confirmation flags, a second manual confirmation token, and kill-switch readiness checks
 - **Now in place for go-live prep:** Norwegian tax-ledger foundation with Norges Bank EUR/NOK rates, FIFO EUR cost-basis tracking, yearly summary/export, and year-end holdings valuation
 - **Not yet signed off for production trading:** populated real-order reconciliation and post-trade tax-ledger validation against actual Kraken fills
 
@@ -102,6 +103,39 @@ python main.py --kraken-preview-order --kraken-preview-symbol BTC/EUR --kraken-p
 
 This fetches live pair rules, current price, your EUR balance, rounds the BTC size to Kraken precision, and only runs `AddOrder` with `validate=true`.
 
+Submit a small manual Kraken BTC/EUR buy after the preview passes:
+
+```bash
+python main.py \
+  --kraken-submit-order \
+  --kraken-submit-symbol BTC/EUR \
+  --kraken-submit-quote-amount 3.5 \
+  --enable-live-trading \
+  --live-confirmation ENABLE_LIVE_TRADING \
+  --kraken-submit-confirmation SUBMIT_KRAKEN_ORDER
+```
+
+This is a **real live action**. It reuses the preview sizing path, submits a market order only after validation passes, refreshes balances, and logs a filled trade into the local trade/tax ledger when Kraken reports an immediate fill.
+
+Preview closing the full current BTC/EUR position without sending it:
+
+```bash
+python main.py --kraken-preview-close-position --kraken-close-symbol BTC/EUR
+```
+
+Submit a full manual close of the current BTC/EUR position:
+
+```bash
+python main.py \
+  --kraken-close-position \
+  --kraken-close-symbol BTC/EUR \
+  --enable-live-trading \
+  --live-confirmation ENABLE_LIVE_TRADING \
+  --kraken-close-confirmation SUBMIT_KRAKEN_ORDER
+```
+
+This is also a **real live action**. It reads the current BTC balance, rounds the sell size to Kraken precision, validates the close first, then submits a market sell to close the position.
+
 Seed the EUR fiat pool before the first real Kraken trade:
 
 ```bash
@@ -127,7 +161,8 @@ python main.py --report --report-limit 20
 1. Keep paper mode stable and rerun Kraken verification.
 2. Seed the EUR fiat pool for tax basis tracking.
 3. Run a manual `--kraken-preview-order` for the intended tiny order size.
-4. Execute a small real Kraken trade later.
-5. Immediately verify reconciliation, order IDs, fees, and tax-ledger rows from that real fill.
+4. Execute a small real Kraken trade with the guarded manual submit flow.
+5. When you are ready to exit, use the guarded close-position flow instead of the strategy runtime.
+6. Immediately verify reconciliation, order IDs, fees, and tax-ledger rows from the real fill and close.
 
-Until step 5 is checked, treat the project as **pre-live but close**.
+Until step 6 is checked, treat the project as **pre-live but close**.

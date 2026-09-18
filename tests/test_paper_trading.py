@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from src.execution import PaperTradingEngine
+from src.execution.adapters import ExecutionReport
 from src.risk.controls import RiskControlConfig, RiskManager
 from src.storage.bar_aggregator import OHLCVBar
 
@@ -256,6 +257,73 @@ def test_paper_trading_engine_sizes_buy_orders_to_available_cash() -> None:
 
     assert len(result.orders) == 1
     assert result.orders[0].size == 0.02
+
+
+def test_exchange_cycle_closes_existing_long_on_sell_signal() -> None:
+    """Exchange-backed runtime cycles should close an existing long when the strategy flips sell."""
+
+    class StubExecutionAdapter:
+        exchange_name = "kraken"
+        name = "kraken"
+        _base_currency = "EUR"
+
+        def __init__(self) -> None:
+            self.orders: list[SimpleNamespace] = []
+            self._balances = {"EUR": 10.68}
+            self._positions = {"BTC": 0.00005145}
+
+        def list_orders(self) -> list[SimpleNamespace]:
+            return self.orders
+
+        def get_account_snapshot(self) -> dict[str, object]:
+            return {
+                "balances": dict(self._balances),
+                "positions": dict(self._positions),
+                "account_reconciliation": {},
+            }
+
+        def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
+            self._balances["EUR"] += price * size
+            self._positions["BTC"] = 0.0
+            order = SimpleNamespace(
+                order_id=order_id,
+                timestamp=timestamp,
+                side=side,
+                size=size,
+                symbol=symbol,
+                exchange=self.exchange_name,
+                status="FILLED",
+                filled_size=size,
+                fill_price=price,
+                fee=0.0,
+                remote_status="FILLED",
+                message="filled",
+            )
+            self.orders.append(order)
+            return ExecutionReport(order_id=order_id, status="FILLED", fill_price=price, filled_size=size, fee=0.0, message="filled")
+
+    bars = [
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=68000.0,
+            high=68000.0,
+            low=68000.0,
+            close=68000.0,
+            volume=10.0,
+        )
+    ]
+    adapter = StubExecutionAdapter()
+    engine = PaperTradingEngine(execution_adapter=adapter, exchange_name="kraken")
+
+    result = engine.run_exchange_cycle(bars, [-1.0])
+
+    assert len(result.orders) == 1
+    assert result.orders[0].side == "sell"
+    assert len(result.trades) == 1
+    assert result.portfolio_history[-1].position_size == 0.0
 
 
 def test_paper_trading_engine_sizes_buy_orders_to_risk_budget() -> None:

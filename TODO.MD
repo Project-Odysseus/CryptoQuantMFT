@@ -42,14 +42,17 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [ ] Add smoke tests for the CLI entry points above so “strategy runs at all” is continuously verified
   - [ ] Audit and fix stale imports, missing modules, and drift between tests and implementation before adding new strategy complexity
 
-- [ ] **Priority 3: Close the Live-Execution Gap Without Trading**
+- [ ] **Priority 3: Close the Live-Execution Gap Safely**
   - [x] Break Priority 3 into tracked implementation subtasks in `todo_important.md`
   - [x] Implement the missing `live` runtime path in `RuntimeOrchestrator` instead of raising `NotImplementedError`
-  - [ ] Keep the first live exchange milestone at **Kraken live-dry-run only**
+  - [ ] Keep the first live exchange milestone focused on **Kraken with explicit manual controls**
     - [x] exercise real Kraken authentication, order submission, cancel, and status lookup paths without enabling production trading
     - [x] add a manual quote-order preview command that validates tiny BTC/EUR orders by EUR notional without sending them
+    - [x] add a guarded manual Kraken submit command for a first tiny EUR-notional order outside the strategy runtime
+    - [x] add a guarded manual Kraken close-position command so the first live position can be exited without relying on the strategy runtime
     - [ ] confirm symbol mapping, balances, order IDs, and reconciliation shape against Kraken responses
       - [x] add a non-destructive closed-order history probe so real Kraken order payloads can be recovered and inspected without placing orders
+      - [ ] execute and inspect one tiny real Kraken round-trip so local state, persisted trades, and recovered exchange history can be compared end to end
       - [ ] re-run verification when the Kraken account has at least one historical or open order so real symbol/order-id mapping can be confirmed from populated exchange data
     - [ ] verify kill-switch and cancel paths against exchange-shaped state before any real order is allowed
       - [x] add a non-destructive kill-switch preview against recovered Kraken open-order state
@@ -95,9 +98,32 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [ ] Live-readiness rule: do not move from `live_dry_run` to real live trading until the tax-ledger path is implemented and validated end to end
     - [x] add manual EUR fiat-pool seeding via CLI before the first real Kraken trade
     - [x] add a manual Kraken preview flow that checks notional sizing, minimum order rules, and `validate=true` acceptance before the first live order
+    - [x] add a guarded manual Kraken submit flow that can place the first live order while reusing preview sizing and confirmation gates
+    - [x] add a guarded manual Kraken close-position flow that can exit the first live order with the same style of confirmation and validation gates
     - [ ] seed the real EUR starting balance/cost basis before the first live order
-    - [ ] verify the first real Kraken fill produces correct `REALIZED_PNL` / `TRADING_FEE` / `FIAT_CONVERSION` rows and annual summary output
+    - [ ] verify the first real Kraken fill and first close together produce correct `REALIZED_PNL` / `TRADING_FEE` / `FIAT_CONVERSION` rows and annual summary output
     - [ ] export the first real trading year ledger and spot-check it against exchange history
+
+- [ ] **Priority 3B: Manual Trading and Live-Control Closeout**
+  - [x] add preview-only manual buy flow for EUR-notional Kraken spot orders
+  - [x] add guarded manual buy submission with explicit live confirmations
+  - [x] add preview-only manual close-position flow for Kraken spot holdings
+  - [x] add guarded manual close submission with explicit live confirmations
+  - [ ] add a concise holdings/account-state CLI surface for balances, open orders, positions, and recent manual/live actions
+  - [ ] validate partial-fill and open-order behavior with real Kraken order states instead of immediate-fill assumptions
+  - [ ] complete one tiny real Kraken round-trip and compare:
+    - [ ] manual preview output vs actual submitted size
+    - [ ] remote Kraken order ids vs locally persisted order ids
+    - [ ] post-trade balances and positions vs reconciliation snapshot
+    - [ ] trade logger rows vs Kraken history
+    - [ ] tax-ledger rows vs actual fill and fee data
+
+- [ ] **Priority 3C: Immediate next live-system milestones**
+  - [ ] prove one real Kraken round-trip end to end before any broader live rollout
+  - [ ] add a single-command holdings / portfolio / open-orders operator summary
+  - [ ] apply manual-order safety and exchange-rule enforcement consistently to strategy-driven live orders
+  - [ ] harden real-order lifecycle handling for open orders, partial fills, delayed fills, and cancel/replace decisions
+  - [ ] keep the first live rollout limited to long/flat spot trading until these checks pass
 
 - [ ] **Priority 4: Strategy Runtime Reliability**
   - [x] Treat paper mode as the source-of-truth validation lane before any live promotion
@@ -115,6 +141,11 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [ ] risk decisions are logged
     - [ ] orders/trades/equity snapshots persist
     - [ ] dashboard/report output remains readable
+  - [ ] Make strategy-driven live execution match manual live controls:
+    - [ ] enforce exchange minimum order sizes and precision before strategy orders are submitted
+    - [ ] surface rejected-too-small / precision / balance failures explicitly in runtime health output
+    - [ ] define close/exit behavior clearly when the live strategy flips from buy to sell
+    - [ ] confirm live strategy orders remain long/flat only for Kraken spot until shorting support is explicitly designed
 
 - [ ] **Priority 5: Resolve the Incomplete Futures Track**
   - [ ] Preferred sequencing: explicitly defer futures behind the spot/Kraken runtime unless there is a short-term need to trade futures first
@@ -207,15 +238,23 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     $$Z_t = \frac{\text{Spread}_t - \mu_{\text{rolling}}}{\sigma_{\text{rolling}}}$$
   - [ ] Implement Ornstein-Uhlenbeck (OU) process parameter estimation for mean-reversion speed ($\theta$) and signal half-life calculation
   - [ ] Validate that the signal remains stable across regime changes and does not overfit to recent bars
+  - [ ] expand signal research from single-signal prototypes toward a production candidate set:
+    - [ ] order book imbalance across several depths
+    - [ ] microprice and spread-pressure features
+    - [ ] volume-delta / aggressor-flow features
+    - [ ] liquidity and volatility regime filters
+    - [ ] multi-timeframe confirmation between fast and slow signals
 - [ ] **Signal Validation Milestone**
   - [x] Ensure each signal has a simple test and an example plot/output
   - [x] Keep the signal stack lightweight and easy to reason about before expanding complexity
   - [x] Keep the backtest engine strategy-driven so a user-selected signal can be run on any supported time frame
   - [ ] Add signal robustness checks for volatility spikes, stale quotes, and missing data
+  - [ ] add signal comparison and attribution reports so multiple signals can be ranked by edge, stability, turnover, and correlation
 - [ ] **Machine Learning Signal Aggregator**
   - [ ] Train `xgboost` / `scikit-learn` classification model predicting $k$-step forward directional return using multi-timeframe OBI, $Z$-score, and regime features
   - [ ] Implement Feature Importance and SHAP value analysis to filter uninformative signals
   - [ ] Keep a simple fallback rule-based signal path for live trading if ML features are unavailable
+  - [ ] defer ML promotion until the rule-based multi-signal stack has clear baselines and attribution
 
 ---
 
@@ -255,6 +294,23 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] Implement Dynamic Inventory Risk Manager: penalize buy signals if portfolio inventory is heavily long-skewed on one exchange
   - [ ] Add dynamic sizing settings that can be tuned over time (for example, portfolio-risk percentage, max notional per trade, and regime-dependent sizing rules)
   - [ ] Add portfolio-level notional caps and per-exchange exposure limits before any live deployment
+  - [ ] define trading rules for systematic live deployment:
+    - [ ] max daily loss and hard stop escalation
+    - [ ] cooldown after rejected orders or repeated stale data
+    - [ ] max concurrent open orders
+    - [ ] max holding time / time-stop rules for non-reverting setups
+    - [ ] explicit rules for when a signal is ignored because another stronger signal already owns the position
+
+- [ ] **Priority 4A: Multi-signal portfolio construction and crossing**
+  - [ ] add a signal-combiner layer that converts many raw signals into one target position / target notional
+  - [ ] support per-signal confidence, weighting, and attribution
+  - [ ] net conflicting signals internally before routing orders to the exchange
+  - [ ] support “no trade” outcomes when buy and sell pressure mostly cancel
+  - [ ] add portfolio overview for multi-signal live trading:
+    - [ ] current target vs actual position
+    - [ ] per-signal desired exposure
+    - [ ] netted exposure after crossing
+    - [ ] recent execution decisions and skipped crossed trades
 - [ ] **Post-Trade & Portfolio Risk Controls**
   - [ ] **Circuit Breakers:** Implement daily Max Drawdown limit (e.g., hard stop at -2% account equity drop in 24 hours)
   - [ ] **Time Stops:** Automatically liquidate/exit mean-reversion positions if $Z$-score fails to revert within $N$ half-lives

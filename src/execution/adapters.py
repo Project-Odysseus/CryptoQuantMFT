@@ -828,6 +828,278 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             "can_submit": sufficient_balance and meets_minimum_size and meets_minimum_cost and validation_error is None and validation is not None,
         }
 
+    def submit_quote_order(self, *, symbol: str, quote_amount: float, side: str = "buy", order_id: str | None = None) -> dict[str, Any]:
+        """Submit a market Kraken order sized by quote notional after a validate-only preview passes."""
+        preview = self.preview_quote_order(symbol=symbol, quote_amount=quote_amount, side=side)
+        if not preview.get("can_submit"):
+            failure_reasons: list[str] = []
+            if not preview.get("sufficient_balance"):
+                failure_reasons.append("insufficient quote balance")
+            if not preview.get("meets_minimum_size"):
+                failure_reasons.append("below Kraken minimum size")
+            if not preview.get("meets_minimum_cost"):
+                failure_reasons.append("below Kraken minimum order cost")
+            if preview.get("validation_error"):
+                failure_reasons.append(str(preview["validation_error"]))
+            raise RuntimeError(
+                "Kraken manual order submission blocked: " + ", ".join(failure_reasons or ["preview checks did not pass"])
+            )
+
+        submitted_at = datetime.now(timezone.utc)
+        local_order_id = order_id or f"kraken-manual-{int(submitted_at.timestamp() * 1000)}"
+        normalized_symbol = str(preview["symbol"])
+        normalized_side = str(preview["side"])
+        rounded_size = float(preview["rounded_size"])
+        reference_price = float(preview["reference_price"])
+
+        payload = self._private_request(
+            endpoint="AddOrder",
+            params={
+                "pair": self._normalize_symbol(normalized_symbol),
+                "type": normalized_side,
+                "ordertype": "market",
+                "volume": self._format_decimal(rounded_size),
+            },
+        )
+        errors = self._extract_api_errors(payload)
+        if errors:
+            raise RuntimeError(self._format_api_errors(errors))
+
+        result = payload.get("result", {}) if isinstance(payload, dict) else {}
+        remote_order_id = None
+        description = None
+        if isinstance(result, dict):
+            txid_value = result.get("txid")
+            if isinstance(txid_value, list) and txid_value:
+                remote_order_id = str(txid_value[0])
+            elif isinstance(txid_value, str):
+                remote_order_id = txid_value
+            descr = result.get("descr")
+            if isinstance(descr, dict):
+                description = descr.get("order")
+            elif descr is not None:
+                description = str(descr)
+
+        order = ExecutionOrder(
+            order_id=local_order_id,
+            side=normalized_side,
+            size=rounded_size,
+            symbol=normalized_symbol,
+            price=reference_price,
+            timestamp=submitted_at,
+            status="SUBMITTED",
+            exchange=self.exchange_name,
+            remote_status="SUBMITTED",
+            remote_order_id=remote_order_id,
+            message="submitted to Kraken via manual quote order",
+        )
+        self._orders[local_order_id] = order
+
+        status_report = self.get_order_status(order_id=local_order_id)
+        if status_report.status in {"FILLED", "PARTIALLY_FILLED"}:
+            self.reconcile_order_state(
+                order_id=local_order_id,
+                remote_status=status_report.status,
+                remote_filled_size=status_report.filled_size,
+                remote_fill_price=status_report.fill_price,
+                remote_fee=status_report.fee,
+            )
+
+        refreshed_snapshot: dict[str, Any] | None = None
+        refreshed_snapshot_error: str | None = None
+        try:
+            refreshed_snapshot = self.fetch_balance_snapshot()
+            self.reconcile_account_state(
+                balances=refreshed_snapshot.get("balances"),
+                positions=refreshed_snapshot.get("positions"),
+            )
+        except Exception as exc:
+            refreshed_snapshot_error = str(exc)
+
+        current_order = self._orders[local_order_id]
+        return {
+            "timestamp": submitted_at.isoformat(),
+            "symbol": normalized_symbol,
+            "side": normalized_side,
+            "quote_currency": preview["quote_currency"],
+            "requested_quote_amount": preview["requested_quote_amount"],
+            "reference_price": reference_price,
+            "rounded_size": rounded_size,
+            "estimated_cost": preview["estimated_cost"],
+            "order_id": local_order_id,
+            "remote_order_id": remote_order_id,
+            "submit_description": description,
+            "status": current_order.status,
+            "fill_price": current_order.fill_price,
+            "filled_size": current_order.filled_size,
+            "fee": current_order.fee,
+            "message": status_report.message or current_order.message,
+            "preview": preview,
+            "validation": preview.get("validation"),
+            "account_snapshot": refreshed_snapshot,
+            "account_snapshot_error": refreshed_snapshot_error,
+            "account_reconciliation": self.get_account_snapshot().get("account_reconciliation", {}),
+        }
+
+    def preview_close_position(self, *, symbol: str, side: str = "sell") -> dict[str, Any]:
+        """Preview closing the full Kraken base-asset position at market without submitting it."""
+        normalized_side = self._normalize_side(side)
+        if normalized_side != "sell":
+            raise ValueError("close-position preview currently supports sell orders only")
+
+        pair_metadata = self.fetch_asset_pair_metadata(symbol=symbol)
+        ticker = self.fetch_ticker_snapshot(symbol=symbol)
+        balance_snapshot = self.fetch_balance_snapshot()
+        base_asset = self._base_asset(symbol)
+        available_position_size = float(balance_snapshot.get("positions", {}).get(base_asset, 0.0))
+        rounded_size = self._round_down(available_position_size, decimals=int(pair_metadata["lot_decimals"]))
+        reference_price = float(ticker["bid"])
+        estimated_proceeds = rounded_size * reference_price
+        minimum_size = float(pair_metadata["ordermin"])
+        minimum_cost = float(pair_metadata["costmin"])
+        has_position = rounded_size > 0.0
+        meets_minimum_size = rounded_size >= minimum_size and rounded_size > 0.0
+        meets_minimum_cost = estimated_proceeds >= minimum_cost and estimated_proceeds > 0.0
+
+        validation: dict[str, Any] | None = None
+        validation_error: str | None = None
+        if has_position and meets_minimum_size and meets_minimum_cost:
+            try:
+                validation = self.validate_order_request(symbol=symbol, side=normalized_side, size=rounded_size)
+            except Exception as exc:
+                validation_error = str(exc)
+
+        return {
+            "symbol": symbol.upper(),
+            "side": normalized_side,
+            "base_asset": base_asset,
+            "available_position_size": available_position_size,
+            "rounded_size": rounded_size,
+            "reference_price": reference_price,
+            "estimated_proceeds": estimated_proceeds,
+            "minimum_size": minimum_size,
+            "minimum_cost": minimum_cost,
+            "pair_metadata": pair_metadata,
+            "ticker": ticker,
+            "has_position": has_position,
+            "meets_minimum_size": meets_minimum_size,
+            "meets_minimum_cost": meets_minimum_cost,
+            "validation": validation,
+            "validation_error": validation_error,
+            "can_submit": has_position and meets_minimum_size and meets_minimum_cost and validation_error is None and validation is not None,
+        }
+
+    def submit_close_position(self, *, symbol: str, order_id: str | None = None) -> dict[str, Any]:
+        """Submit a market Kraken sell order that closes the full current base-asset position."""
+        preview = self.preview_close_position(symbol=symbol)
+        if not preview.get("can_submit"):
+            failure_reasons: list[str] = []
+            if not preview.get("has_position"):
+                failure_reasons.append("no position is available to close")
+            if not preview.get("meets_minimum_size"):
+                failure_reasons.append("position is below Kraken minimum size")
+            if not preview.get("meets_minimum_cost"):
+                failure_reasons.append("position is below Kraken minimum order cost")
+            if preview.get("validation_error"):
+                failure_reasons.append(str(preview["validation_error"]))
+            raise RuntimeError(
+                "Kraken manual close submission blocked: " + ", ".join(failure_reasons or ["preview checks did not pass"])
+            )
+
+        submitted_at = datetime.now(timezone.utc)
+        local_order_id = order_id or f"kraken-close-{int(submitted_at.timestamp() * 1000)}"
+        normalized_symbol = str(preview["symbol"])
+        rounded_size = float(preview["rounded_size"])
+        reference_price = float(preview["reference_price"])
+
+        payload = self._private_request(
+            endpoint="AddOrder",
+            params={
+                "pair": self._normalize_symbol(normalized_symbol),
+                "type": "sell",
+                "ordertype": "market",
+                "volume": self._format_decimal(rounded_size),
+            },
+        )
+        errors = self._extract_api_errors(payload)
+        if errors:
+            raise RuntimeError(self._format_api_errors(errors))
+
+        result = payload.get("result", {}) if isinstance(payload, dict) else {}
+        remote_order_id = None
+        description = None
+        if isinstance(result, dict):
+            txid_value = result.get("txid")
+            if isinstance(txid_value, list) and txid_value:
+                remote_order_id = str(txid_value[0])
+            elif isinstance(txid_value, str):
+                remote_order_id = txid_value
+            descr = result.get("descr")
+            if isinstance(descr, dict):
+                description = descr.get("order")
+            elif descr is not None:
+                description = str(descr)
+
+        order = ExecutionOrder(
+            order_id=local_order_id,
+            side="sell",
+            size=rounded_size,
+            symbol=normalized_symbol,
+            price=reference_price,
+            timestamp=submitted_at,
+            status="SUBMITTED",
+            exchange=self.exchange_name,
+            remote_status="SUBMITTED",
+            remote_order_id=remote_order_id,
+            message="submitted to Kraken via manual close order",
+        )
+        self._orders[local_order_id] = order
+
+        status_report = self.get_order_status(order_id=local_order_id)
+        if status_report.status in {"FILLED", "PARTIALLY_FILLED"}:
+            self.reconcile_order_state(
+                order_id=local_order_id,
+                remote_status=status_report.status,
+                remote_filled_size=status_report.filled_size,
+                remote_fill_price=status_report.fill_price,
+                remote_fee=status_report.fee,
+            )
+
+        refreshed_snapshot: dict[str, Any] | None = None
+        refreshed_snapshot_error: str | None = None
+        try:
+            refreshed_snapshot = self.fetch_balance_snapshot()
+            self.reconcile_account_state(
+                balances=refreshed_snapshot.get("balances"),
+                positions=refreshed_snapshot.get("positions"),
+            )
+        except Exception as exc:
+            refreshed_snapshot_error = str(exc)
+
+        current_order = self._orders[local_order_id]
+        return {
+            "timestamp": submitted_at.isoformat(),
+            "symbol": normalized_symbol,
+            "side": "sell",
+            "base_asset": preview["base_asset"],
+            "rounded_size": rounded_size,
+            "reference_price": reference_price,
+            "estimated_proceeds": preview["estimated_proceeds"],
+            "order_id": local_order_id,
+            "remote_order_id": remote_order_id,
+            "submit_description": description,
+            "status": current_order.status,
+            "fill_price": current_order.fill_price,
+            "filled_size": current_order.filled_size,
+            "fee": current_order.fee,
+            "message": status_report.message or current_order.message,
+            "preview": preview,
+            "validation": preview.get("validation"),
+            "account_snapshot": refreshed_snapshot,
+            "account_snapshot_error": refreshed_snapshot_error,
+            "account_reconciliation": self.get_account_snapshot().get("account_reconciliation", {}),
+        }
+
     def validate_order_request(self, *, symbol: str, side: str, size: float) -> dict[str, Any]:
         """Exercise Kraken's validate-only order path without placing a live order."""
         if size <= 0:
@@ -1183,6 +1455,13 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             if separator in normalized:
                 return normalized.split(separator, 1)[1].strip()
         return self._base_currency
+
+    def _base_asset(self, symbol: str) -> str:
+        normalized = symbol.strip().upper()
+        for separator in ("/", "-", "_", ":"):
+            if separator in normalized:
+                return normalized.split(separator, 1)[0].strip()
+        return normalized
 
     def _round_down(self, value: float, *, decimals: int) -> float:
         factor = 10 ** max(0, decimals)

@@ -26,6 +26,7 @@ from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
 
 LIVE_TRADING_CONFIRMATION = "ENABLE_LIVE_TRADING"
+KRAKEN_MANUAL_ORDER_CONFIRMATION = "SUBMIT_KRAKEN_ORDER"
 
 
 async def run_pipeline(iterations: int = 3, interval_seconds: float = 1.0) -> None:
@@ -207,6 +208,73 @@ def _validate_live_runtime_request(
         raise SystemExit("refusing to start --runtime live because kill-switch state is not ready")
     if readiness["active"]:
         raise SystemExit("refusing to start --runtime live while the kill switch is active")
+
+
+def _validate_kraken_manual_submit_request(
+    *,
+    symbol: str,
+    side: str,
+    quote_amount: float,
+    enable_live_trading: bool,
+    live_confirmation: str | None,
+    submit_confirmation: str | None,
+    kill_switch_controller: KillSwitchController | None = None,
+) -> None:
+    if not enable_live_trading:
+        raise SystemExit("refusing to submit a manual Kraken order without --enable-live-trading")
+    if live_confirmation != LIVE_TRADING_CONFIRMATION:
+        raise SystemExit(f"refusing to submit a manual Kraken order without --live-confirmation {LIVE_TRADING_CONFIRMATION}")
+    if submit_confirmation != KRAKEN_MANUAL_ORDER_CONFIRMATION:
+        raise SystemExit(
+            f"refusing to submit a manual Kraken order without --kraken-submit-confirmation {KRAKEN_MANUAL_ORDER_CONFIRMATION}"
+        )
+    if side.lower() != "buy":
+        raise SystemExit("refusing to submit a manual Kraken order because only buy is currently supported")
+    if quote_amount <= 0.0:
+        raise SystemExit("refusing to submit a manual Kraken order because --kraken-submit-quote-amount must be positive")
+    if not symbol.upper().endswith("/EUR"):
+        raise SystemExit("refusing to submit a manual Kraken order because only EUR-quoted symbols are currently supported")
+
+    kraken_caps = DEFAULT_EXCHANGE_RISK_LIMITS.get("kraken", {})
+    max_notional = float(kraken_caps.get("max_notional_per_trade", 500.0))
+    if quote_amount > max_notional:
+        raise SystemExit(
+            f"refusing to submit a manual Kraken order because the requested notional exceeds the Kraken safety ceiling of {max_notional}"
+        )
+
+    controller = kill_switch_controller or KillSwitchController()
+    readiness = controller.ensure_ready()
+    if not readiness["ready"]:
+        raise SystemExit("refusing to submit a manual Kraken order because kill-switch state is not ready")
+    if readiness["active"]:
+        raise SystemExit("refusing to submit a manual Kraken order while the kill switch is active")
+
+
+def _validate_kraken_manual_close_request(
+    *,
+    symbol: str,
+    enable_live_trading: bool,
+    live_confirmation: str | None,
+    close_confirmation: str | None,
+    kill_switch_controller: KillSwitchController | None = None,
+) -> None:
+    if not enable_live_trading:
+        raise SystemExit("refusing to close a manual Kraken position without --enable-live-trading")
+    if live_confirmation != LIVE_TRADING_CONFIRMATION:
+        raise SystemExit(f"refusing to close a manual Kraken position without --live-confirmation {LIVE_TRADING_CONFIRMATION}")
+    if close_confirmation != KRAKEN_MANUAL_ORDER_CONFIRMATION:
+        raise SystemExit(
+            f"refusing to close a manual Kraken position without --kraken-close-confirmation {KRAKEN_MANUAL_ORDER_CONFIRMATION}"
+        )
+    if not symbol.upper().endswith("/EUR"):
+        raise SystemExit("refusing to close a manual Kraken position because only EUR-quoted symbols are currently supported")
+
+    controller = kill_switch_controller or KillSwitchController()
+    readiness = controller.ensure_ready()
+    if not readiness["ready"]:
+        raise SystemExit("refusing to close a manual Kraken position because kill-switch state is not ready")
+    if readiness["active"]:
+        raise SystemExit("refusing to close a manual Kraken position while the kill switch is active")
 
 
 async def run_runtime_orchestrator(
@@ -931,6 +999,236 @@ def _run_kraken_order_preview(
     return preview
 
 
+def _run_kraken_close_preview(
+    *,
+    trade_logger: TradeLogger,
+    symbol: str,
+) -> dict[str, Any]:
+    """Preview closing the current Kraken position without sending it."""
+    adapter = KrakenExecutionAdapter()
+    preview = adapter.preview_close_position(symbol=symbol)
+
+    trade_logger.log_event(
+        timestamp=datetime.now(timezone.utc),
+        level="INFO",
+        event_type="kraken_close_preview",
+        message="Kraken close-position preview completed without submission",
+        source="main",
+        metadata={
+            "symbol": preview.get("symbol"),
+            "base_asset": preview.get("base_asset"),
+            "rounded_size": preview.get("rounded_size"),
+            "estimated_proceeds": preview.get("estimated_proceeds"),
+            "can_submit": preview.get("can_submit"),
+            "has_validation": preview.get("validation") is not None,
+            "validation_error": preview.get("validation_error"),
+        },
+    )
+
+    metadata = preview["pair_metadata"]
+    validation = preview.get("validation")
+    print("Kraken close-position preview")
+    print("-----------------------------")
+    print("Mode: validate-only (no order submitted)")
+    print(f"Symbol: {preview['symbol']}")
+    print(f"Side: {preview['side']}")
+    print(f"Pair code: {metadata['pair_code']}")
+    print(f"Pair status: {metadata['status']}")
+    print(f"Available {preview['base_asset']} position: {preview['available_position_size']:.10f}")
+    print(f"Rounded close size: {preview['rounded_size']:.10f}")
+    print(f"Reference bid price: {preview['reference_price']:.8f}")
+    print(f"Estimated proceeds: {preview['estimated_proceeds']:.8f} {adapter._quote_asset(symbol)}")
+    print(f"Minimum base size: {preview['minimum_size']:.10f}")
+    print(f"Minimum order cost: {preview['minimum_cost']:.8f} {adapter._quote_asset(symbol)}")
+    print(f"Lot decimals: {metadata['lot_decimals']}")
+    print(f"Price decimals: {metadata['pair_decimals']}")
+    print(f"Tick size: {metadata['tick_size']:.8f}")
+    print("Checks:")
+    print(f"  - position available: {'yes' if preview['has_position'] else 'no'}")
+    print(f"  - minimum size met: {'yes' if preview['meets_minimum_size'] else 'no'}")
+    print(f"  - minimum cost met: {'yes' if preview['meets_minimum_cost'] else 'no'}")
+    if validation is not None:
+        print("Kraken validate=true response: accepted")
+        print(f"  - description: {validation.get('description') or 'n/a'}")
+    elif preview.get("validation_error"):
+        print(f"Kraken validate=true response: rejected ({preview['validation_error']})")
+    else:
+        print("Kraken validate=true response: skipped (pre-checks failed)")
+    return preview
+
+
+def _run_kraken_order_submission(
+    *,
+    trade_logger: TradeLogger,
+    symbol: str,
+    side: str,
+    quote_amount: float,
+) -> dict[str, Any]:
+    """Submit a manual Kraken order using the validated quote-order path."""
+    adapter = KrakenExecutionAdapter()
+    submission = adapter.submit_quote_order(symbol=symbol, quote_amount=quote_amount, side=side)
+
+    persisted_trade_id: int | None = None
+    timestamp = datetime.fromisoformat(submission["timestamp"])
+    if submission.get("status") in {"FILLED", "PARTIALLY_FILLED"} and submission.get("fill_price") and submission.get("filled_size"):
+        persisted_trade_id = trade_logger.log_trade(
+            timestamp=timestamp,
+            source="cli_manual_live_order",
+            exchange="kraken",
+            pair=str(submission["symbol"]),
+            side=str(submission["side"]),
+            price=float(submission["fill_price"]),
+            size=float(submission["filled_size"]),
+            fee=float(submission.get("fee") or 0.0),
+            record_tax_event=True,
+        )
+
+    trade_logger.log_event(
+        timestamp=timestamp,
+        level="WARNING",
+        event_type="kraken_manual_order_submission",
+        message="Manual Kraken order submitted from CLI",
+        source="main",
+        metadata={
+            "symbol": submission.get("symbol"),
+            "side": submission.get("side"),
+            "requested_quote_amount": submission.get("requested_quote_amount"),
+            "rounded_size": submission.get("rounded_size"),
+            "order_id": submission.get("order_id"),
+            "remote_order_id": submission.get("remote_order_id"),
+            "status": submission.get("status"),
+            "fill_price": submission.get("fill_price"),
+            "filled_size": submission.get("filled_size"),
+            "fee": submission.get("fee"),
+            "persisted_trade_id": persisted_trade_id,
+            "account_snapshot_error": submission.get("account_snapshot_error"),
+        },
+    )
+
+    print("Kraken manual order submission")
+    print("------------------------------")
+    print("LIVE ACTION: order submitted to Kraken")
+    print(f"Symbol: {submission['symbol']}")
+    print(f"Side: {submission['side']}")
+    print(f"Requested EUR notional: {submission['requested_quote_amount']:.8f}")
+    print(f"Rounded base size: {submission['rounded_size']:.10f}")
+    print(f"Reference ask price: {submission['reference_price']:.8f}")
+    print(f"Estimated cost: {submission['estimated_cost']:.8f} {submission['quote_currency']}")
+    print(f"Local order id: {submission['order_id']}")
+    print(f"Kraken order id: {submission['remote_order_id'] or 'n/a'}")
+    print(f"Submit description: {submission.get('submit_description') or 'n/a'}")
+    print(f"Latest status: {submission['status']}")
+    if submission.get("filled_size") is not None:
+        print(f"Filled size: {submission['filled_size']:.10f}")
+    if submission.get("fill_price") is not None:
+        print(f"Fill price: {submission['fill_price']:.8f}")
+    print(f"Fee: {float(submission.get('fee') or 0.0):.8f}")
+    if persisted_trade_id is not None:
+        print(f"Persisted trade id: {persisted_trade_id}")
+        print("Tax logging: recorded for this fill")
+    else:
+        print("Tax logging: deferred until a filled trade is observed")
+
+    account_snapshot = submission.get("account_snapshot") or {}
+    balances = account_snapshot.get("balances", {}) if isinstance(account_snapshot, dict) else {}
+    if balances:
+        eur_balance = balances.get("EUR")
+        btc_balance = balances.get("BTC")
+        if eur_balance is not None:
+            print(f"Post-submit EUR balance: {float(eur_balance):.8f}")
+        if btc_balance is not None:
+            print(f"Post-submit BTC balance: {float(btc_balance):.10f}")
+    if submission.get("account_snapshot_error"):
+        print(f"Balance refresh: {submission['account_snapshot_error']}")
+
+    print("Next operator step: inspect --report and --tax-report after the trade settles.")
+    return submission
+
+
+def _run_kraken_close_submission(
+    *,
+    trade_logger: TradeLogger,
+    symbol: str,
+) -> dict[str, Any]:
+    """Submit a manual Kraken close order for the current full position."""
+    adapter = KrakenExecutionAdapter()
+    submission = adapter.submit_close_position(symbol=symbol)
+
+    persisted_trade_id: int | None = None
+    timestamp = datetime.fromisoformat(submission["timestamp"])
+    if submission.get("status") in {"FILLED", "PARTIALLY_FILLED"} and submission.get("fill_price") and submission.get("filled_size"):
+        persisted_trade_id = trade_logger.log_trade(
+            timestamp=timestamp,
+            source="cli_manual_live_close",
+            exchange="kraken",
+            pair=str(submission["symbol"]),
+            side="sell",
+            price=float(submission["fill_price"]),
+            size=float(submission["filled_size"]),
+            fee=float(submission.get("fee") or 0.0),
+            record_tax_event=True,
+        )
+
+    trade_logger.log_event(
+        timestamp=timestamp,
+        level="WARNING",
+        event_type="kraken_manual_close_submission",
+        message="Manual Kraken close order submitted from CLI",
+        source="main",
+        metadata={
+            "symbol": submission.get("symbol"),
+            "rounded_size": submission.get("rounded_size"),
+            "order_id": submission.get("order_id"),
+            "remote_order_id": submission.get("remote_order_id"),
+            "status": submission.get("status"),
+            "fill_price": submission.get("fill_price"),
+            "filled_size": submission.get("filled_size"),
+            "fee": submission.get("fee"),
+            "persisted_trade_id": persisted_trade_id,
+            "account_snapshot_error": submission.get("account_snapshot_error"),
+        },
+    )
+
+    print("Kraken manual close submission")
+    print("------------------------------")
+    print("LIVE ACTION: close order submitted to Kraken")
+    print(f"Symbol: {submission['symbol']}")
+    print(f"Close size: {submission['rounded_size']:.10f}")
+    print(f"Reference bid price: {submission['reference_price']:.8f}")
+    print(f"Estimated proceeds: {submission['estimated_proceeds']:.8f}")
+    print(f"Local order id: {submission['order_id']}")
+    print(f"Kraken order id: {submission['remote_order_id'] or 'n/a'}")
+    print(f"Submit description: {submission.get('submit_description') or 'n/a'}")
+    print(f"Latest status: {submission['status']}")
+    if submission.get("filled_size") is not None:
+        print(f"Filled size: {submission['filled_size']:.10f}")
+    if submission.get("fill_price") is not None:
+        print(f"Fill price: {submission['fill_price']:.8f}")
+    print(f"Fee: {float(submission.get('fee') or 0.0):.8f}")
+    if persisted_trade_id is not None:
+        print(f"Persisted trade id: {persisted_trade_id}")
+        print("Tax logging: recorded for this fill")
+    else:
+        print("Tax logging: deferred until a filled trade is observed")
+
+    account_snapshot = submission.get("account_snapshot") or {}
+    balances = account_snapshot.get("balances", {}) if isinstance(account_snapshot, dict) else {}
+    positions = account_snapshot.get("positions", {}) if isinstance(account_snapshot, dict) else {}
+    if balances:
+        eur_balance = balances.get("EUR")
+        if eur_balance is not None:
+            print(f"Post-close EUR balance: {float(eur_balance):.8f}")
+    if positions:
+        base_asset = submission.get("base_asset")
+        if base_asset in positions:
+            print(f"Post-close {base_asset} position: {float(positions[base_asset]):.10f}")
+    if submission.get("account_snapshot_error"):
+        print(f"Balance refresh: {submission['account_snapshot_error']}")
+
+    print("Next operator step: inspect --report and --tax-report after the close settles.")
+    return submission
+
+
 def main() -> None:
     """Initialize the runtime and run either the data pipeline or a demo backtest."""
     parser = argparse.ArgumentParser(description="CryptoQuantMFT runtime")
@@ -985,6 +1283,23 @@ def main() -> None:
     parser.add_argument("--kraken-preview-symbol", default=None, help="Symbol to use for Kraken order preview, e.g. BTC/EUR")
     parser.add_argument("--kraken-preview-side", choices=["buy"], default="buy", help="Order side for Kraken preview; currently buy only")
     parser.add_argument("--kraken-preview-quote-amount", type=float, default=3.0, help="Quote-currency notional for Kraken preview, e.g. 3.0 for 3 EUR on BTC/EUR")
+    parser.add_argument("--kraken-preview-close-position", action="store_true", help="Preview closing the full current Kraken position with validate=true without submitting it")
+    parser.add_argument("--kraken-close-symbol", default=None, help="Symbol to use for Kraken close-position preview or submission, e.g. BTC/EUR")
+    parser.add_argument("--kraken-submit-order", action="store_true", help="Submit a manual Kraken market order by EUR notional after passing preview and confirmation gates")
+    parser.add_argument("--kraken-submit-symbol", default=None, help="Symbol to use for Kraken manual submission, e.g. BTC/EUR")
+    parser.add_argument("--kraken-submit-side", choices=["buy"], default="buy", help="Order side for Kraken manual submission; currently buy only")
+    parser.add_argument("--kraken-submit-quote-amount", type=float, default=None, help="EUR notional to submit on Kraken for a manual order")
+    parser.add_argument(
+        "--kraken-submit-confirmation",
+        default=None,
+        help=f"Exact confirmation token required with --kraken-submit-order: {KRAKEN_MANUAL_ORDER_CONFIRMATION}",
+    )
+    parser.add_argument("--kraken-close-position", action="store_true", help="Submit a manual Kraken market sell that closes the full current position")
+    parser.add_argument(
+        "--kraken-close-confirmation",
+        default=None,
+        help=f"Exact confirmation token required with --kraken-close-position: {KRAKEN_MANUAL_ORDER_CONFIRMATION}",
+    )
     parser.add_argument("--tax-report", action="store_true", help="Print the Norwegian tax summary for the selected year")
     parser.add_argument("--tax-year", type=int, default=datetime.now(timezone.utc).year, help="Tax year used by --tax-report and tax exports")
     parser.add_argument("--tax-export-path", default=None, help="Optional CSV/JSON path to export tax-ledger rows for the selected tax year")
@@ -1024,6 +1339,48 @@ def main() -> None:
             symbol=args.kraken_preview_symbol or runtime_config.trading_symbol or "BTC/EUR",
             side=args.kraken_preview_side,
             quote_amount=args.kraken_preview_quote_amount,
+        )
+        return
+
+    if args.kraken_preview_close_position:
+        _run_kraken_close_preview(
+            trade_logger=logger_store,
+            symbol=args.kraken_close_symbol or runtime_config.trading_symbol or "BTC/EUR",
+        )
+        return
+
+    if args.kraken_submit_order:
+        submission_symbol = args.kraken_submit_symbol or runtime_config.trading_symbol or "BTC/EUR"
+        submission_quote_amount = args.kraken_submit_quote_amount
+        if submission_quote_amount is None:
+            raise SystemExit("refusing to submit a manual Kraken order without --kraken-submit-quote-amount")
+        _validate_kraken_manual_submit_request(
+            symbol=submission_symbol,
+            side=args.kraken_submit_side,
+            quote_amount=submission_quote_amount,
+            enable_live_trading=args.enable_live_trading,
+            live_confirmation=args.live_confirmation,
+            submit_confirmation=args.kraken_submit_confirmation,
+        )
+        _run_kraken_order_submission(
+            trade_logger=logger_store,
+            symbol=submission_symbol,
+            side=args.kraken_submit_side,
+            quote_amount=submission_quote_amount,
+        )
+        return
+
+    if args.kraken_close_position:
+        close_symbol = args.kraken_close_symbol or runtime_config.trading_symbol or "BTC/EUR"
+        _validate_kraken_manual_close_request(
+            symbol=close_symbol,
+            enable_live_trading=args.enable_live_trading,
+            live_confirmation=args.live_confirmation,
+            close_confirmation=args.kraken_close_confirmation,
+        )
+        _run_kraken_close_submission(
+            trade_logger=logger_store,
+            symbol=close_symbol,
         )
         return
 

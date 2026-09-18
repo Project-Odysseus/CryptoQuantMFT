@@ -60,6 +60,39 @@ python main.py --kraken-preview-order --kraken-preview-symbol BTC/EUR --kraken-p
 
 This fetches live Kraken pair minimums and precision, checks your EUR balance, estimates the BTC size from the current ask, rounds to Kraken lot precision, and only calls `AddOrder` with `validate=true`.
 
+12. If the preview passes and you intentionally want to send the first live order, use the guarded manual-submit command:
+
+```bash
+python main.py \
+  --kraken-submit-order \
+  --kraken-submit-symbol BTC/EUR \
+  --kraken-submit-quote-amount 3.5 \
+  --enable-live-trading \
+  --live-confirmation ENABLE_LIVE_TRADING \
+  --kraken-submit-confirmation SUBMIT_KRAKEN_ORDER
+```
+
+This submits a **real Kraken market order**. It is intentionally gated behind the live opt-in token, a second manual-submit confirmation token, and kill-switch readiness checks.
+
+13. Before closing a live BTC/EUR position manually, preview the full close first:
+
+```bash
+python main.py --kraken-preview-close-position --kraken-close-symbol BTC/EUR
+```
+
+14. To close the full live BTC/EUR position manually, use:
+
+```bash
+python main.py \
+  --kraken-close-position \
+  --kraken-close-symbol BTC/EUR \
+  --enable-live-trading \
+  --live-confirmation ENABLE_LIVE_TRADING \
+  --kraken-close-confirmation SUBMIT_KRAKEN_ORDER
+```
+
+This submits a **real Kraken market sell** for the full currently held base-asset size after validate-only checks pass.
+
 ## Daily operational checks
 
 After a run starts, verify the following:
@@ -137,6 +170,9 @@ This checklist is intentionally stricter. Completing it does **not** mean the re
 - Run the paper baseline again if there is any doubt about current repo state.
 - Run `python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR` and confirm all checks pass before trusting exchange credentials or payload normalization.
 - Run `python main.py --kraken-preview-order --kraken-preview-symbol BTC/EUR --kraken-preview-quote-amount <eur_amount>` and confirm the intended notional clears Kraken minimum size/cost rules before attempting any first live order.
+- If you already hold BTC and plan to exit manually, run `python main.py --kraken-preview-close-position --kraken-close-symbol BTC/EUR` before using the close command.
+- Use `python main.py --kraken-submit-order ... --enable-live-trading --live-confirmation ENABLE_LIVE_TRADING --kraken-submit-confirmation SUBMIT_KRAKEN_ORDER` only when you intentionally want to place a live order after the preview has passed.
+- Use `python main.py --kraken-close-position ... --enable-live-trading --live-confirmation ENABLE_LIVE_TRADING --kraken-close-confirmation SUBMIT_KRAKEN_ORDER` only when you intentionally want to submit a live market close of the current position.
 - Confirm the verification output's kill-switch preview matches expectations for any currently open Kraken orders.
 - Seed the EUR fiat pool before the first real Kraken trade with `python main.py --tax-log-fiat-eur <amount> --tax-fx-rate <eur_nok_rate> --tax-reference initial_capital`.
 - Confirm the Norwegian tax ledger stays readable with `python main.py --tax-report --tax-year <year>` and export it before any production rollout.
