@@ -380,10 +380,13 @@ def test_kraken_adapter_verify_dry_run_exercises_private_endpoints_non_destructi
     assert [check["name"] for check in summary["checks"]] == [
         "balance_snapshot",
         "open_orders",
+        "recovery_state",
         "order_status",
         "cancel_order",
         "validate_order",
     ]
+    assert summary["recovered_order_count"] == 1
+    assert summary["recovered_order_ids"] == ["abc123"]
     assert calls[2] == ("QueryOrders", {"txid": "abc123", "trades": "false"})
     assert calls[3] == ("CancelOrder", {"txid": "DRYRUNVERIFY-CANCEL"})
 
@@ -408,6 +411,7 @@ def test_kraken_adapter_verify_dry_run_uses_expected_unknown_order_probes_when_n
     summary = adapter.verify_dry_run(symbol="BTC/EUR", size=0.0002)
 
     assert summary["status"] == "passed"
+    assert summary["recovered_order_count"] == 0
     status_check = next(check for check in summary["checks"] if check["name"] == "order_status")
     cancel_check = next(check for check in summary["checks"] if check["name"] == "cancel_order")
     assert status_check["ok"] is True

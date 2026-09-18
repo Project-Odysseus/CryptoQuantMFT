@@ -362,6 +362,33 @@ def test_kill_switch_controller_records_cancel_failures(tmp_path) -> None:
     assert state["orders_cancelled"][0]["status"] == "REJECTED"
 
 
+def test_kill_switch_controller_preview_activation_reports_open_orders_without_mutating_state(tmp_path) -> None:
+    """Preview should show what the kill switch would cancel without persisting an active state."""
+
+    class DummyAdapter:
+        def __init__(self) -> None:
+            self._orders = [
+                SimpleNamespace(order_id="remote-1", remote_order_id="kraken-1", status="OPEN", exchange="kraken"),
+                SimpleNamespace(order_id="filled-1", remote_order_id="kraken-2", status="FILLED", exchange="kraken"),
+            ]
+
+        def list_orders(self) -> list[SimpleNamespace]:
+            return self._orders
+
+        def get_account_snapshot(self) -> dict[str, object]:
+            return {"balances": {"EUR": 1000.0}, "positions": {}}
+
+    controller = KillSwitchController(state_file=tmp_path / "kill-switch.json")
+
+    preview = controller.preview_activation(execution_adapter=DummyAdapter())
+
+    assert preview["active"] is False
+    assert preview["order_count"] == 1
+    assert preview["orders_to_cancel"][0]["order_id"] == "remote-1"
+    assert preview["orders_to_cancel"][0]["remote_order_id"] == "kraken-1"
+    assert controller.get_state()["active"] is False
+
+
 def test_simple_backtester_respects_risk_manager() -> None:
     """The backtester should skip entries when the risk manager blocks them."""
 

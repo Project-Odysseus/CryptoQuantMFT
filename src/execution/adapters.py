@@ -240,8 +240,15 @@ class ExecutionAdapter:
                         filled_size=self._coerce_float(payload.get("filled_size")),
                         fee=self._coerce_float(payload.get("fee")) or 0.0,
                         exchange=self.name,
+                        remote_order_id=str(payload.get("remote_order_id")) if payload.get("remote_order_id") is not None else None,
+                        remote_status=str(payload.get("status", "SUBMITTED") or "SUBMITTED").upper(),
                     )
                     self._orders[order_id] = order
+                else:
+                    if payload.get("remote_order_id") is not None and not getattr(order, "remote_order_id", None):
+                        order.remote_order_id = str(payload.get("remote_order_id"))
+                    if payload.get("symbol") is not None and getattr(order, "symbol", None) is None:
+                        order.symbol = str(payload.get("symbol"))
 
                 self.reconcile_order_state(
                     order_id=order_id,
@@ -795,6 +802,24 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         except Exception as exc:
             checks.append({"name": "open_orders", "ok": False, "message": str(exc)})
 
+        recovery_summary: dict[str, Any] | None = None
+        if balance_snapshot is not None:
+            try:
+                recovery_summary = self.recover_execution_state(
+                    remote_snapshot=balance_snapshot,
+                    remote_orders=open_orders,
+                )
+                checks.append(
+                    {
+                        "name": "recovery_state",
+                        "ok": True,
+                        "message": f"recovered {recovery_summary.get('recovered_order_count', 0)} Kraken orders into local state",
+                        "recovered_order_count": recovery_summary.get("recovered_order_count", 0),
+                    }
+                )
+            except Exception as exc:
+                checks.append({"name": "recovery_state", "ok": False, "message": str(exc)})
+
         status_probe_order_id = probe_order_id
         expected_status_errors: tuple[str, ...] = ()
         if status_probe_order_id is None and open_orders:
@@ -836,6 +861,8 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         summary["checks"] = checks
         summary["balance_snapshot"] = balance_snapshot or {}
         summary["open_order_count"] = len(open_orders)
+        summary["recovered_order_ids"] = (recovery_summary or {}).get("recovered_order_ids", [])
+        summary["recovered_order_count"] = (recovery_summary or {}).get("recovered_order_count", 0)
         summary["status"] = "passed" if all(bool(check.get("ok")) for check in checks) else "failed"
         return summary
 

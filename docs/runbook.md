@@ -51,6 +51,7 @@ python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR
 ```
 
 This verifies Kraken private-endpoint authentication, balance/open-order normalization, status/cancel request handling, and the validate-only order path without placing a production order.
+It also previews which open Kraken orders the kill switch would attempt to cancel after recovering exchange-shaped order state locally.
 
 ## Daily operational checks
 
@@ -126,6 +127,7 @@ This checklist is intentionally stricter. Completing it does **not** mean the re
 - Run `python main.py --dashboard --report` and confirm the persisted runtime state is readable.
 - Run the paper baseline again if there is any doubt about current repo state.
 - Run `python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR` and confirm all checks pass before trusting exchange credentials or payload normalization.
+- Confirm the verification output's kill-switch preview matches expectations for any currently open Kraken orders.
 - For dry-run work, prefer a short bounded run first (`--runtime-iterations 3`) before longer sessions.
 - If testing live guards only, verify the CLI refuses `--runtime live` without the required flags instead of trying to work around the protections.
 - If the kill switch was triggered earlier, reset and verify the state before any further promotion attempt.

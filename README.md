@@ -129,6 +129,7 @@ python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR
 ```
 
 This probe authenticates against Kraken private endpoints, fetches balances and open orders, exercises status/cancel request handling safely, and uses Kraken's `validate=true` order path so no production order is placed.
+It also recovers any currently open Kraken orders into local adapter state and prints a **kill-switch preview** showing which exchange-shaped orders would be cancelled if the kill switch had to fire.
 
 `--runtime live` is now guarded on purpose: it requires `--enable-live-trading`, the exact confirmation token `--live-confirmation ENABLE_LIVE_TRADING`, an explicit non-auto `--execution-exchange`, and a ready/inactive kill-switch state before the CLI will even attempt the live path.
 

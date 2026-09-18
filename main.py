@@ -750,6 +750,8 @@ def _run_kraken_dry_run_verification(
     """Run a non-destructive Kraken private-endpoint verification and print the result."""
     adapter = KrakenExecutionAdapter()
     verification = adapter.verify_dry_run(symbol=symbol, size=size, probe_order_id=probe_order_id)
+    kill_switch_preview = KillSwitchController(trade_logger=trade_logger).preview_activation(execution_adapter=adapter)
+    verification["kill_switch_preview"] = kill_switch_preview
 
     trade_logger.log_event(
         timestamp=datetime.now(timezone.utc),
@@ -762,6 +764,8 @@ def _run_kraken_dry_run_verification(
             "symbol": symbol,
             "size": size,
             "probe_order_id": probe_order_id,
+            "recovered_order_count": verification.get("recovered_order_count", 0),
+            "kill_switch_preview_order_count": kill_switch_preview.get("order_count", 0),
             "check_results": [
                 {
                     "name": check.get("name"),
@@ -785,10 +789,23 @@ def _run_kraken_dry_run_verification(
         print(f"Balance currencies: {len(balances)}")
         print(f"Open position symbols: {len(positions)}")
     print(f"Open orders observed: {verification.get('open_order_count', 0)}")
+    print(f"Recovered orders: {verification.get('recovered_order_count', 0)}")
+    print(f"Kill-switch preview cancellations: {kill_switch_preview.get('order_count', 0)}")
     print("Checks:")
     for check in verification.get("checks", []):
         marker = "PASS" if check.get("ok") else "FAIL"
         print(f"  - [{marker}] {check.get('name')}: {check.get('message')}")
+    if kill_switch_preview.get("orders_to_cancel"):
+        print("Kill-switch preview:")
+        for order in kill_switch_preview["orders_to_cancel"][:10]:
+            print(
+                "  - order_id={order_id} remote_order_id={remote_order_id} status={status} exchange={exchange}".format(
+                    order_id=order.get("order_id"),
+                    remote_order_id=order.get("remote_order_id") or "n/a",
+                    status=order.get("status"),
+                    exchange=order.get("exchange") or "unknown",
+                )
+            )
 
     if verification.get("status") != "passed":
         raise SystemExit("Kraken dry-run verification failed")

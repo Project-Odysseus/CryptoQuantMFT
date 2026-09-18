@@ -68,6 +68,33 @@ class KillSwitchController:
             "state_file": str(self.state_file),
         }
 
+    def preview_activation(self, *, execution_adapter: Any | None = None) -> dict[str, Any]:
+        """Return what the kill switch would cancel without mutating persisted state."""
+        orders_to_cancel: list[dict[str, Any]] = []
+        if execution_adapter is not None:
+            for order in getattr(execution_adapter, "list_orders", lambda: [])():
+                order_id = getattr(order, "order_id", None)
+                if not order_id:
+                    continue
+                status = getattr(order, "status", None)
+                if status in {"FILLED", "CANCELED", "REJECTED", "NOT_FOUND"}:
+                    continue
+                orders_to_cancel.append(
+                    {
+                        "order_id": order_id,
+                        "remote_order_id": getattr(order, "remote_order_id", None),
+                        "status": status,
+                        "exchange": getattr(order, "exchange", None),
+                    }
+                )
+        return {
+            "active": bool(self._state.get("active")),
+            "state_file": str(self.state_file),
+            "orders_to_cancel": orders_to_cancel,
+            "order_count": len(orders_to_cancel),
+            "account_snapshot": getattr(execution_adapter, "get_account_snapshot", lambda: None)() if execution_adapter is not None else None,
+        }
+
     def reset(self) -> None:
         """Perform the reset operation."""
         self._state = {"active": False, "reason": None, "triggered_at": None, "orders_cancelled": [], "account_snapshot": None, "neutralized": False}

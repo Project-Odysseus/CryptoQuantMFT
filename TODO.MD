@@ -49,6 +49,8 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [x] exercise real Kraken authentication, order submission, cancel, and status lookup paths without enabling production trading
     - [ ] confirm symbol mapping, balances, order IDs, and reconciliation shape against Kraken responses
     - [ ] verify kill-switch and cancel paths against exchange-shaped state before any real order is allowed
+      - [x] add a non-destructive kill-switch preview against recovered Kraken open-order state
+      - [ ] re-run that preview while at least one real Kraken open order exists so the cancel target list is validated against a populated exchange order book
   - [x] Add a hard safety gate so live trading cannot be enabled accidentally during development
   - [x] Add a manual approval checklist that must pass before moving from `paper` to `live_dry_run`, and from `live_dry_run` to `live`
   - [x] Subtask 1: define the `live_dry_run` execution path and missing seams
