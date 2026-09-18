@@ -58,6 +58,16 @@ class KillSwitchController:
         """Return the state value."""
         return dict(self._state)
 
+    def ensure_ready(self) -> dict[str, Any]:
+        """Persist an inactive state file if needed and report readiness for guarded live use."""
+        if not self.state_file.exists():
+            self._persist_state()
+        return {
+            "ready": self.state_file.exists(),
+            "active": bool(self._state.get("active")),
+            "state_file": str(self.state_file),
+        }
+
     def reset(self) -> None:
         """Perform the reset operation."""
         self._state = {"active": False, "reason": None, "triggered_at": None, "orders_cancelled": [], "account_snapshot": None, "neutralized": False}

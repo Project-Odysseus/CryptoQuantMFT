@@ -116,6 +116,14 @@ Run the committed baseline paper-runtime config:
 python main.py --runtime paper --runtime-config-path config/runtime.paper.json --dashboard --report
 ```
 
+Run the exchange-shaped dry-run promotion lane:
+
+```bash
+python main.py --runtime live_dry_run --execution-exchange kraken --runtime-iterations 3 --dashboard --report
+```
+
+`--runtime live` is now guarded on purpose: it requires `--enable-live-trading`, the exact confirmation token `--live-confirmation ENABLE_LIVE_TRADING`, an explicit non-auto `--execution-exchange`, and a ready/inactive kill-switch state before the CLI will even attempt the live path.
+
 Show recent persisted runtime activity:
 
 ```bash

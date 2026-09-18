@@ -327,6 +327,41 @@ def test_kill_switch_controller_cancels_open_orders(tmp_path) -> None:
     assert state["orders_cancelled"][0]["status"] == "CANCELED"
 
 
+def test_kill_switch_controller_ensure_ready_persists_default_state(tmp_path) -> None:
+    """Ensuring readiness should create an inactive persisted kill-switch state."""
+    controller = KillSwitchController(state_file=tmp_path / "kill-switch.json")
+
+    readiness = controller.ensure_ready()
+
+    assert readiness["ready"] is True
+    assert readiness["active"] is False
+    assert controller.state_file.exists() is True
+
+
+def test_kill_switch_controller_records_cancel_failures(tmp_path) -> None:
+    """Cancel failures should still be captured in the persisted kill-switch state."""
+
+    class DummyAdapter:
+        def __init__(self) -> None:
+            self._orders = [SimpleNamespace(order_id="order-1", status="OPEN")]
+
+        def list_orders(self) -> list[SimpleNamespace]:
+            return self._orders
+
+        def cancel_order(self, *, order_id: str) -> SimpleNamespace:
+            return SimpleNamespace(status="REJECTED")
+
+        def get_account_snapshot(self) -> dict[str, object]:
+            return {"balances": {"USD": 1000.0}, "positions": {}}
+
+    controller = KillSwitchController(state_file=tmp_path / "kill-switch.json")
+
+    state = controller.activate("manual", execution_adapter=DummyAdapter())
+
+    assert state["active"] is True
+    assert state["orders_cancelled"][0]["status"] == "REJECTED"
+
+
 def test_simple_backtester_respects_risk_manager() -> None:
     """The backtester should skip entries when the risk manager blocks them."""
 

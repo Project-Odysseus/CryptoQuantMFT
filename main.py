@@ -13,7 +13,7 @@ from config import settings
 from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, evaluate_walk_forward, resolve_strategy, run_backtest
 from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
 from src.execution import ExecutionRouter, PaperTradingEngine
-from src.risk.controls import RiskControlConfig, RiskManager
+from src.risk.controls import DEFAULT_EXCHANGE_RISK_LIMITS, RiskControlConfig, RiskManager
 from src.risk.kill_switch import KillSwitchController
 from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
@@ -23,6 +23,8 @@ from src.storage.market_store import MarketStore
 from src.storage.order_book import OrderBookSnapshot
 from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
+
+LIVE_TRADING_CONFIRMATION = "ENABLE_LIVE_TRADING"
 
 
 async def run_pipeline(iterations: int = 3, interval_seconds: float = 1.0) -> None:
@@ -70,25 +72,28 @@ def build_runtime_orchestrator(
     market_data_interval_seconds = max(1, int(round(runtime_config.interval_seconds)))
     store = MarketStore(database_path=settings.database_path)
     pipeline = MarketDataPipeline(store=store, interval_seconds=market_data_interval_seconds)
-    trading_symbol = runtime_config.trading_symbol or _resolve_trading_symbol(exchange=runtime_config.exchange)
+    requested_exchange = _resolve_runtime_exchange(runtime_config.exchange)
+    effective_exchange = requested_exchange
+    trading_symbol = runtime_config.trading_symbol or _resolve_trading_symbol(exchange=requested_exchange)
 
     if runtime_config.use_mock_connector:
         pipeline.add_connector(MockExchangeConnector(symbol=trading_symbol))
     else:
-        exchange_name = (runtime_config.exchange or "kraken").lower()
-        if exchange_name in {"auto", "kraken"}:
+        if requested_exchange == "kraken":
             pipeline.add_connector(KrakenConnector(symbol=trading_symbol))
-        elif exchange_name == "firi" and settings.firi_api_key:
+        elif requested_exchange == "firi" and settings.firi_api_key:
             pipeline.add_connector(FiriConnector(symbol=trading_symbol))
-        elif exchange_name == "firi":
+        elif requested_exchange == "firi":
             logger.warning("runtime_firi_api_key_missing falling back to kraken")
-            fallback_symbol = runtime_config.trading_symbol or _resolve_trading_symbol(exchange="kraken")
+            effective_exchange = "kraken"
+            fallback_symbol = runtime_config.trading_symbol or _resolve_trading_symbol(exchange=effective_exchange)
             pipeline.add_connector(KrakenConnector(symbol=fallback_symbol))
 
     logger.info(
-        "runtime_market_data_config interval_seconds={} connector={} use_mock={}",
+        "runtime_market_data_config interval_seconds={} requested_exchange={} effective_exchange={} use_mock={}",
         market_data_interval_seconds,
         runtime_config.exchange or "auto",
+        effective_exchange,
         runtime_config.use_mock_connector,
     )
 
@@ -109,7 +114,7 @@ def build_runtime_orchestrator(
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
-    execution_router = ExecutionRouter(mode=runtime_config.mode, exchange=runtime_config.exchange)
+    execution_router = ExecutionRouter(mode=runtime_config.mode, exchange=effective_exchange)
     engine = PaperTradingEngine(
         initial_cash=1000.0,
         default_order_size=1.0,
@@ -118,6 +123,7 @@ def build_runtime_orchestrator(
         risk_manager=risk_manager,
         trade_logger=trade_logger,
         execution_adapter=execution_router.adapter,
+        exchange_name=effective_exchange,
     )
     strategy = resolve_strategy(runtime_config.strategy_name, **runtime_config.strategy_params)
     # Derive the primary trading symbol from the first connector so bars and
@@ -149,6 +155,56 @@ def _resolve_trading_symbol(*, exchange: str | None = None) -> str:
     if normalized_exchange == "firi":
         return "BTC/NOK"
     return "BTC/EUR"
+
+
+def _resolve_runtime_exchange(exchange: str | None) -> str:
+    normalized_exchange = (exchange or "kraken").lower()
+    if normalized_exchange == "auto":
+        return "kraken"
+    if normalized_exchange in {"kraken", "firi"}:
+        return normalized_exchange
+    return "kraken"
+
+
+def _validate_live_runtime_request(
+    *,
+    runtime_config: RuntimeConfig,
+    use_mock_connector: bool,
+    enable_live_trading: bool,
+    live_confirmation: str | None,
+    kill_switch_controller: KillSwitchController | None = None,
+) -> None:
+    if runtime_config.mode != "live":
+        return
+    if not enable_live_trading:
+        raise SystemExit("refusing to start --runtime live without --enable-live-trading")
+    if live_confirmation != LIVE_TRADING_CONFIRMATION:
+        raise SystemExit(f"refusing to start --runtime live without --live-confirmation {LIVE_TRADING_CONFIRMATION}")
+    if use_mock_connector:
+        raise SystemExit("refusing to start --runtime live with --use-mock-connector")
+    if runtime_config.exchange is None:
+        raise SystemExit("refusing to start --runtime live without an explicit --execution-exchange")
+
+    exchange_name = _resolve_runtime_exchange(runtime_config.exchange)
+    if exchange_name not in DEFAULT_EXCHANGE_RISK_LIMITS:
+        raise SystemExit(f"refusing to start --runtime live because no exchange risk limits are defined for {exchange_name}")
+
+    exchange_caps = DEFAULT_EXCHANGE_RISK_LIMITS[exchange_name]
+    if float(exchange_caps.get("max_position_size", 0.0)) > 0.5:
+        raise SystemExit("refusing to start --runtime live because max_position_size exceeds the live safety ceiling")
+    if float(exchange_caps.get("max_notional_per_trade", 0.0)) > 500.0:
+        raise SystemExit("refusing to start --runtime live because max_notional_per_trade exceeds the live safety ceiling")
+    if float(exchange_caps.get("max_total_notional", 0.0)) > 2500.0:
+        raise SystemExit("refusing to start --runtime live because max_total_notional exceeds the live safety ceiling")
+    if int(exchange_caps.get("max_open_positions", 0)) > 1 or int(exchange_caps.get("max_open_orders", 0)) > 2:
+        raise SystemExit("refusing to start --runtime live because exchange order/position caps exceed the live safety ceiling")
+
+    controller = kill_switch_controller or KillSwitchController()
+    readiness = controller.ensure_ready()
+    if not readiness["ready"]:
+        raise SystemExit("refusing to start --runtime live because kill-switch state is not ready")
+    if readiness["active"]:
+        raise SystemExit("refusing to start --runtime live while the kill switch is active")
 
 
 async def run_runtime_orchestrator(
@@ -713,6 +769,8 @@ def main() -> None:
     parser.add_argument("--runtime-iterations", type=int, default=3, help="Number of runtime cycles to execute")
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi"], default="auto", help="Exchange routing target for the runtime execution adapter")
+    parser.add_argument("--enable-live-trading", action="store_true", help=f"Required explicit opt-in before --runtime live is allowed. Pair with --live-confirmation {LIVE_TRADING_CONFIRMATION}")
+    parser.add_argument("--live-confirmation", default=None, help=f"Exact confirmation token required with --runtime live: {LIVE_TRADING_CONFIRMATION}")
     parser.add_argument("--trading-symbol", default=None, help="Trading symbol for the runtime connector and execution context, e.g. BTC/EUR or BTC/NOK")
     parser.add_argument("--use-mock-connector", action="store_true", help="Use the mock exchange connector for the runtime loop")
     parser.add_argument("--watchdog-timeout", type=float, default=30.0, help="Seconds without a completed cycle or fresh data before the watchdog triggers")
@@ -778,6 +836,12 @@ def main() -> None:
         return
 
     if args.runtime:
+        _validate_live_runtime_request(
+            runtime_config=runtime_config,
+            use_mock_connector=args.use_mock_connector,
+            enable_live_trading=args.enable_live_trading,
+            live_confirmation=args.live_confirmation,
+        )
         orchestrator = asyncio.run(
             run_runtime_orchestrator(
                 config=runtime_config,

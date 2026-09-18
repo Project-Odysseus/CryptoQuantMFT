@@ -43,6 +43,7 @@ python main.py \
 6. Confirm the startup banner, the health snapshot, and the first operational events before leaving the runtime unattended.
 7. The health snapshot now reports entry-decision reasons, current position-side PnL, the latest bar and signal, and the latest order/adapter context so you can audit blocked fills without digging through raw logs.
 8. The live plot is written to `plots/runtime_live_plot.png` and updates each runtime cycle while the process is running.
+9. `--runtime live` is intentionally guarded: it now requires `--enable-live-trading`, `--live-confirmation ENABLE_LIVE_TRADING`, an explicit `--execution-exchange`, and a ready/inactive kill-switch state before the CLI will proceed.
 
 ## Daily operational checks
 
@@ -60,6 +61,66 @@ python main.py --report --report-limit 20
 python main.py --dashboard
 python main.py --daily-summary
 ```
+
+## Promotion checklist: paper -> live_dry_run
+
+Use this only after the paper baseline has been stable. The goal is to exercise exchange-shaped execution and reconciliation without enabling production trading.
+
+1. Confirm the known-good paper baseline still runs cleanly with `config/runtime.paper.json`.
+2. Confirm recent dashboard/report output shows:
+   - healthy runtime state
+   - no active kill switch
+   - no unresolved reconciliation mismatches
+   - readable trade / event persistence
+3. Confirm the target exchange is explicit (`--execution-exchange kraken` for the current near-term path).
+4. Confirm the target symbol is explicit if you are not using the default exchange symbol.
+5. Confirm credentials are loaded if you want exchange-shaped auth/status behavior, but remember `live_dry_run` must still avoid real order placement.
+6. Confirm the kill-switch state file exists and is inactive.
+7. Start the dry-run lane with exchange-shaped routing:
+
+```bash
+python main.py \
+  --runtime live_dry_run \
+  --execution-exchange kraken \
+  --runtime-iterations 3 \
+  --dashboard \
+  --report
+```
+
+8. Verify after startup:
+   - runtime mode reports `live_dry_run`
+   - account state shows the expected exchange/base currency
+   - orders, if any, are reported through the sandbox adapter rather than a production venue
+   - no stale data, reconciliation, or kill-switch alerts appear unexpectedly
+
+## Promotion checklist: live_dry_run -> live
+
+This checklist is intentionally stricter. Completing it does **not** mean the repo is ready to trade now; it only defines the manual approvals required before `live` should ever be attempted.
+
+1. Keep `paper` as the source-of-truth baseline and `live_dry_run` as the immediate promotion lane.
+2. Confirm the exchange remains limited to the current near-term target (`kraken`).
+3. Confirm exchange symbol mapping, order IDs, balance normalization, and reconciliation payload handling have already been validated in tests and recent dry-run usage.
+4. Confirm the kill switch is ready, inactive, and understood operationally.
+5. Confirm conservative caps remain in place for the target exchange:
+   - `max_position_size <= 0.5`
+   - `max_notional_per_trade <= 500`
+   - `max_total_notional <= 2500`
+   - `max_open_positions <= 1`
+   - `max_open_orders <= 2`
+6. Confirm operator intent explicitly by requiring both:
+   - `--enable-live-trading`
+   - `--live-confirmation ENABLE_LIVE_TRADING`
+7. Confirm `--execution-exchange` is explicit and `--use-mock-connector` is not present.
+8. Confirm you have a rollback plan: kill-switch activation, order-cancel procedure, and state inspection path.
+9. Do **not** start `live` until the remaining live-runtime implementation work is complete; today the CLI guard can pass, but the orchestrator still intentionally blocks the actual live execution path.
+
+## Non-destructive verification steps before any promotion
+
+- Run `python main.py --dashboard --report` and confirm the persisted runtime state is readable.
+- Run the paper baseline again if there is any doubt about current repo state.
+- For dry-run work, prefer a short bounded run first (`--runtime-iterations 3`) before longer sessions.
+- If testing live guards only, verify the CLI refuses `--runtime live` without the required flags instead of trying to work around the protections.
+- If the kill switch was triggered earlier, reset and verify the state before any further promotion attempt.
 
 ## Backup procedure
 
