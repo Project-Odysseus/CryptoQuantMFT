@@ -208,13 +208,118 @@ def test_kraken_adapter_uses_private_api_for_submit_and_status(monkeypatch) -> N
         size=0.25,
         price=100.0,
         timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="ETH/EUR",
     )
     status_report = adapter.get_order_status(order_id="kraken-2")
 
     assert report.status == "SUBMITTED"
     assert calls[0][0] == "AddOrder"
+    assert calls[0][1]["pair"] == "XETHZEUR"
     assert status_report.status == "FILLED"
     assert status_report.filled_size == 0.25
+
+
+def test_kraken_adapter_recover_execution_state_normalizes_kraken_payloads(monkeypatch) -> None:
+    """Kraken-shaped balance and order payloads should reconcile into the generic adapter state."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        """Perform the fake private request operation."""
+        if endpoint == "AddOrder":
+            return {"error": [], "result": {"txid": ["abc123"], "descr": {"order": "buy 0.25 BTC @ 100"}}}
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    report = adapter.submit_order(
+        order_id="kraken-recovery",
+        side="buy",
+        size=0.25,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+
+    summary = adapter.recover_execution_state(
+        remote_snapshot={"error": [], "result": {"ZEUR": "850.0", "XXBT": "0.25"}},
+        remote_orders={
+            "error": [],
+            "result": {
+                "abc123": {
+                    "status": "closed",
+                    "vol": "0.25",
+                    "vol_exec": "0.25",
+                    "price": "100.0",
+                    "fee": "0.25",
+                    "descr": {"pair": "XXBTZEUR", "type": "buy"},
+                }
+            },
+        },
+    )
+
+    snapshot = adapter.get_account_snapshot()
+
+    assert report.status == "SUBMITTED"
+    assert summary["recovered_order_ids"] == ["kraken-recovery"]
+    assert summary["account_reconciliation"]["remote_balances"]["EUR"] == 850.0
+    assert summary["account_reconciliation"]["remote_positions"]["BTC"] == 0.25
+    assert snapshot["balances"]["EUR"] == 850.0
+    assert snapshot["positions"]["BTC"] == 0.25
+    assert adapter._orders["kraken-recovery"].remote_order_id == "abc123"
+    assert adapter._orders["kraken-recovery"].status == "FILLED"
+
+
+def test_kraken_adapter_handles_missing_credentials_non_destructively() -> None:
+    """Submit, status, and cancel should stay local when Kraken credentials are missing."""
+    adapter = KrakenExecutionAdapter(api_key="", api_secret="")
+
+    report = adapter.submit_order(
+        order_id="kraken-local",
+        side="buy",
+        size=0.25,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+    status_report = adapter.get_order_status(order_id="kraken-local")
+    cancel_report = adapter.cancel_order(order_id="kraken-local")
+
+    assert report.status == "SUBMITTED"
+    assert "not configured" in (report.message or "").lower()
+    assert status_report.status == "SUBMITTED"
+    assert "not configured" in (status_report.message or "").lower()
+    assert cancel_report.status == "REJECTED"
+    assert adapter._orders["kraken-local"].remote_order_id is None
+
+
+def test_kraken_adapter_uses_remote_order_id_for_cancel(monkeypatch) -> None:
+    """Cancel should target Kraken's remote txid when it is known."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        """Perform the fake private request operation."""
+        calls.append((endpoint, params))
+        if endpoint == "AddOrder":
+            return {"error": [], "result": {"txid": ["abc123"]}}
+        if endpoint == "CancelOrder":
+            return {"error": [], "result": {"count": 1}}
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    adapter.submit_order(
+        order_id="kraken-cancel",
+        side="buy",
+        size=0.25,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+    cancel_report = adapter.cancel_order(order_id="kraken-cancel")
+
+    assert cancel_report.status == "CANCELED"
+    assert calls[-1] == ("CancelOrder", {"txid": "abc123"})
 
 
 def test_firi_adapter_uses_rest_endpoints_for_submit_and_status(monkeypatch) -> None:

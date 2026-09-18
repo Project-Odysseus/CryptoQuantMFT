@@ -46,6 +46,7 @@ class ExecutionOrder:
     remote_status: str | None = None
     remote_order_id: str | None = None
     reconciled: bool = False
+    message: str | None = None
 
 
 class ExecutionAdapter:
@@ -139,6 +140,8 @@ class ExecutionAdapter:
                 )
 
         order.reconciled = True
+        if order.message is None:
+            order.message = "order state reconciled"
         return ExecutionReport(
             order_id=order_id,
             status=order.status,
@@ -373,6 +376,7 @@ class SandboxExecutionAdapter(ExecutionAdapter):
             exchange=self.exchange_name,
         )
         self._orders[order_id] = order
+        order.message = f"submitted to {self.exchange_name}"
         self._apply_fill_to_account_state(
             order=order,
             filled_size=filled_size,
@@ -398,6 +402,7 @@ class SandboxExecutionAdapter(ExecutionAdapter):
         if order.status == "FILLED":
             return ExecutionReport(order_id=order_id, status="FILLED", message="order already filled")
         order.status = "CANCELED"
+        order.message = "order canceled"
         return ExecutionReport(order_id=order_id, status="CANCELED", message="order canceled")
 
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
@@ -411,7 +416,7 @@ class SandboxExecutionAdapter(ExecutionAdapter):
             fill_price=order.fill_price,
             filled_size=order.filled_size,
             fee=order.fee,
-            message="sandbox order state",
+            message=order.message or "sandbox order state",
         )
 
 
@@ -487,6 +492,7 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
             exchange=self.exchange_name,
         )
         self._orders[order_id] = order
+        order.message = f"staged locally for {self.exchange_name}"
         return ExecutionReport(
             order_id=order_id,
             status="SUBMITTED",
@@ -501,6 +507,7 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
         if order.status in {"FILLED", "CANCELED"}:
             return ExecutionReport(order_id=order_id, status=order.status, message="order already settled")
         order.status = "CANCELED"
+        order.message = "order canceled"
         return ExecutionReport(order_id=order_id, status="CANCELED", message="order canceled")
 
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
@@ -514,7 +521,7 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
             fill_price=order.fill_price,
             filled_size=order.filled_size,
             fee=order.fee,
-            message=f"{self.exchange_name} order state",
+            message=order.message or f"{self.exchange_name} order state",
         )
 
 
@@ -531,6 +538,8 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             api_key=api_key if api_key is not None else settings.kraken_api_key,
             api_secret=api_secret if api_secret is not None else settings.kraken_secret,
         )
+        self._base_currency = "EUR"
+        self._balances.setdefault(self._base_currency, 0.0)
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
         """Submit an order through the adapter and capture the execution result."""
@@ -552,6 +561,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         if not self.api_key or not self.api_secret:
             order.status = "SUBMITTED"
             order.remote_status = "SUBMITTED"
+            order.message = "staged locally because Kraken credentials are not configured"
             return ExecutionReport(order_id=order_id, status="SUBMITTED", message="staged locally because Kraken credentials are not configured")
 
         try:
@@ -568,11 +578,13 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         except RuntimeError as exc:
             order.status = "SUBMITTED"
             order.remote_status = "SUBMITTED"
+            order.message = f"staged locally: {exc}"
             return ExecutionReport(order_id=order_id, status="SUBMITTED", message=f"staged locally: {exc}")
 
         if isinstance(payload, dict) and payload.get("error"):
             order.status = "SUBMITTED"
             order.remote_status = "SUBMITTED"
+            order.message = f"staged locally: {payload.get('error')}"
             return ExecutionReport(order_id=order_id, status="SUBMITTED", message=f"staged locally: {payload.get('error')}")
 
         result = payload.get("result", {}) if isinstance(payload, dict) else {}
@@ -585,6 +597,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
                 remote_order_id = txid_value
         order.remote_order_id = remote_order_id
         order.remote_status = "SUBMITTED"
+        order.message = "submitted to Kraken"
         return ExecutionReport(order_id=order_id, status="SUBMITTED", message="submitted to Kraken")
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
@@ -607,6 +620,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
 
         order.status = "CANCELED"
         order.remote_status = "CANCELED"
+        order.message = "order canceled"
         return ExecutionReport(order_id=order_id, status="CANCELED", message="order canceled")
 
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
@@ -625,33 +639,27 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         if isinstance(payload, dict) and payload.get("error"):
             return ExecutionReport(order_id=order_id, status=order.status, message=str(payload.get("error")))
 
-        result = payload.get("result", {}) if isinstance(payload, dict) else {}
+        normalized_orders = self._normalize_remote_orders_payload(payload)
         remote_order = None
-        if isinstance(result, dict):
-            remote_order = result.get(order.remote_order_id or order_id)
-            if remote_order is None and result:
-                remote_order = next(iter(result.values()))
+        for candidate in normalized_orders:
+            if candidate.get("order_id") == order_id:
+                remote_order = candidate
+                break
+        if remote_order is None and normalized_orders:
+            remote_order = normalized_orders[0]
         if not isinstance(remote_order, dict):
             return ExecutionReport(order_id=order_id, status=order.status, fill_price=order.fill_price, filled_size=order.filled_size, fee=order.fee, message="order state unavailable")
 
-        status = str(remote_order.get("status", order.status)).upper()
-        if status == "CLOSED":
-            normalized_status = "FILLED"
-        elif status in {"OPEN", "PENDING"}:
-            normalized_status = "OPEN"
-        elif status == "CANCELED":
-            normalized_status = "CANCELED"
-        else:
-            normalized_status = "SUBMITTED"
-
-        fill_price = self._coerce_float(remote_order.get("price")) or self._coerce_float(remote_order.get("avg_price")) or order.fill_price
-        filled_size = self._coerce_float(remote_order.get("vol_exec")) or self._coerce_float(remote_order.get("vol")) or order.filled_size
+        normalized_status = str(remote_order.get("status", order.status) or order.status)
+        fill_price = self._coerce_float(remote_order.get("fill_price")) or order.fill_price
+        filled_size = self._coerce_float(remote_order.get("filled_size")) or order.filled_size
         fee = self._coerce_float(remote_order.get("fee")) or order.fee
         order.status = normalized_status
         order.remote_status = normalized_status
         order.fill_price = fill_price
         order.filled_size = filled_size if filled_size is not None else order.filled_size
         order.fee = fee if fee is not None else order.fee
+        order.message = "Kraken order state"
         return ExecutionReport(
             order_id=order_id,
             status=normalized_status,
@@ -660,6 +668,17 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             fee=fee if fee is not None else order.fee,
             message="Kraken order state",
         )
+
+    def recover_execution_state(
+        self,
+        *,
+        remote_snapshot: dict[str, Any] | None = None,
+        remote_orders: list[dict[str, Any]] | dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Reconcile local adapter state against Kraken-shaped snapshots and order payloads."""
+        normalized_snapshot = self._normalize_balance_snapshot_payload(remote_snapshot)
+        normalized_orders = self._normalize_remote_orders_payload(remote_orders)
+        return super().recover_execution_state(remote_snapshot=normalized_snapshot, remote_orders=normalized_orders or None)
 
     def _private_request(self, *, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
         if not self.api_key or not self.api_secret:
@@ -700,6 +719,130 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         }
         return mapping.get(symbol, symbol.upper().replace("/", ""))
 
+    def _denormalize_symbol(self, symbol: str | None) -> str | None:
+        if not symbol:
+            return None
+        mapping = {
+            "XXBTZEUR": "BTC/EUR",
+            "XBT/EUR": "BTC/EUR",
+            "XXBTZUSD": "BTC/USD",
+            "XBT/USD": "BTC/USD",
+            "XETHZEUR": "ETH/EUR",
+            "ETH/EUR": "ETH/EUR",
+            "XETHZUSD": "ETH/USD",
+            "ETH/USD": "ETH/USD",
+        }
+        normalized = str(symbol).strip().upper()
+        return mapping.get(normalized, normalized)
+
+    def _normalize_balance_snapshot_payload(self, payload: dict[str, Any] | None) -> dict[str, Any] | None:
+        if payload is None:
+            return None
+        if "balances" in payload or "positions" in payload:
+            return payload
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if not isinstance(result, dict):
+            return payload
+
+        balances: dict[str, float] = {}
+        positions: dict[str, float] = {}
+        for raw_asset, raw_amount in result.items():
+            asset = self._normalize_asset_code(raw_asset)
+            amount = self._coerce_float(raw_amount)
+            if asset is None or amount is None:
+                continue
+            if self._is_cash_asset(asset):
+                balances[asset] = amount
+            elif amount != 0.0:
+                positions[asset] = amount
+
+        balances.setdefault(self._base_currency, 0.0)
+        return {"balances": balances, "positions": positions}
+
+    def _normalize_remote_orders_payload(self, payload: list[dict[str, Any]] | dict[str, Any] | None) -> list[dict[str, Any]]:
+        if payload is None:
+            return []
+        if isinstance(payload, list):
+            return payload
+        if not isinstance(payload, dict):
+            return []
+
+        result = payload.get("result", payload)
+        if not isinstance(result, dict):
+            return []
+
+        if "open" in result and isinstance(result["open"], dict):
+            result = result["open"]
+        elif "closed" in result and isinstance(result["closed"], dict):
+            result = result["closed"]
+
+        normalized_orders: list[dict[str, Any]] = []
+        for remote_order_id, remote_payload in result.items():
+            if not isinstance(remote_payload, dict):
+                continue
+            normalized_order = self._normalize_remote_order_payload(str(remote_order_id), remote_payload)
+            if normalized_order is not None:
+                normalized_orders.append(normalized_order)
+        return normalized_orders
+
+    def _normalize_remote_order_payload(self, remote_order_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        descr = payload.get("descr")
+        order_symbol = None
+        side = str(payload.get("type", "unknown") or "unknown")
+        if isinstance(descr, dict):
+            order_symbol = self._denormalize_symbol(descr.get("pair"))
+            side = str(descr.get("type", side) or side)
+
+        local_order_id = self._resolve_local_order_id(remote_order_id)
+        return {
+            "order_id": local_order_id,
+            "remote_order_id": remote_order_id,
+            "side": side,
+            "size": self._coerce_float(payload.get("vol")) or self._coerce_float(payload.get("volume")) or 0.0,
+            "symbol": order_symbol,
+            "status": self._normalize_order_status(payload.get("status")),
+            "filled_size": self._coerce_float(payload.get("vol_exec")) or self._coerce_float(payload.get("filled_size")) or 0.0,
+            "fill_price": self._coerce_float(payload.get("price")) or self._coerce_float(payload.get("avg_price")),
+            "fee": self._coerce_float(payload.get("fee")) or 0.0,
+        }
+
+    def _resolve_local_order_id(self, remote_order_id: str) -> str:
+        for local_order_id, order in self._orders.items():
+            if getattr(order, "remote_order_id", None) == remote_order_id:
+                return local_order_id
+        return remote_order_id
+
+    def _normalize_order_status(self, status: Any) -> str:
+        normalized = str(status or "").strip().lower()
+        if normalized in {"closed", "filled"}:
+            return "FILLED"
+        if normalized in {"open"}:
+            return "OPEN"
+        if normalized in {"pending"}:
+            return "SUBMITTED"
+        if normalized in {"canceled", "cancelled"}:
+            return "CANCELED"
+        if normalized in {"partial", "partially_filled", "partially-filled"}:
+            return "PARTIALLY_FILLED"
+        return "SUBMITTED"
+
+    def _normalize_asset_code(self, asset_code: Any) -> str | None:
+        if asset_code is None:
+            return None
+        mapping = {
+            "ZEUR": "EUR",
+            "ZUSD": "USD",
+            "ZNOK": "NOK",
+            "XXBT": "BTC",
+            "XBT": "BTC",
+            "XETH": "ETH",
+        }
+        normalized = str(asset_code).strip().upper()
+        return mapping.get(normalized, normalized.lstrip("XZ"))
+
+    def _is_cash_asset(self, asset: str) -> bool:
+        return asset in {self._base_currency, "EUR", "USD", "NOK", "GBP", "USDT", "USDC"}
+
     def _normalize_side(self, side: str) -> str:
         normalized = side.lower()
         if normalized in {"buy", "long"}:
@@ -722,6 +865,8 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
             api_key=api_key if api_key is not None else settings.firi_api_key,
             api_secret=None,
         )
+        self._base_currency = "NOK"
+        self._balances.setdefault(self._base_currency, 0.0)
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
         """Submit an order through the adapter and capture the execution result."""
@@ -743,6 +888,7 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
         if not self.api_key:
             order.status = "SUBMITTED"
             order.remote_status = "SUBMITTED"
+            order.message = "staged locally because Firi credentials are not configured"
             return ExecutionReport(order_id=order_id, status="SUBMITTED", message="staged locally because Firi credentials are not configured")
 
         try:
@@ -763,11 +909,13 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
         except RuntimeError as exc:
             order.status = "SUBMITTED"
             order.remote_status = "SUBMITTED"
+            order.message = f"staged locally: {exc}"
             return ExecutionReport(order_id=order_id, status="SUBMITTED", message=f"staged locally: {exc}")
 
         if isinstance(payload, dict) and payload.get("error"):
             order.status = "SUBMITTED"
             order.remote_status = "SUBMITTED"
+            order.message = f"staged locally: {payload.get('error')}"
             return ExecutionReport(order_id=order_id, status="SUBMITTED", message=f"staged locally: {payload.get('error')}")
 
         remote_order_id = None
@@ -780,6 +928,7 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
         status = self._normalize_remote_status(payload)
         order.remote_status = status
         order.status = status
+        order.message = "submitted to Firi"
         return ExecutionReport(
             order_id=order_id,
             status=status,
@@ -813,6 +962,7 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
 
         order.status = "CANCELED"
         order.remote_status = "CANCELED"
+        order.message = "order canceled"
         return ExecutionReport(order_id=order_id, status="CANCELED", message="order canceled")
 
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
@@ -848,6 +998,7 @@ class FiriExecutionAdapter(ExchangeExecutionAdapter):
                 order.filled_size = filled_size
             if fee is not None:
                 order.fee = fee
+        order.message = "Firi order state"
         return ExecutionReport(
             order_id=order_id,
             status=status,
