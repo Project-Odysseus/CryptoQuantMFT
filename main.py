@@ -61,6 +61,7 @@ def build_runtime_orchestrator(
     use_mock_connector: bool | None = None,
     watchdog_timeout_seconds: float | None = None,
     exchange: str | None = None,
+    risk_per_trade_pct: float | None = None,
 ) -> tuple[RuntimeOrchestrator, MarketDataPipeline]:
     """Build the runtime orchestrator and its market-data pipeline for a run."""
     runtime_config = config or RuntimeConfig(
@@ -103,7 +104,7 @@ def build_runtime_orchestrator(
         RiskControlConfig(
             max_drawdown_pct=0.25,
             max_volatility_pct=0.50,
-            risk_per_trade_pct=0.10,
+            risk_per_trade_pct=risk_per_trade_pct if risk_per_trade_pct is not None else 0.10,
             max_position_size=1.0,
             volatility_window=10,
             kelly_fraction=0.5,
@@ -311,6 +312,7 @@ async def run_runtime_orchestrator(
     watchdog_restarts: int = 0,
     exchange: str | None = None,
     resume_runtime: bool = False,
+    risk_per_trade_pct: float | None = None,
 ) -> RuntimeOrchestrator | None:
     """Run the runtime orchestrator over a simple market-data pipeline."""
     runtime_config = config or RuntimeConfig(
@@ -333,6 +335,7 @@ async def run_runtime_orchestrator(
             use_mock_connector=runtime_config.use_mock_connector,
             watchdog_timeout_seconds=runtime_config.watchdog_timeout_seconds,
             exchange=runtime_config.exchange,
+            risk_per_trade_pct=risk_per_trade_pct,
         )
         loop = asyncio.get_running_loop()
 
@@ -1428,6 +1431,7 @@ def main() -> None:
     parser.add_argument("--runtime", choices=["paper", "live_dry_run", "live"], help="Run the runtime orchestrator with the requested mode")
     parser.add_argument("--runtime-iterations", type=int, default=3, help="Number of runtime cycles to execute")
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
+    parser.add_argument("--risk-per-trade-pct", type=float, default=None, help="Override the fraction of equity risked per trade (default 0.10); needed for very small accounts to clear exchange minimum order sizes")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi"], default="auto", help="Exchange routing target for the runtime execution adapter")
     parser.add_argument("--enable-live-trading", action="store_true", help=f"Required explicit opt-in before --runtime live is allowed. Pair with --live-confirmation {LIVE_TRADING_CONFIRMATION}")
     parser.add_argument("--live-confirmation", default=None, help=f"Exact confirmation token required with --runtime live: {LIVE_TRADING_CONFIRMATION}")
@@ -1632,6 +1636,7 @@ def main() -> None:
                 watchdog_restarts=args.watchdog_restarts,
                 exchange=None if args.execution_exchange == "auto" else args.execution_exchange,
                 resume_runtime=args.resume_runtime,
+                risk_per_trade_pct=args.risk_per_trade_pct,
             )
         )
         if args.dashboard:
