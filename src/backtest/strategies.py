@@ -3,9 +3,10 @@
 Each factory takes its parameters and returns a `StrategyFn` with the
 signature ``(history, index, current_bar) -> -1 | 0 | 1``. The return value
 is the *target position*, not a one-off order: 1 = be long, -1 = be short,
-0 = be flat. The engine opens a position when the signal turns non-zero and
-closes it as soon as the signal is 0 or flips, so a strategy that wants to
-hold must keep returning 1 on every bar it wants to stay in.
+0 = be flat. The backtester opens a position when the signal turns non-zero
+and closes it as soon as the signal is 0 or flips, so a strategy that wants to
+hold must keep returning 1 on every bar it wants to stay in. (The paper/live
+runtime currently only closes on an opposite signal; see todo_important.md.)
 
 Register new strategies in `StrategyRegistry` (src/backtest/runner.py) so the
 runtime can run them by name, and in `src/research/catalog.py` so the

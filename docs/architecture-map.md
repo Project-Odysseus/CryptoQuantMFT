@@ -83,9 +83,14 @@ flowchart TD
 
 ### Strategy and risk layer
 
+- `src/backtest/strategies.py`
+  - Every strategy factory (`moving_average_crossover_strategy` is the default), plus `latch_position` for entry/exit rules and the `make_long_only` / `make_regime_gated` wrappers.
+  - Each factory returns a function that produces a signal from a sequence of bars; `StrategyRegistry` in `src/backtest/runner.py` maps runtime `--strategy` names to them.
+  - Indicators for strategies live in `src/backtest/indicators.py`.
 - `src/backtest/simple_backtest.py`
-  - Contains the default strategy function (`moving_average_crossover_strategy`).
-  - Produces signals from a sequence of bars.
+  - The backtest engine (`SimpleBacktester`), which also reports mark-to-market equity and position series per bar.
+- `src/research/` and `scripts/research/research.py`
+  - Offline strategy research (catalog of hypotheses and sweep grids, in-sample/holdout evaluation, parameter sweeps, heatmaps). Not used by the runtime. See `docs/research_guide.md`.
 
 - `src/risk/controls.py`
   - `RiskManager` and `RiskControlConfig` gate entries and size decisions.
