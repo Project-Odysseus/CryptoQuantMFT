@@ -21,11 +21,13 @@ python scripts/research/research.py backtest donchian_breakout --interval 4h --p
 python scripts/research/research.py compare --intervals 4h 1d         # every strategy at its defaults
 python scripts/research/research.py sweep --intervals 4h 1d           # full sensitivity sweep, ~1.5 min
 python scripts/research/research.py sweep --strategies keltner_breakout --grid window=30,40,60 --grid atr_multiplier=1,1.5,2
-python scripts/research/research.py sweep --fee-pct 0.25 --slippage-bps 0   # what limit (maker) orders would change
+python scripts/research/research.py sweep --maker                     # what limit (maker) orders would change
+python scripts/research/research.py sweep --venue perp                # perpetual-futures fees + funding (assumed figures)
 ```
 
 Useful flags on every command: `--symbols BTC/EUR ETH/EUR SOL/EUR`, `--sides long|long-short|both`,
-`--holdout-fraction 0.3`, `--fee-pct 0.40`, `--slippage-bps 10`, `--metric sharpe|return|consistency`,
+`--holdout-fraction 0.3`, `--venue spot|perp`, `--maker`, `--fee-pct`, `--slippage-bps`, `--funding-pct-per-day`
+(the last three override the venue preset), `--metric sharpe|return|consistency`,
 `--csv SYMBOL=PATH`, `--refresh`, `--out DIR`.
 
 `sweep` and `compare` write to `data/research/<command>_<timestamp>/`:
@@ -109,6 +111,10 @@ These choices are deliberate. They are what makes the numbers comparable and har
   off and exits aren't forced at arbitrary points.
 - **Trading costs on every fill.** The default is Kraken's taker fee for small accounts (0.40%) plus 10 bps of
   slippage, about **1.0% per round trip**. That hurdle decides most results (see the research log).
+  `--venue perp` swaps in assumed perpetual-futures costs (0.05% taker + 5 bps, about 0.2% per round trip) and
+  charges **funding** of 0.03% of notional per day on the open position (longs pay, shorts receive when positive).
+  Funding is applied to the mark-to-market equity, so it shows in return, Sharpe and drawdown but not in
+  `avg_trade` or `win_rate`. The perp figures are round numbers from memory, not read from an exchange.
 - **Full size, no risk overlay.** Every trade uses 100% of equity with no leverage, stops or volatility sizing, so the
   numbers measure the signal. Sizing and stops are a separate layer that comes after a signal has earned it.
 - **Mark-to-market equity.** Equity is valued at every bar's close, so drawdowns inside open trades count.

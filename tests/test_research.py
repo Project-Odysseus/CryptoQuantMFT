@@ -12,6 +12,7 @@ import pytest
 
 matplotlib.use("Agg")
 
+from src.research.engine import apply_funding
 from src.research import CATALOG, CostSettings, build_strategy, catalog_table, compare, plot_heatmap, plot_run, run_strategy, summarize, sweep
 from src.storage.bar_aggregator import OHLCVBar
 
@@ -145,3 +146,40 @@ def test_plots_render_to_files(tmp_path: Path) -> None:
     plot_run(run_strategy(data["A/EUR"], "keltner_breakout"), path=tmp_path / "run.png")
     assert (tmp_path / "heatmap.png").stat().st_size > 0
     assert (tmp_path / "run.png").stat().st_size > 0
+
+
+def test_cost_presets_match_the_documented_figures() -> None:
+    """Spot and perp presets carry the fee, slippage and funding numbers the docs quote."""
+    assert CostSettings.spot().round_trip_pct == pytest.approx(1.0)
+    assert CostSettings.spot(maker=True).round_trip_pct == pytest.approx(0.5)
+    perp = CostSettings.perp()
+    assert (perp.fee_pct, perp.slippage_bps, perp.funding_pct_per_day) == (0.05, 5.0, 0.03)
+    assert perp.round_trip_pct == pytest.approx(0.2)
+    assert CostSettings.perp(maker=True).round_trip_pct == pytest.approx(0.04)
+
+
+def test_funding_is_paid_by_longs_and_received_by_shorts() -> None:
+    """A positive funding rate should cost a long and pay a short by the same amount per bar held."""
+    bars = _random_walk(11)
+    free = CostSettings(fee_pct=0.0, slippage_bps=0.0)
+    funded = CostSettings(fee_pct=0.0, slippage_bps=0.0, funding_pct_per_day=0.10)
+
+    def short_always(history, index, current_bar) -> int:
+        return -1
+
+    long_base = run_strategy(bars, _always_long, costs=free, measure_start=50).metrics["in_sample"]["return"]
+    long_funded = run_strategy(bars, _always_long, costs=funded, measure_start=50).metrics["in_sample"]["return"]
+    short_base = run_strategy(bars, short_always, costs=free, measure_start=50).metrics["in_sample"]["return"]
+    short_funded = run_strategy(bars, short_always, costs=funded, measure_start=50).metrics["in_sample"]["return"]
+
+    assert long_funded < long_base
+    assert short_funded > short_base
+    # 230 in-sample 4h bars (400 - 120 holdout - 50 warmup) is ~38.3 days at 0.10%/day, so ~3.8% of notional in log terms either way.
+    assert np.log1p(long_base) - np.log1p(long_funded) == pytest.approx(0.0383, abs=0.001)
+    assert np.log1p(short_funded) - np.log1p(short_base) == pytest.approx(0.0383, abs=0.001)
+
+
+def test_zero_funding_leaves_results_untouched() -> None:
+    """The default (no funding) must return the very same result object."""
+    result = run_strategy(_random_walk(12), _always_long, costs=CostSettings(0.0, 0.0), measure_start=50).result
+    assert apply_funding(result, 0.0, interval_seconds=14400) is result

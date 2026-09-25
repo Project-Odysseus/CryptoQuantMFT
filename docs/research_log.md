@@ -5,6 +5,34 @@ Dated findings from strategy research, newest first. Methodology and column mean
 
 ---
 
+## 2026-09-25 (later): Same sweep under perpetual-futures costs
+
+**Assumptions (not verified against an exchange):** 0.05% taker + 5 bps slippage per fill (~0.2% round trip),
+0.02% maker, funding 0.03%/day (stress: 0.10%/day) charged on the position, positive = longs pay. Reproduce with
+`--venue perp` (add `--maker`, or `--funding-pct-per-day 0.10`). Median Sharpe across all parameter combos,
+in-sample / holdout:
+
+| 4h, long-only | Spot taker | Perp taker, no funding | Perp taker + 0.03%/day | Perp taker + 0.10%/day | Perp maker + 0.03%/day |
+| --- | --- | --- | --- | --- | --- |
+| keltner_breakout | 0.29 / 1.24 | 1.71 / 2.23 | 1.64 / 2.07 | 1.38 / 1.71 | 1.94 / 2.27 |
+| moving_average_crossover | 0.39 / 1.47 | 1.54 / 2.66 | 1.37 / 2.47 | 0.96 / 2.02 | 1.62 / 2.69 |
+| band_reversion | -4.36 / -6.78 | 1.43 / 2.15 | 1.38 / 2.01 | 1.28 / 1.68 | 2.61 / 3.23 |
+| rsi_reversion | -4.15 / -6.55 | 1.32 / 0.31 | 1.17 / 0.13 | 0.97 / -0.18 | 2.57 / 0.96 |
+
+- **Lower costs revive mean reversion and speed up everything else.** Costs, not signal quality, were what made
+  `band_reversion` and `rsi_reversion` lose on spot. At ~0.2% per round trip they turn positive.
+- **Funding matters less than fees at 0.03%/day** (about 0.1-0.2 Sharpe) but not at 0.10%/day (0.3-0.6). Funding
+  is a moving target and should be measured from the venue's history, not assumed.
+- **Real shorting helps.** 4h long/short goes from negative on every strategy on spot to about break-even, with
+  `moving_average_crossover` positive in both periods (0.43 / 0.19 with 0.03%/day funding). Daily long/short
+  `keltner_breakout` improves from 0.30 / 0.44 to 0.59 / 0.65.
+- **Still not better than holding in a rally.** 4h buy-and-hold Sharpe was 2.21 in-sample and 4.64 in the
+  holdout, above almost every long-only row. The 4h evidence is one 3-month rally, so the mean-reversion result
+  in particular needs more history before it means anything.
+- Sharpe ignores leverage and liquidation risk, which spot does not have.
+
+---
+
 ## 2026-09-25: Sensitivity sweep of 10 strategies (6 new), BTC/ETH/SOL vs EUR, 4h and 1d
 
 **Run:** `python scripts/research/research.py sweep --intervals 4h 1d`, repeated at three cost levels:

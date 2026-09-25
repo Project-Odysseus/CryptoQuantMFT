@@ -150,7 +150,9 @@ def _write_outputs(results: pd.DataFrame, output_dir: Path, args: argparse.Names
     summary.to_csv(output_dir / "summary.csv", index=False)
     config = {key: value for key, value in vars(args).items()}
     config["run_at"] = datetime.now(timezone.utc).isoformat()
-    config["round_trip_cost_pct"] = _costs(args).round_trip_pct
+    resolved = _costs(args)
+    config["fee_pct"], config["slippage_bps"], config["funding_pct_per_day"] = resolved.fee_pct, resolved.slippage_bps, resolved.funding_pct_per_day
+    config["round_trip_cost_pct"] = resolved.round_trip_pct
     config["periods"] = results.groupby("interval")[["is_from", "is_to", "ho_from", "ho_to"]].first().to_dict(orient="index")
     (output_dir / "config.json").write_text(json.dumps(config, indent=2, default=str))
     (output_dir / "summary.md").write_text(_summary_markdown(summary, config))
@@ -167,7 +169,7 @@ def _summary_markdown(summary: pd.DataFrame, config: dict[str, Any]) -> str:
         f"# Research run {config['run_at'][:16]}",
         "",
         f"- Command: `{config['command']}`, symbols: {', '.join(config['symbols'])}, intervals: {', '.join(config['intervals'])}",
-        f"- Costs: {config['fee_pct']}% fee + {config['slippage_bps']} bps slippage per fill (~{config['round_trip_cost_pct']:.2f}% round trip)",
+        f"- Costs ({config['venue']}{', maker' if config['maker'] else ''}): {config['fee_pct']}% fee + {config['slippage_bps']} bps slippage per fill (~{config['round_trip_cost_pct']:.2f}% round trip), funding {config['funding_pct_per_day']}%/day",
         f"- Holdout: last {config['holdout_fraction']:.0%} of bars; metric: {config['metric']} (annualised, mark-to-market)",
     ]
     for interval, period in config["periods"].items():
@@ -225,8 +227,11 @@ def _add_data_arguments(parser: argparse.ArgumentParser, *, multiple_symbols: bo
 
 
 def _add_evaluation_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--fee-pct", type=float, default=0.40, help="Fee per fill in percent (Kraken taker 0.40, maker 0.25)")
-    parser.add_argument("--slippage-bps", type=float, default=10.0, help="Slippage per fill in basis points")
+    parser.add_argument("--venue", choices=["spot", "perp"], default="spot", help="Cost preset: spot = 0.40%% taker + 10 bps; perp = 0.05%% taker + 5 bps + 0.03%%/day funding (assumed figures)")
+    parser.add_argument("--maker", action="store_true", help="Use the venue's maker fee and no slippage (limit orders)")
+    parser.add_argument("--fee-pct", type=float, default=None, help="Override the preset fee per fill, in percent")
+    parser.add_argument("--slippage-bps", type=float, default=None, help="Override the preset slippage per fill, in basis points")
+    parser.add_argument("--funding-pct-per-day", type=float, default=None, help="Override the preset funding rate; positive = longs pay, shorts receive")
     parser.add_argument("--holdout-fraction", type=float, default=0.3, help="Share of the most recent bars held out from parameter choice")
     parser.add_argument("--metric", default="sharpe", choices=["sharpe", "return", "consistency"], help="Metric the summary ranks by")
 
@@ -240,7 +245,12 @@ def _sides(args: argparse.Namespace) -> tuple[bool, ...]:
 
 
 def _costs(args: argparse.Namespace) -> CostSettings:
-    return CostSettings(fee_pct=args.fee_pct, slippage_bps=args.slippage_bps)
+    preset = CostSettings.perp(maker=args.maker) if args.venue == "perp" else CostSettings.spot(maker=args.maker)
+    return CostSettings(
+        fee_pct=preset.fee_pct if args.fee_pct is None else args.fee_pct,
+        slippage_bps=preset.slippage_bps if args.slippage_bps is None else args.slippage_bps,
+        funding_pct_per_day=preset.funding_pct_per_day if args.funding_pct_per_day is None else args.funding_pct_per_day,
+    )
 
 
 def _output_dir(args: argparse.Namespace, command: str) -> Path:

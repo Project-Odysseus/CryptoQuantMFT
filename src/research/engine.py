@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -58,15 +58,40 @@ def interval_label(seconds: int) -> str:
 
 @dataclass(frozen=True, slots=True)
 class CostSettings:
-    """Per-fill trading costs, applied on entry and on exit.
+    """Per-fill trading costs, plus optional funding on open positions.
 
-    Defaults are Kraken's taker fee for small accounts (0.40%) plus 10 bps
-    of slippage, i.e. about 1.0% for a full round trip. Use fee_pct=0.25 to
-    see what resting limit orders (maker fee) would change.
+    Defaults are Kraken spot: the taker fee for small accounts (0.40%) plus
+    10 bps of slippage, about 1.0% for a full round trip. Use `spot(maker=True)`
+    or fee_pct=0.25 to see what resting limit orders would change, and
+    `perp()` for perpetual futures.
+
+    `funding_pct_per_day` is charged on the position held into each bar, as
+    a percentage of the position's notional per day. Positive means longs
+    pay and shorts receive (the usual state of a perpetual in a bull market),
+    negative means the reverse. It only touches the mark-to-market equity
+    that return, Sharpe, drawdown and consistency are measured on;
+    `avg_trade` and `win_rate` are per-trade price results and exclude
+    funding.
     """
 
     fee_pct: float = 0.40
     slippage_bps: float = 10.0
+    funding_pct_per_day: float = 0.0
+
+    @classmethod
+    def spot(cls, *, maker: bool = False) -> "CostSettings":
+        """Kraken spot: 0.40% taker + 10 bps slippage, or 0.25% maker with no slippage assumed."""
+        return cls(fee_pct=0.25, slippage_bps=0.0) if maker else cls(fee_pct=0.40, slippage_bps=10.0)
+
+    @classmethod
+    def perp(cls, *, maker: bool = False, funding_pct_per_day: float = 0.03) -> "CostSettings":
+        """Typical perpetual-futures costs: 0.05% taker + 5 bps slippage (or 0.02% maker), 0.03%/day funding.
+
+        These are assumed round numbers for a base fee tier, not values read
+        from an exchange. Verify against the venue's current fee schedule and
+        recent funding history before relying on them.
+        """
+        return cls(fee_pct=0.02, slippage_bps=0.0, funding_pct_per_day=funding_pct_per_day) if maker else cls(fee_pct=0.05, slippage_bps=5.0, funding_pct_per_day=funding_pct_per_day)
 
     def cost_model(self) -> CostModel | None:
         """Build the backtester's cost model, or None when costs are switched off."""
@@ -76,8 +101,26 @@ class CostSettings:
 
     @property
     def round_trip_pct(self) -> float:
-        """Approximate total cost of entering and exiting once, in percent."""
+        """Approximate total cost of entering and exiting once, in percent (excluding funding)."""
         return 2.0 * (self.fee_pct + self.slippage_bps / 100.0)
+
+
+def apply_funding(result: BacktestResult, funding_pct_per_day: float, *, interval_seconds: int) -> BacktestResult:
+    """Return a copy of `result` whose mark-to-market equity has funding charged on the held position.
+
+    Each bar's return is reduced by ``position * funding_per_bar`` where
+    position is the signed fraction of equity held into that bar (long
+    positive, short negative), so longs pay and shorts receive when the
+    rate is positive.
+    """
+    if funding_pct_per_day == 0.0:
+        return result
+    per_bar = funding_pct_per_day / 100.0 * interval_seconds / 86400.0
+    equity = np.asarray(result.mtm_equity_series, dtype=float)
+    positions = np.asarray(result.position_series, dtype=float)
+    returns = equity[1:] / equity[:-1] - 1.0 - positions[:-1] * per_bar
+    adjusted = np.concatenate([[equity[0]], equity[0] * np.cumprod(1.0 + returns)])
+    return replace(result, mtm_equity_series=[float(value) for value in adjusted])
 
 
 def load_bars(
@@ -183,6 +226,7 @@ def run_strategy(
 
     result = SimpleBacktester(strategy=strategy_fn, initial_equity=1000.0, cost_model=resolved_costs.cost_model()).run(resolved_bars)
     interval_seconds = _infer_interval_seconds(resolved_bars)
+    result = apply_funding(result, resolved_costs.funding_pct_per_day, interval_seconds=interval_seconds)
     metrics = {"in_sample": segment_metrics(result, resolved_bars, start, split, interval_seconds=interval_seconds)}
     if split < len(resolved_bars):
         metrics["holdout"] = segment_metrics(result, resolved_bars, split, len(resolved_bars), interval_seconds=interval_seconds)
