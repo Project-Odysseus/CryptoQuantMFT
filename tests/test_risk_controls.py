@@ -298,6 +298,158 @@ def test_risk_manager_enforces_exchange_notional_limit() -> None:
     assert decision.reason == "exchange_notional_limit"
 
 
+def test_risk_manager_triggers_circuit_breaker_on_daily_loss_limit() -> None:
+    """A same-day loss breach should activate the circuit breaker even without an all-time peak-drawdown breach."""
+    bar = OHLCVBar(
+        exchange="mock",
+        symbol="BTC/NOK",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        open=100.0,
+        high=100.0,
+        low=100.0,
+        close=100.0,
+        volume=10.0,
+    )
+    breaker = CircuitBreaker()
+    # hard_stop_drawdown_pct is wide open here so only the daily-loss check should trip.
+    manager = RiskManager(RiskControlConfig(hard_stop_drawdown_pct=0.5, daily_loss_limit_pct=0.03))
+    decision = manager.evaluate(
+        bars=[bar],
+        equity=95.0,
+        peak_equity=95.0,
+        daily_reference_equity=100.0,
+        circuit_breaker=breaker,
+    )
+
+    assert not decision.allow_entry
+    assert decision.reason == "daily_loss_limit"
+    assert breaker.is_active()
+    assert breaker.state.reason == "daily_loss_limit"
+
+
+def test_risk_manager_evaluate_exit_triggers_time_stop() -> None:
+    """A position held past the configured bar count should be force-closed."""
+    bar = OHLCVBar(
+        exchange="mock",
+        symbol="BTC/NOK",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        open=100.0,
+        high=100.0,
+        low=100.0,
+        close=100.0,
+        volume=10.0,
+    )
+    manager = RiskManager(RiskControlConfig(time_stop_bars=3))
+
+    decision = manager.evaluate_exit(
+        bars=[bar],
+        current_bar=bar,
+        position_side="long",
+        avg_entry_price=100.0,
+        bars_held=3,
+    )
+
+    assert decision.force_exit is True
+    assert decision.reason == "time_stop"
+
+
+def test_risk_manager_evaluate_exit_does_not_trigger_before_time_stop() -> None:
+    """A position under the configured bar count should not be force-closed."""
+    bar = OHLCVBar(
+        exchange="mock",
+        symbol="BTC/NOK",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        open=100.0,
+        high=100.0,
+        low=100.0,
+        close=100.0,
+        volume=10.0,
+    )
+    manager = RiskManager(RiskControlConfig(time_stop_bars=3))
+
+    decision = manager.evaluate_exit(
+        bars=[bar],
+        current_bar=bar,
+        position_side="long",
+        avg_entry_price=100.0,
+        bars_held=2,
+    )
+
+    assert decision.force_exit is False
+
+
+def test_risk_manager_evaluate_exit_triggers_atr_stop_loss() -> None:
+    """A long position that has fallen past the ATR-based stop distance should be force-closed."""
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, index, tzinfo=timezone.utc),
+            open=100.0,
+            high=102.0,
+            low=98.0,
+            close=100.0,
+            volume=10.0,
+        )
+        for index in range(5)
+    ]
+    # ATR over this window is ~4 (high-low range each bar). With a 1x multiplier,
+    # a stop_distance of ~4 below the 100.0 entry means 90.0 must trigger it.
+    current_bar = OHLCVBar(
+        exchange="mock",
+        symbol="BTC/NOK",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, 5, tzinfo=timezone.utc),
+        open=95.0,
+        high=95.0,
+        low=90.0,
+        close=90.0,
+        volume=10.0,
+    )
+    manager = RiskManager(RiskControlConfig(atr_stop_multiplier=1.0, atr_window=5))
+
+    decision = manager.evaluate_exit(
+        bars=bars + [current_bar],
+        current_bar=current_bar,
+        position_side="long",
+        avg_entry_price=100.0,
+        bars_held=5,
+    )
+
+    assert decision.force_exit is True
+    assert decision.reason == "atr_stop_loss"
+
+
+def test_risk_manager_evaluate_exit_ignores_flat_position() -> None:
+    """A flat position (no side, no entry price) should never be force-closed."""
+    bar = OHLCVBar(
+        exchange="mock",
+        symbol="BTC/NOK",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        open=100.0,
+        high=100.0,
+        low=100.0,
+        close=100.0,
+        volume=10.0,
+    )
+    manager = RiskManager(RiskControlConfig(time_stop_bars=1, atr_stop_multiplier=0.01))
+
+    decision = manager.evaluate_exit(
+        bars=[bar],
+        current_bar=bar,
+        position_side=None,
+        avg_entry_price=None,
+        bars_held=5,
+    )
+
+    assert decision.force_exit is False
+
+
 def test_kill_switch_controller_cancels_open_orders(tmp_path) -> None:
     """The kill switch should cancel outstanding orders and record its state."""
 

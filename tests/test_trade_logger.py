@@ -38,6 +38,80 @@ def test_trade_logger_persists_trade_and_equity_records(tmp_path: Path) -> None:
     assert len(logger.list_equity_snapshots()) == 1
 
 
+def test_trade_logger_persists_strategy_id(tmp_path: Path) -> None:
+    """Trades should carry an optional strategy_id for future portfolio attribution."""
+    logger = TradeLogger(database_path=tmp_path / "trades.db")
+    timestamp = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+    logger.log_trade(
+        timestamp=timestamp,
+        source="paper_trading",
+        exchange="mock",
+        pair="BTC/NOK",
+        side="buy",
+        price=100.0,
+        size=1.0,
+        fee=0.4,
+        strategy_id="moving_average_crossover",
+    )
+    logger.log_trade(
+        timestamp=timestamp,
+        source="cli_manual_live_order",
+        exchange="kraken",
+        pair="BTC/EUR",
+        side="buy",
+        price=100.0,
+        size=1.0,
+        fee=0.4,
+    )
+
+    trades = logger.list_trades()
+    assert {trade["strategy_id"] for trade in trades} == {"moving_average_crossover", None}
+
+
+def test_trade_logger_adds_strategy_id_column_to_pre_existing_database(tmp_path: Path) -> None:
+    """A database created before strategy_id existed should be migrated in place."""
+    import sqlite3
+    from contextlib import closing
+
+    database_path = tmp_path / "legacy.db"
+    with closing(sqlite3.connect(database_path)) as connection:
+        connection.execute(
+            """
+            CREATE TABLE trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                source TEXT NOT NULL,
+                exchange TEXT NOT NULL,
+                pair TEXT NOT NULL,
+                side TEXT NOT NULL,
+                price REAL NOT NULL,
+                size REAL NOT NULL,
+                fee REAL NOT NULL,
+                role_maker_taker TEXT NOT NULL,
+                latency_ms INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        connection.commit()
+
+    logger = TradeLogger(database_path=database_path)
+    trade_id, _ = logger.log_trade(
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        source="paper_trading",
+        exchange="mock",
+        pair="BTC/NOK",
+        side="buy",
+        price=100.0,
+        size=1.0,
+        fee=0.4,
+        strategy_id="baseline",
+    )
+
+    assert trade_id > 0
+    assert logger.list_trades()[0]["strategy_id"] == "baseline"
+
+
 def test_trade_logger_writes_daily_summary(tmp_path: Path) -> None:
     """The trade logger should persist a daily summary aggregation."""
     logger = TradeLogger(database_path=tmp_path / "trades.db")

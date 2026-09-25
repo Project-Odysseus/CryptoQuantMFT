@@ -113,6 +113,15 @@ def build_runtime_orchestrator(
             max_notional_per_trade=10000.0,
             max_total_notional=25000.0,
             paper_mode=(runtime_config.mode == "paper"),
+            # Position-level exits and a rolling daily-loss circuit breaker,
+            # distinct from the all-time peak drawdown above: a slow all-time
+            # drawdown that never breaches hard_stop_drawdown_pct can still be
+            # caught if a single day is bad enough on its own, and a stuck
+            # position can't ride a signal that never reverses.
+            daily_loss_limit_pct=0.05,
+            time_stop_bars=60,
+            atr_stop_multiplier=3.0,
+            atr_window=14,
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
@@ -127,6 +136,7 @@ def build_runtime_orchestrator(
         execution_adapter=execution_router.adapter,
         exchange_name=effective_exchange,
         enable_tax_logging=(runtime_config.mode == "live"),
+        strategy_id=runtime_config.strategy_name,
     )
     strategy = resolve_strategy(runtime_config.strategy_name, **runtime_config.strategy_params)
     # Derive the primary trading symbol from the first connector so bars and
@@ -1082,6 +1092,7 @@ def _run_kraken_order_submission(
             size=float(submission["filled_size"]),
             fee=float(submission.get("fee") or 0.0),
             record_tax_event=True,
+            strategy_id="manual_cli",
         )
 
     trade_logger.log_event(
@@ -1174,6 +1185,7 @@ def _run_kraken_close_submission(
             size=float(submission["filled_size"]),
             fee=float(submission.get("fee") or 0.0),
             record_tax_event=True,
+            strategy_id="manual_cli",
         )
 
     trade_logger.log_event(

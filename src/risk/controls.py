@@ -57,6 +57,18 @@ class RiskControlConfig:
     hard_stop_drawdown_pct: float = 0.02
     hard_stop_cooldown_bars: int = 5
     exchange_risk_limits: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Rolling daily loss limit, distinct from hard_stop_drawdown_pct: that one
+    # trips off the all-time equity peak, this one resets each calendar day so
+    # a slow all-time drawdown that never breaches the peak-based hard stop
+    # still gets caught if a single day is bad enough on its own.
+    daily_loss_limit_pct: float | None = None
+    # Position-level exit controls. None disables the corresponding check.
+    # These force an exit regardless of the strategy's own signal, so a
+    # position can't be left open indefinitely or ride a stop-loss-sized
+    # adverse move just because the strategy hasn't emitted an exit signal.
+    time_stop_bars: int | None = None
+    atr_stop_multiplier: float | None = None
+    atr_window: int = 14
     # When True, skip execution-quality checks (spread/slippage/volatility) that
     # are only meaningful for live fills.  Paper trading does not have real
     # execution risk so these checks just prevent signals from filling.
@@ -69,6 +81,14 @@ class RiskDecision:
 
     allow_entry: bool
     position_size: float
+    reason: str | None = None
+
+
+@dataclass(slots=True)
+class ExitDecision:
+    """Result of evaluating whether an open position must be force-closed."""
+
+    force_exit: bool
     reason: str | None = None
 
 
@@ -145,6 +165,7 @@ class RiskManager:
         current_exchange_notional: float = 0.0,
         exchange_open_positions: int = 0,
         open_orders_count: int = 0,
+        daily_reference_equity: float | None = None,
     ) -> RiskDecision:
         """Return whether a new position should be allowed and how large it should be."""
         if hard_stop_active:
@@ -176,6 +197,17 @@ class RiskManager:
             if circuit_breaker is not None:
                 circuit_breaker.activate("hard_stop_drawdown", drawdown_pct=drawdown, threshold_pct=self.config.hard_stop_drawdown_pct)
             return RiskDecision(allow_entry=False, position_size=0.0, reason="hard_stop_drawdown")
+
+        if self.config.daily_loss_limit_pct is not None and daily_reference_equity is not None and daily_reference_equity > 0.0:
+            daily_drawdown = max(0.0, (daily_reference_equity - equity) / daily_reference_equity)
+            if daily_drawdown > self.config.daily_loss_limit_pct:
+                if circuit_breaker is not None:
+                    circuit_breaker.activate(
+                        "daily_loss_limit",
+                        daily_drawdown_pct=daily_drawdown,
+                        threshold_pct=self.config.daily_loss_limit_pct,
+                    )
+                return RiskDecision(allow_entry=False, position_size=0.0, reason="daily_loss_limit")
 
         if open_positions >= self.config.max_open_positions:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="position_limit")
@@ -229,6 +261,59 @@ class RiskManager:
             exchange_position_size=exchange_position_size,
         )
         return RiskDecision(allow_entry=True, position_size=max(0.0, min(self._resolve_position_limit(exchange_name=exchange_name), position_size)))
+
+    def evaluate_exit(
+        self,
+        *,
+        bars: Sequence[Any],
+        current_bar: Any,
+        position_side: str | None,
+        avg_entry_price: float | None,
+        bars_held: int,
+    ) -> ExitDecision:
+        """Return whether an open position must be force-closed this bar.
+
+        This runs independently of the strategy's own signal so a position
+        cannot be left open indefinitely (time stop) or ride an adverse move
+        past a fixed risk budget (ATR stop) just because the strategy hasn't
+        emitted an opposing signal yet.
+        """
+        if position_side not in {"long", "short"} or avg_entry_price is None:
+            return ExitDecision(force_exit=False)
+
+        time_stop_bars = self.config.time_stop_bars
+        if time_stop_bars is not None and time_stop_bars > 0 and bars_held >= time_stop_bars:
+            return ExitDecision(force_exit=True, reason="time_stop")
+
+        atr_multiplier = self.config.atr_stop_multiplier
+        if atr_multiplier is not None and atr_multiplier > 0.0:
+            atr = self._estimate_atr(bars)
+            if atr > 0.0:
+                current_price = _get_close(current_bar)
+                stop_distance = atr * atr_multiplier
+                if position_side == "long" and current_price <= avg_entry_price - stop_distance:
+                    return ExitDecision(force_exit=True, reason="atr_stop_loss")
+                if position_side == "short" and current_price >= avg_entry_price + stop_distance:
+                    return ExitDecision(force_exit=True, reason="atr_stop_loss")
+
+        return ExitDecision(force_exit=False)
+
+    def _estimate_atr(self, bars: Sequence[Any]) -> float:
+        window_bars = list(bars[-(self.config.atr_window + 1) :])
+        if len(window_bars) < 2:
+            return 0.0
+
+        true_ranges: list[float] = []
+        for index in range(1, len(window_bars)):
+            high = _get_high(window_bars[index])
+            low = _get_low(window_bars[index])
+            previous_close = _get_close(window_bars[index - 1])
+            true_ranges.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+
+        if not true_ranges:
+            return 0.0
+
+        return float(np.mean(true_ranges))
 
     def _estimate_volatility(self, bars: Sequence[Any]) -> float:
         if len(bars) < 2:

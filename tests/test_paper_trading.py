@@ -554,3 +554,100 @@ def test_paper_trading_engine_enables_tax_logging_only_when_requested() -> None:
 
     assert logger.trades
     assert logger.trades[0]["record_tax_event"] is True
+
+
+def test_paper_trading_engine_tags_trades_with_strategy_id() -> None:
+    """Persisted trades should carry the engine's strategy_id for future portfolio attribution."""
+    class FakeTradeLogger:
+        def __init__(self) -> None:
+            self.trades: list[dict[str, object]] = []
+
+        def log_event(self, **_: object) -> int:
+            return 1
+
+        def log_trade(self, **kwargs: object) -> int:
+            self.trades.append(kwargs)
+            return 1
+
+        def log_equity_snapshot(self, **_: object) -> int:
+            return 1
+
+    logger = FakeTradeLogger()
+    bars = [
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        ),
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+            open=101.0,
+            high=101.0,
+            low=101.0,
+            close=101.0,
+            volume=10.0,
+        ),
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc),
+            open=102.0,
+            high=102.0,
+            low=102.0,
+            close=102.0,
+            volume=10.0,
+        ),
+    ]
+
+    PaperTradingEngine(
+        initial_cash=1000.0,
+        default_order_size=1.0,
+        trade_logger=logger,
+        strategy_id="moving_average_crossover",
+    ).run(bars, [1.0, 0.0, 0.0])
+
+    assert logger.trades
+    assert logger.trades[0]["strategy_id"] == "moving_average_crossover"
+
+
+def test_paper_trading_engine_force_closes_position_on_time_stop() -> None:
+    """A position held past time_stop_bars should be closed even without an opposing signal."""
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, index, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        )
+        for index in range(7)
+    ]
+    signals = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    risk_manager = RiskManager(RiskControlConfig(time_stop_bars=2, paper_mode=True))
+    result = PaperTradingEngine(
+        initial_cash=1000.0,
+        default_order_size=1.0,
+        partial_fill_fraction=1.0,
+        max_order_lifetime_bars=5,
+        risk_manager=risk_manager,
+    ).run(bars, signals)
+
+    time_stop_orders = [order for order in result.orders if order.last_reason == "time_stop"]
+    assert time_stop_orders
+    assert time_stop_orders[0].status == "FILLED"
+    assert result.portfolio_history[-1].position_size == 0.0

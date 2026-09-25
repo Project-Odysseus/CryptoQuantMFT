@@ -302,6 +302,8 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [ ] explicit rules for when a signal is ignored because another stronger signal already owns the position
 
 - [ ] **Priority 4A: Multi-signal portfolio construction and crossing**
+  - Context: see `docs/portfolio_architecture_assessment.md` (2026-09-25) — the current `RuntimeOrchestrator`/`PaperTradingEngine`/`RiskManager`/`TradeLogger` stack is single-strategy, single-symbol, single-adapter by construction, with no `strategy_id` attribution anywhere. The stated end goal is multiple strategies across spot/futures/derivatives/options with portfolio-level risk, so this section is a real architecture project, not a config toggle — read that doc before starting here.
+  - [x] First step taken (2026-09-25): `trades.strategy_id` now exists (migrated in place) and `PaperTradingEngine`/`TradeLogger.log_trade` thread a `strategy_id` through on every trade, so future multi-strategy attribution won't need a historical backfill. This is groundwork only — no combiner, allocator, or per-strategy risk sleeve exists yet.
   - [ ] add a signal-combiner layer that converts many raw signals into one target position / target notional
   - [ ] support per-signal confidence, weighting, and attribution
   - [ ] net conflicting signals internally before routing orders to the exchange
@@ -312,9 +314,9 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [ ] netted exposure after crossing
     - [ ] recent execution decisions and skipped crossed trades
 - [ ] **Post-Trade & Portfolio Risk Controls**
-  - [ ] **Circuit Breakers:** Implement daily Max Drawdown limit (e.g., hard stop at -2% account equity drop in 24 hours)
-  - [ ] **Time Stops:** Automatically liquidate/exit mean-reversion positions if $Z$-score fails to revert within $N$ half-lives
-  - [ ] **Volatility-Based Stops:** ATR-driven trailing stop-loss logic
+  - [x] **Circuit Breakers:** Implement daily Max Drawdown limit (2026-09-25: `RiskControlConfig.daily_loss_limit_pct` + `RiskManager.evaluate()` — resets at each calendar-day boundary, distinct from the existing all-time-peak `hard_stop_drawdown_pct`; wired into `PaperTradingEngine.run()` fully, and into `run_exchange_cycle()` for entry-gating only, not yet for a full-day-boundary reset check on every cycle since that path only sees the latest bar — see `todo_important.md`)
+  - [x] **Time Stops:** Force-close a position that has been held past `time_stop_bars` regardless of the strategy's own signal (2026-09-25: `RiskManager.evaluate_exit()`, wired into `PaperTradingEngine.run()`; not yet wired into the exchange-backed `run_exchange_cycle()` path — that needs a persisted entry timestamp/bars-held state that doesn't exist yet in the account-state tracker, see `todo_important.md`)
+  - [x] **Volatility-Based Stops:** ATR-driven stop-loss (2026-09-25: `RiskManager.evaluate_exit()` / `_estimate_atr()`, same `run()`-only scope as the time stop above; not yet a *trailing* stop — it's a fixed distance from the entry price, not one that ratchets in the position's favor)
   - [ ] **Counterparty Risk:** Monitor and alert on asset balance distribution between Firi (NOK) and Kraken (EUR/BTC)
   - [x] Add a hard stop path that can neutralize the portfolio if live data or execution quality degrades
 

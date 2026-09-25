@@ -39,10 +39,16 @@ class TradeLogger:
                     size REAL NOT NULL,
                     fee REAL NOT NULL,
                     role_maker_taker TEXT NOT NULL,
-                    latency_ms INTEGER NOT NULL DEFAULT 0
+                    latency_ms INTEGER NOT NULL DEFAULT 0,
+                    strategy_id TEXT
                 )
                 """
             )
+            existing_trade_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(trades)").fetchall()
+            }
+            if "strategy_id" not in existing_trade_columns:
+                connection.execute("ALTER TABLE trades ADD COLUMN strategy_id TEXT")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -156,8 +162,15 @@ class TradeLogger:
         role_maker_taker: str = "taker",
         latency_ms: int = 0,
         record_tax_event: bool = False,
+        strategy_id: str | None = None,
     ) -> tuple[int, str | None]:
         """Persist a single trade record.
+
+        Args:
+            strategy_id: Identifies which strategy (or manual flow) placed the
+                trade. Optional today since only one strategy runs at a time,
+                but recorded now so portfolio-level attribution does not need
+                a historical backfill once multiple strategies run concurrently.
 
         Returns:
             A ``(trade_id, tax_event_error)`` pair. ``tax_event_error`` is ``None``
@@ -178,8 +191,9 @@ class TradeLogger:
                     size,
                     fee,
                     role_maker_taker,
-                    latency_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    latency_ms,
+                    strategy_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     timestamp.isoformat(),
@@ -192,6 +206,7 @@ class TradeLogger:
                     fee,
                     role_maker_taker,
                     latency_ms,
+                    strategy_id,
                 ),
             )
             connection.commit()
@@ -279,11 +294,11 @@ class TradeLogger:
         with closing(sqlite3.connect(self.database_path)) as connection:
             if limit is None:
                 rows = connection.execute(
-                    "SELECT timestamp, source, exchange, pair, side, price, size, fee, role_maker_taker, latency_ms FROM trades ORDER BY id DESC"
+                    "SELECT timestamp, source, exchange, pair, side, price, size, fee, role_maker_taker, latency_ms, strategy_id FROM trades ORDER BY id DESC"
                 ).fetchall()
             else:
                 rows = connection.execute(
-                    "SELECT timestamp, source, exchange, pair, side, price, size, fee, role_maker_taker, latency_ms FROM trades ORDER BY id DESC LIMIT ?",
+                    "SELECT timestamp, source, exchange, pair, side, price, size, fee, role_maker_taker, latency_ms, strategy_id FROM trades ORDER BY id DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
         return [
@@ -298,8 +313,9 @@ class TradeLogger:
                 "fee": fee,
                 "role_maker_taker": role_maker_taker,
                 "latency_ms": latency_ms,
+                "strategy_id": strategy_id,
             }
-            for timestamp, source, exchange, pair, side, price, size, fee, role_maker_taker, latency_ms in rows
+            for timestamp, source, exchange, pair, side, price, size, fee, role_maker_taker, latency_ms, strategy_id in rows
         ]
 
     def list_equity_snapshots(self, limit: int | None = None) -> list[dict[str, Any]]:

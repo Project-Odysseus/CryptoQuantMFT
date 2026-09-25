@@ -101,6 +101,7 @@ class PaperTradingEngine:
         kill_switch_controller: KillSwitchController | None = None,
         exchange_name: str | None = None,
         enable_tax_logging: bool = False,
+        strategy_id: str | None = None,
     ) -> None:
         """Initialize the object with its runtime state."""
         if initial_cash <= 0:
@@ -124,7 +125,14 @@ class PaperTradingEngine:
         self.kill_switch_controller = kill_switch_controller
         self.exchange_name = exchange_name or getattr(execution_adapter, "exchange_name", None) or getattr(execution_adapter, "name", None) or "paper"
         self.enable_tax_logging = enable_tax_logging
+        self.strategy_id = strategy_id
         self._order_counter = 0
+        # Instance-level so the daily-loss reference survives across cycles
+        # within one running process (exchange-cycle mode has no other place
+        # to keep it, since position/cash state is reconstructed from the
+        # adapter each cycle rather than carried in local variables).
+        self._exchange_current_day: Any | None = None
+        self._exchange_day_start_equity: float | None = None
 
     def run(self, bars: Sequence[Any], signals: Sequence[float | int | str | None]) -> PaperTradingResult:
         """Process a stream of bars and signals into simulated orders and fills."""
@@ -145,12 +153,21 @@ class PaperTradingEngine:
         portfolio_history: list[PortfolioSnapshot] = []
         entry_decisions: list[dict[str, Any]] = []
         active_orders: list[PaperOrder] = []
+        bars_held = 0
+        current_day: Any | None = None
+        day_start_equity = self.initial_cash
 
         for index, bar in enumerate(bars):
             signal = _normalize_signal(signals[index])
             price = _get_close(bar)
             timestamp = _get_timestamp(bar)
             current_equity = cash + (position_size * price if position_size else 0.0)
+
+            bar_day = timestamp.date() if hasattr(timestamp, "date") else None
+            if bar_day is not None and bar_day != current_day:
+                current_day = bar_day
+                day_start_equity = current_equity
+            bars_held = bars_held + 1 if position_size != 0.0 else 0
 
             for order in list(active_orders):
                 if order.status == "PENDING_SUBMIT":
@@ -265,9 +282,48 @@ class PaperTradingEngine:
                             role_maker_taker="taker",
                             latency_ms=0,
                             record_tax_event=self.enable_tax_logging,
+                            strategy_id=self.strategy_id,
                         )
 
-            if not active_orders:
+            forced_exit_reason: str | None = None
+            if not active_orders and position_size != 0.0 and self.risk_manager is not None:
+                position_side = "long" if position_size > 0.0 else "short"
+                exit_decision = self.risk_manager.evaluate_exit(
+                    bars=list(bars[: index + 1]),
+                    current_bar=bar,
+                    position_side=position_side,
+                    avg_entry_price=avg_entry_price,
+                    bars_held=bars_held,
+                )
+                if exit_decision.force_exit:
+                    forced_exit_reason = exit_decision.reason
+
+            if not active_orders and forced_exit_reason is not None:
+                exit_side = "sell" if position_size > 0.0 else "buy"
+                order = self._create_order(timestamp=timestamp, side=exit_side, size=abs(position_size), bar=bar)
+                order.last_reason = forced_exit_reason
+                active_orders.append(order)
+                orders.append(order)
+                self._log_order_event(
+                    order=order,
+                    timestamp=timestamp,
+                    event_type="order_lifecycle",
+                    message="position force-closed by risk control",
+                    reason=forced_exit_reason,
+                )
+                cash, position_size, avg_entry_price = self._maybe_route_order(
+                    order=order,
+                    price=price,
+                    timestamp=timestamp,
+                    cash=cash,
+                    position_size=position_size,
+                    avg_entry_price=avg_entry_price,
+                    trades=trades,
+                )
+                if order.status in {"FILLED", "CANCELED"}:
+                    active_orders.remove(order)
+                bars_held = 0
+            elif not active_orders:
                 if position_size > 0.0 and signal < 0.0:
                     order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar)
                     active_orders.append(order)
@@ -314,6 +370,7 @@ class PaperTradingEngine:
                         current_exchange_notional=max(0.0, position_size * price),
                         exchange_open_positions=1 if position_size != 0.0 else 0,
                         open_orders_count=len(active_orders),
+                        daily_reference_equity=day_start_equity,
                     )
                     self._record_entry_decision(
                         decisions=entry_decisions,
@@ -368,6 +425,7 @@ class PaperTradingEngine:
                         current_exchange_notional=max(0.0, position_size * price),
                         exchange_open_positions=1 if position_size != 0.0 else 0,
                         open_orders_count=len(active_orders),
+                        daily_reference_equity=day_start_equity,
                     )
                     self._record_entry_decision(
                         decisions=entry_decisions,
@@ -472,6 +530,11 @@ class PaperTradingEngine:
         cash, position_size, avg_entry_price, fees_paid = self._current_account_state(price=price, symbol=symbol)
         current_equity = cash + (position_size * price if position_size else 0.0)
 
+        bar_day = timestamp.date() if hasattr(timestamp, "date") else None
+        if bar_day is not None and bar_day != self._exchange_current_day:
+            self._exchange_current_day = bar_day
+            self._exchange_day_start_equity = current_equity
+
         if open_orders:
             self._record_entry_decision(
                 decisions=entry_decisions,
@@ -487,6 +550,11 @@ class PaperTradingEngine:
                 equity=current_equity,
             )
         elif position_size > 0.0 and signal < 0.0:
+            # NOTE: exit here is signal-driven only. RiskManager.evaluate_exit
+            # (time_stop / atr_stop_loss) is intentionally not wired into this
+            # exchange-backed cycle path yet: it needs how-long-has-this-been-
+            # open state that isn't persisted anywhere the account tracker
+            # exposes today. See todo_important.md before adding it blind.
             exit_order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar)
             cycle_orders.append(exit_order)
             maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)
@@ -508,6 +576,7 @@ class PaperTradingEngine:
                 current_exchange_notional=max(0.0, position_size * price),
                 exchange_open_positions=1 if position_size != 0.0 else 0,
                 open_orders_count=0,
+                daily_reference_equity=self._exchange_day_start_equity,
             )
             self._record_entry_decision(
                 decisions=entry_decisions,
@@ -807,6 +876,7 @@ class PaperTradingEngine:
                 role_maker_taker="taker",
                 latency_ms=0,
                 record_tax_event=self.enable_tax_logging,
+                strategy_id=self.strategy_id,
             )
         return cash, position_size, avg_entry_price
 
@@ -875,6 +945,7 @@ class PaperTradingEngine:
                 role_maker_taker="taker",
                 latency_ms=0,
                 record_tax_event=self.enable_tax_logging,
+                strategy_id=self.strategy_id,
             )
         return PaperTrade(
             order_id=order.id,
@@ -977,6 +1048,7 @@ class PaperTradingEngine:
         current_exchange_notional: float = 0.0,
         exchange_open_positions: int = 0,
         open_orders_count: int = 0,
+        daily_reference_equity: float | None = None,
     ) -> Any:
         if self.kill_switch_controller is not None and self.kill_switch_controller.is_active():
             return type("RiskDecision", (), {"allow_entry": False, "position_size": 0.0, "reason": "kill_switch"})()
@@ -999,6 +1071,7 @@ class PaperTradingEngine:
             current_exchange_notional=current_exchange_notional,
             exchange_open_positions=exchange_open_positions,
             open_orders_count=open_orders_count,
+            daily_reference_equity=daily_reference_equity,
         )
 
     def _resolve_order_size(self, *, price: float, cash: float, equity: float, requested_size: float, risk_position_size: float) -> float:
