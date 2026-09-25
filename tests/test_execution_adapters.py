@@ -437,6 +437,59 @@ def test_kraken_adapter_uses_private_api_for_submit_and_status(monkeypatch) -> N
     assert status_report.filled_size == 0.25
 
 
+def test_kraken_adapter_recover_execution_state_applies_async_fill_to_local_position(monkeypatch: pytest.MonkeyPatch) -> None:
+    """recover_execution_state() (no args) must detect a real fill and update local balances/positions exactly once.
+
+    Regression test for a bug where get_order_status() mutated the local
+    order's status/filled_size *before* returning, which made
+    reconcile_order_state()'s before/after diff always see zero change -
+    silently skipping _apply_fill_to_account_state() every time
+    recover_execution_state() used get_order_status() as its data source.
+    """
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._positions = {}
+
+    def fake_request_json(self: KrakenExecutionAdapter, method: str, url: str, *, params=None, headers=None, data=None) -> dict[str, object]:
+        return _permissive_pair_metadata_response("XXBTZEUR")
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "100000.0"}}
+        if endpoint == "AddOrder":
+            return {"error": [], "result": {"txid": ["real-txid-1"]}}
+        if endpoint == "QueryOrders":
+            return {"error": [], "result": {"real-txid-1": {"status": "closed", "vol_exec": "0.25", "price": "68000.0", "fee": "0.01"}}}
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    submit_report = adapter.submit_order(
+        order_id="local-order-1",
+        side="buy",
+        size=0.25,
+        price=68000.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+    assert submit_report.status == "SUBMITTED"
+    assert adapter.get_account_snapshot()["positions"] == {}  # not yet filled
+
+    adapter.recover_execution_state()
+
+    snapshot = adapter.get_account_snapshot()
+    assert snapshot["positions"]["BTC"] == 0.25
+    assert snapshot["balances"]["EUR"] == pytest.approx(1000.0 - 0.25 * 68000.0 - 0.01)
+    assert adapter._orders["local-order-1"].status == "FILLED"
+
+    # Calling it again with no further change should not double-apply the fill.
+    adapter.recover_execution_state()
+    snapshot_again = adapter.get_account_snapshot()
+    assert snapshot_again["positions"]["BTC"] == 0.25
+    assert snapshot_again["balances"]["EUR"] == snapshot["balances"]["EUR"]
+
+
 def test_kraken_adapter_recover_execution_state_normalizes_kraken_payloads(monkeypatch) -> None:
     """Kraken-shaped balance and order payloads should reconcile into the generic adapter state."""
     adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")

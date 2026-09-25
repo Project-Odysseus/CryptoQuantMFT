@@ -787,12 +787,13 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         fill_price = self._coerce_float(remote_order.get("fill_price")) or order.fill_price
         filled_size = self._coerce_float(remote_order.get("filled_size")) or order.filled_size
         fee = self._coerce_float(remote_order.get("fee")) or order.fee
-        order.status = normalized_status
-        order.remote_status = normalized_status
-        order.fill_price = fill_price
-        order.filled_size = filled_size if filled_size is not None else order.filled_size
-        order.fee = fee if fee is not None else order.fee
-        order.message = "Kraken order state"
+        # Deliberately read-only: do NOT mutate `order` here. reconcile_order_state()
+        # diffs the order's current (pre-mutation) fields against these returned
+        # values to detect a fill and apply it to balances/positions exactly once;
+        # mutating the order here first made that diff always see zero change,
+        # silently skipping _apply_fill_to_account_state() every time this method
+        # was used as the data source for reconciliation (recover_execution_state()
+        # -> get_order_status() -> reconcile_order_state()).
         return ExecutionReport(
             order_id=order_id,
             status=normalized_status,
