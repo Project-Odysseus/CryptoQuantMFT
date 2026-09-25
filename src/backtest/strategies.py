@@ -40,6 +40,14 @@ def moving_average_crossover_strategy(short_window: int = 3, long_window: int = 
             return -1
         return 0
 
+    def signal_series(bars: Sequence[Any]) -> np.ndarray:
+        close = series(bars, "close")
+        difference = rolling_mean(close, short_window) - rolling_mean(close, long_window)
+        signals = np.where(difference > 0.0, 1, np.where(difference < 0.0, -1, 0))
+        signals[: max(short_window, long_window) - 1] = 0
+        return signals
+
+    strategy.signal_series = signal_series  # type: ignore[attr-defined]
     return strategy
 
 
@@ -64,6 +72,7 @@ def momentum_breakout_strategy(lookback: int = 5, threshold: float = 0.01) -> St
             return -1
         return 0
 
+    strategy.signal_series = lambda bars: _threshold_momentum_series(bars, lookback, threshold)  # type: ignore[attr-defined]
     return strategy
 
 
@@ -88,6 +97,7 @@ def signal_trend_strategy(lookback: int = 1, threshold: float = 0.001) -> Strate
             return -1
         return 0
 
+    strategy.signal_series = lambda bars: _threshold_momentum_series(bars, lookback, threshold)  # type: ignore[attr-defined]
     return strategy
 
 
@@ -148,6 +158,21 @@ def volume_confirmed_momentum_strategy(
 
         return 1 if is_bullish else -1
 
+    def signal_series(bars: Sequence[Any]) -> np.ndarray:
+        close, volume = series(bars, "close"), series(bars, "volume")
+        baseline = shift(close, lookback)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return_pct = (close - baseline) / baseline
+        bullish = return_pct > 0
+        active_threshold = np.where(bullish, threshold, resolved_short_threshold)
+        average_volume = shift(rolling_mean(volume, volume_window))
+        active_multiplier = np.where(bullish, volume_multiplier, resolved_short_volume_multiplier)
+        confirmed = (baseline > 0) & (np.abs(return_pct) > active_threshold) & (average_volume > 0.0) & (volume >= average_volume * active_multiplier)
+        signals = np.where(confirmed & bullish, 1, np.where(confirmed & ~bullish & allow_short, -1, 0))
+        signals[:lookback] = 0
+        return signals
+
+    strategy.signal_series = signal_series  # type: ignore[attr-defined]
     return strategy
 
 
@@ -208,6 +233,16 @@ def band_reversion_strategy(window: int = 20, num_std: float = 2.0, allow_short:
             return -1
         return 0
 
+    def signal_series(bars: Sequence[Any]) -> np.ndarray:
+        close = series(bars, "close")
+        band_mean = shift(rolling_mean(close, window))
+        band_std = shift(rolling_std(close, window))
+        valid = band_std > 0.0
+        signals = np.where(valid & (close < band_mean - num_std * band_std), 1, np.where(valid & (close > band_mean + num_std * band_std) & allow_short, -1, 0))
+        signals[:window] = 0
+        return signals
+
+    strategy.signal_series = signal_series  # type: ignore[attr-defined]
     return strategy
 
 
@@ -221,25 +256,21 @@ def donchian_breakout_strategy(entry_window: int = 20, exit_window: int = 10, al
     exit channel than entry channel lets winners run while giving back less
     on a reversal than waiting for the full entry channel to break.
     """
-    warmup = max(entry_window, exit_window) + 1
 
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Hold the position implied by the most recent channel breakout that hasn't been exited."""
-        if len(history) < warmup:
-            return 0
-        close, high, low = series(history, "close"), series(history, "high"), series(history, "low")
+    def rules(bars: "_BarArrays") -> tuple:
+        close, high, low = bars.close, bars.high, bars.low
         prior_entry_high = shift(rolling_max(high, entry_window))
         prior_entry_low = shift(rolling_min(low, entry_window))
         prior_exit_high = shift(rolling_max(high, exit_window))
         prior_exit_low = shift(rolling_min(low, exit_window))
-        return latch_position(
-            long_entry=close > prior_entry_high,
-            long_exit=close < prior_exit_low,
-            short_entry=close < prior_entry_low if allow_short else None,
-            short_exit=close > prior_exit_high if allow_short else None,
+        return (
+            close > prior_entry_high,
+            close < prior_exit_low,
+            close < prior_entry_low if allow_short else None,
+            close > prior_exit_high if allow_short else None,
         )
 
-    return strategy
+    return _latched_strategy(rules, warmup=max(entry_window, exit_window) + 1)
 
 
 def keltner_breakout_strategy(window: int = 20, atr_multiplier: float = 2.0, allow_short: bool = True) -> StrategyFn:
@@ -251,23 +282,19 @@ def keltner_breakout_strategy(window: int = 20, atr_multiplier: float = 2.0, all
     crosses back through the moving average. The channel is built from the
     prior bars only, so a breakout bar can't widen its own threshold.
     """
-    warmup = window + 2
 
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Hold after a close outside the ATR channel until the close returns through the middle line."""
-        if len(history) < warmup:
-            return 0
-        close, high, low = series(history, "close"), series(history, "high"), series(history, "low")
+    def rules(bars: "_BarArrays") -> tuple:
+        close = bars.close
         middle = shift(rolling_mean(close, window))
-        band = atr_multiplier * shift(atr(high, low, close, window))
-        return latch_position(
-            long_entry=close > middle + band,
-            long_exit=close < middle,
-            short_entry=close < middle - band if allow_short else None,
-            short_exit=close > middle if allow_short else None,
+        band = atr_multiplier * shift(atr(bars.high, bars.low, close, window))
+        return (
+            close > middle + band,
+            close < middle,
+            close < middle - band if allow_short else None,
+            close > middle if allow_short else None,
         )
 
-    return strategy
+    return _latched_strategy(rules, warmup=window + 2)
 
 
 def trend_tstat_strategy(window: int = 24, strength_threshold: float = 1.5, allow_short: bool = True) -> StrategyFn:
@@ -284,22 +311,18 @@ def trend_tstat_strategy(window: int = 24, strength_threshold: float = 1.5, allo
     `strength_threshold` and holds until the slope's sign flips
     (hysteresis, so it doesn't churn around the threshold).
     """
-    warmup = window
     scale = float(np.sqrt(window))
 
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Hold in the direction of a strong, clean trend until the trend's slope changes sign."""
-        if len(history) < warmup:
-            return 0
-        score = linreg_tstat(np.log(series(history, "close")), window) / scale
-        return latch_position(
-            long_entry=score > strength_threshold,
-            long_exit=score < 0.0,
-            short_entry=score < -strength_threshold if allow_short else None,
-            short_exit=score > 0.0 if allow_short else None,
+    def rules(bars: "_BarArrays") -> tuple:
+        score = linreg_tstat(np.log(bars.close), window) / scale
+        return (
+            score > strength_threshold,
+            score < 0.0,
+            score < -strength_threshold if allow_short else None,
+            score > 0.0 if allow_short else None,
         )
 
-    return strategy
+    return _latched_strategy(rules, warmup=window)
 
 
 def volatility_squeeze_strategy(
@@ -321,13 +344,9 @@ def volatility_squeeze_strategy(
     the band break, and only right after compression. Bands come from the
     prior bars only, so a breakout bar can't widen its own threshold.
     """
-    warmup = window + squeeze_lookback + 1
 
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Hold a breakout that followed a volatility squeeze until price returns to the middle band."""
-        if len(history) < warmup:
-            return 0
-        close = series(history, "close")
+    def rules(bars: "_BarArrays") -> tuple:
+        close = bars.close
         rolling_middle = rolling_mean(close, window)
         rolling_deviation = rolling_std(close, window)
         bandwidth = 2.0 * num_std * rolling_deviation / rolling_middle
@@ -336,14 +355,14 @@ def volatility_squeeze_strategy(
         recently_squeezed = shift(rolling_max(squeezed_now, squeeze_memory)) > 0.0
         middle = shift(rolling_middle)
         deviation = shift(rolling_deviation)
-        return latch_position(
-            long_entry=recently_squeezed & (close > middle + num_std * deviation),
-            long_exit=close < middle,
-            short_entry=recently_squeezed & (close < middle - num_std * deviation) if allow_short else None,
-            short_exit=close > middle if allow_short else None,
+        return (
+            recently_squeezed & (close > middle + num_std * deviation),
+            close < middle,
+            recently_squeezed & (close < middle - num_std * deviation) if allow_short else None,
+            close > middle if allow_short else None,
         )
 
-    return strategy
+    return _latched_strategy(rules, warmup=window + squeeze_lookback + 1)
 
 
 def rsi_reversion_strategy(rsi_window: int = 14, oversold: float = 30.0, exit_level: float = 50.0, allow_short: bool = True) -> StrategyFn:
@@ -356,23 +375,19 @@ def rsi_reversion_strategy(rsi_window: int = 14, oversold: float = 30.0, exit_le
     normalised. Short windows (2-4) with extreme levels (10-20) are the
     classic short-term version.
     """
-    warmup = rsi_window + 1
     overbought = 100.0 - oversold
     short_exit_level = 100.0 - exit_level
 
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Hold a reversion trade from an RSI extreme until the RSI crosses back to the exit level."""
-        if len(history) < warmup:
-            return 0
-        strength = rsi(series(history, "close"), rsi_window)
-        return latch_position(
-            long_entry=strength < oversold,
-            long_exit=strength > exit_level,
-            short_entry=strength > overbought if allow_short else None,
-            short_exit=strength < short_exit_level if allow_short else None,
+    def rules(bars: "_BarArrays") -> tuple:
+        strength = rsi(bars.close, rsi_window)
+        return (
+            strength < oversold,
+            strength > exit_level,
+            strength > overbought if allow_short else None,
+            strength < short_exit_level if allow_short else None,
         )
 
-    return strategy
+    return _latched_strategy(rules, warmup=rsi_window + 1)
 
 
 def trend_pullback_strategy(
@@ -389,23 +404,85 @@ def trend_pullback_strategy(
     trend is up but the short RSI is oversold, exit when the RSI has bounced
     above `exit_rsi` or the trend filter fails. Mirror image for shorts.
     """
-    warmup = max(trend_window, rsi_window) + 1
 
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Hold a with-trend pullback entry until the bounce completes or the trend breaks."""
-        if len(history) < warmup:
-            return 0
-        close = series(history, "close")
+    def rules(bars: "_BarArrays") -> tuple:
+        close = bars.close
         trend = rolling_mean(close, trend_window)
         strength = rsi(close, rsi_window)
-        return latch_position(
-            long_entry=(close > trend) & (strength < entry_rsi),
-            long_exit=(strength > exit_rsi) | (close < trend),
-            short_entry=(close < trend) & (strength > 100.0 - entry_rsi) if allow_short else None,
-            short_exit=(strength < 100.0 - exit_rsi) | (close > trend) if allow_short else None,
+        return (
+            (close > trend) & (strength < entry_rsi),
+            (strength > exit_rsi) | (close < trend),
+            (close < trend) & (strength > 100.0 - entry_rsi) if allow_short else None,
+            (strength < 100.0 - exit_rsi) | (close > trend) if allow_short else None,
         )
 
+    return _latched_strategy(rules, warmup=max(trend_window, rsi_window) + 1)
+
+
+class _BarArrays:
+    """OHLCV arrays for a list of bars, extracted only when a rule asks for them."""
+
+    def __init__(self, bars: Sequence[Any]) -> None:
+        self._bars = bars
+        self._cache: dict[str, np.ndarray] = {}
+
+    def _get(self, field: str) -> np.ndarray:
+        if field not in self._cache:
+            self._cache[field] = series(self._bars, field)
+        return self._cache[field]
+
+    close = property(lambda self: self._get("close"))
+    high = property(lambda self: self._get("high"))
+    low = property(lambda self: self._get("low"))
+    volume = property(lambda self: self._get("volume"))
+
+
+def _latched_strategy(rules: Any, *, warmup: int) -> StrategyFn:
+    """Build a StrategyFn from entry/exit `rules`, with a matching vectorized `signal_series`.
+
+    `rules(bars)` returns (long_entry, long_exit, short_entry, short_exit)
+    boolean arrays (the short pair may be None). The per-bar function is what
+    the runtime calls; `signal_series(bars)` gives the same signal for every
+    bar in one pass, which is what makes backtests on years of 4h bars fast.
+    Both use the same rules, and every indicator is causal, so they agree.
+    """
+
+    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
+        """Hold the position implied by the most recent unexited entry."""
+        if len(history) < warmup:
+            return 0
+        return latch_position(*rules(_BarArrays(history)))
+
+    def signal_series(bars: Sequence[Any]) -> np.ndarray:
+        signals = latch_series(*rules(_BarArrays(bars)))
+        signals[: max(0, warmup - 1)] = 0
+        return signals
+
+    strategy.signal_series = signal_series  # type: ignore[attr-defined]
     return strategy
+
+
+def latch_series(
+    long_entry: np.ndarray,
+    long_exit: np.ndarray,
+    short_entry: np.ndarray | None = None,
+    short_exit: np.ndarray | None = None,
+) -> np.ndarray:
+    """`latch_position` evaluated at every bar at once: element t equals latch_position on the first t+1 bars."""
+    positions = np.arange(len(long_entry))
+
+    def last_true(mask: np.ndarray) -> np.ndarray:
+        return np.maximum.accumulate(np.where(mask, positions, -1))
+
+    has_short_side = short_entry is not None and short_exit is not None
+    last_long_entry = last_true(long_entry)
+    effective_long_exit = long_exit | short_entry if has_short_side else long_exit
+    is_long = (last_long_entry >= 0) & (last_long_entry > last_true(effective_long_exit))
+    if not has_short_side:
+        return is_long.astype(int)
+    last_short_entry = last_true(short_entry)
+    is_short = (last_short_entry >= 0) & (last_short_entry > last_true(short_exit | long_entry))
+    return np.where(is_long, 1, np.where(is_short, -1, 0))
 
 
 def latch_position(
@@ -455,6 +532,9 @@ def make_long_only(strategy_fn: StrategyFn) -> StrategyFn:
         signal = _normalize_signal(strategy_fn(history, index, current_bar))
         return signal if signal > 0 else 0
 
+    inner_series = getattr(strategy_fn, "signal_series", None)
+    if callable(inner_series):
+        strategy.signal_series = lambda bars: np.maximum(np.asarray(inner_series(bars)), 0)  # type: ignore[attr-defined]
     return strategy
 
 
@@ -481,4 +561,37 @@ def make_regime_gated(
             return 0
         return strategy_fn(history, index, current_bar)
 
+    inner_series = getattr(strategy_fn, "signal_series", None)
+    if callable(inner_series):
+
+        def signal_series(bars: Sequence[Any]) -> np.ndarray:
+            trending = _efficiency_ratio_series(series(bars, "close"), regime_window) >= trending_threshold
+            in_regime = trending if required_regime == "trending" else ~trending
+            return np.where(in_regime, np.asarray(inner_series(bars)), 0)
+
+        strategy.signal_series = signal_series  # type: ignore[attr-defined]
     return strategy
+
+
+def _threshold_momentum_series(bars: Sequence[Any], lookback: int, threshold: float) -> np.ndarray:
+    close = series(bars, "close")
+    baseline = shift(close, lookback)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return_pct = (close - baseline) / baseline
+    valid = baseline > 0
+    signals = np.where(valid & (return_pct > threshold), 1, np.where(valid & (return_pct < -threshold), -1, 0))
+    signals[:lookback] = 0
+    return signals
+
+
+def _efficiency_ratio_series(close: np.ndarray, window: int) -> np.ndarray:
+    """`classify_regime`'s efficiency ratio at every bar, over the last `window` closes (fewer at the start)."""
+    moves = np.concatenate([[0.0], np.cumsum(np.abs(np.diff(close)))])
+    positions = np.arange(len(close))
+    start = np.maximum(0, positions - window + 1)
+    path = moves - moves[start]
+    net = np.abs(close - close[start])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(path > 0.0, net / path, 0.0)
+    ratio[:1] = 0.0
+    return ratio

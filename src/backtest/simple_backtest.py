@@ -108,10 +108,16 @@ class SimpleBacktester:
         bars_held = 0
         reentry_block: str | None = None
 
+        # Strategies that can compute every bar's signal in one causal pass skip the per-bar calls, and without a
+        # risk manager nothing else needs the growing history list, so long backtests stay linear in the bar count.
+        signal_series = getattr(self.strategy, "signal_series", None)
+        precomputed = list(signal_series(bars)) if callable(signal_series) else None
+        needs_history = precomputed is None or self.risk_manager is not None
+
         for index in range(1, len(bars)):
-            history = list(bars[: index + 1])
+            history = list(bars[: index + 1]) if needs_history else []
             current_bar = bars[index]
-            signal_value = self.strategy(history, index, current_bar)
+            signal_value = precomputed[index] if precomputed is not None else self.strategy(history, index, current_bar)
             signal, reentry_block, _blocked = gate_reentry(_normalize_signal(signal_value), reentry_block)
             close_price = _get_close(current_bar)
             timestamp = _get_timestamp(current_bar)
