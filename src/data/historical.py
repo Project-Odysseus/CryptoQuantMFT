@@ -186,6 +186,60 @@ def load_or_fetch_kraken_history(
     return bars
 
 
+def load_ohlcv_csv(
+    path: str | Path,
+    *,
+    symbol: str,
+    interval_seconds: int,
+    exchange: str = "kraken",
+) -> list[OHLCVBar]:
+    """Load bars from a CSV of ``timestamp, open, high, low, close, volume[, trades]`` rows.
+
+    The public OHLC API only returns the most recent ~720 candles, so this
+    is the way to research on years of history: Kraken publishes full
+    downloadable OHLCVT files per pair and interval (no header row, unix
+    second timestamps), which this reads as-is. A file with a header row
+    naming those columns (timestamp may also be called time/date, as unix
+    seconds or ISO strings) works too. Extra columns are ignored.
+    """
+    import pandas as pd
+
+    frame = pd.read_csv(path, header=None)
+    try:
+        float(frame.iloc[0, 0])
+        frame = frame.iloc[:, :6]
+        frame.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    except ValueError:
+        frame = pd.read_csv(path)
+        frame.columns = [str(column).strip().lower() for column in frame.columns]
+        timestamp_column = next((name for name in ("timestamp", "time", "date") if name in frame.columns), None)
+        if timestamp_column is None:
+            raise ValueError(f"{path}: no timestamp/time/date column in header {list(frame.columns)}")
+        frame = frame.rename(columns={timestamp_column: "timestamp"})[["timestamp", "open", "high", "low", "close", "volume"]]
+
+    if pd.api.types.is_numeric_dtype(frame["timestamp"]):
+        timestamps = pd.to_datetime(frame["timestamp"], unit="s", utc=True)
+    else:
+        timestamps = pd.to_datetime(frame["timestamp"], utc=True)
+
+    bars = [
+        OHLCVBar(
+            exchange=exchange,
+            symbol=symbol,
+            interval_seconds=interval_seconds,
+            timestamp=timestamp.to_pydatetime(),
+            open=float(row.open),
+            high=float(row.high),
+            low=float(row.low),
+            close=float(row.close),
+            volume=float(row.volume),
+        )
+        for timestamp, row in zip(timestamps, frame.itertuples(index=False))
+    ]
+    bars.sort(key=lambda bar: bar.timestamp)
+    return bars
+
+
 def _request_json(method: str, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
     if params:
         query = urllib.parse.urlencode(params)

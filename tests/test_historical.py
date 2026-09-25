@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.data.historical import _normalize_pair_code, fetch_kraken_ohlcv, fetch_kraken_ohlcv_history, load_or_fetch_kraken_history
+from src.data.historical import _normalize_pair_code, fetch_kraken_ohlcv, fetch_kraken_ohlcv_history, load_ohlcv_csv, load_or_fetch_kraken_history
 from src.storage.bar_aggregator import OHLCVBar
 
 
@@ -161,3 +161,28 @@ def test_load_or_fetch_kraken_history_refetches_when_cache_is_too_shallow(tmp_pa
     # trigger a fresh fetch, not silently return the shallow cached data.
     load_or_fetch_kraken_history(symbol="BTC/EUR", interval_seconds=3600, lookback_days=90, cache_dir=tmp_path)
     assert call_count["n"] == 2
+
+
+def test_load_ohlcv_csv_reads_headerless_kraken_ohlcvt_files(tmp_path: Path) -> None:
+    """Kraken's downloadable OHLCVT files have no header: timestamp, o, h, l, c, volume, trades."""
+    path = tmp_path / "XBTEUR_240.csv"
+    path.write_text("1700014400,101,103,100,102,5.5,40\n1700000000,100,102,99,101,4.0,30\n")
+
+    bars = load_ohlcv_csv(path, symbol="BTC/EUR", interval_seconds=14400)
+
+    assert [bar.close for bar in bars] == [101.0, 102.0]  # sorted oldest first
+    assert bars[0].timestamp == datetime.fromtimestamp(1700000000, tz=timezone.utc)
+    assert bars[1].volume == 5.5
+    assert bars[0].interval_seconds == 14400
+
+
+def test_load_ohlcv_csv_accepts_a_header_row_with_iso_dates(tmp_path: Path) -> None:
+    """A CSV with named columns and ISO timestamps should load the same way."""
+    path = tmp_path / "bars.csv"
+    path.write_text("Date,Open,High,Low,Close,Volume\n2024-01-01T00:00:00Z,100,102,99,101,4\n")
+
+    bars = load_ohlcv_csv(path, symbol="ETH/EUR", interval_seconds=86400)
+
+    assert len(bars) == 1
+    assert bars[0].timestamp == datetime(2024, 1, 1, tzinfo=timezone.utc)
+    assert bars[0].high == 102.0
