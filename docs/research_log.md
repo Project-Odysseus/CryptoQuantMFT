@@ -5,6 +5,62 @@ Dated findings from strategy research, newest first. Methodology and column mean
 
 ---
 
+## 2026-09-26: Full history on BTC and ETH perpetuals, 2020-02-26 to 2026-09-25
+
+**Data:** Kraken Futures trade candles for the inverse perpetuals `PI_XBTUSD` / `PI_ETHUSD` (the longest
+single-contract history Kraken has; closes within a median 0.05% / 0.09% of the linear `PF_` contracts), 2,403 daily
+and 14,420 4h bars each, no gaps. Load with `load_bars("BTC/USD", "1d", source="perp")` or `--source perp`.
+The series starts two weeks before the 12 March 2020 crash, so 4h and short-window strategies trade through its
+tail while long-window daily ones are still warming up. Costs: perp fees (0.05% + 5 bps per fill) and funding
+0.01%/day; Kraken only publishes the last year of funding, so 0.05%/day (roughly 2021 bull-market levels) was run
+as a stress test. Full size, no leverage, no stops.
+
+**Sweep** (`research.py sweep --source perp --symbols BTC/USD ETH/USD --intervals 1d 4h --venue perp`; in-sample
+2020-06 to 2024-10, holdout 2024-10 to 2026-09; median Sharpe across combos, BTC/ETH averaged):
+
+- **Daily trend-following is robust across every setting.** `moving_average_crossover`, `donchian_breakout` and
+  `keltner_breakout` are positive in-sample for 100% of combos, long/short and long-only. Median in-sample / holdout
+  Sharpe: long-only MA 1.07 / 0.79, Keltner 1.03 / 0.62, Donchian 0.98 / 0.46; long/short MA 0.74 / 0.71, Donchian
+  0.72 / 0.72, Keltner 0.60 / 0.71. Buy-and-hold: 1.02 / 0.52. So daily trend roughly matched holding in the
+  2020-2024 period and beat it in the choppier 2024-2026 holdout.
+- **Mean reversion fails over the full history**, even at perp costs: `band_reversion` and `rsi_reversion` are
+  negative for almost every combo long/short, and around 0.2 long-only. The positive 4h result in the entry below
+  came from one 3-month rally.
+- **4h trend is weaker than daily**: in-sample medians 0.2-0.44 long/short and 0.8-0.94 long-only, but holdout
+  roughly flat, below buy-and-hold's 0.48.
+
+**Year by year** (mid-plateau parameters, not the best cells; funding 0.01%/day; per-strategy start after warmup,
+April 2020 for daily, March 2020 for 4h). CAGR / Sharpe / max drawdown vs buy-and-hold over the same dates:
+
+| | BTC | ETH |
+| --- | --- | --- |
+| Buy and hold (daily, from 15 Apr 2020) | 48% / 0.97 / 77% | 56% / 0.96 / 79% |
+| `keltner_breakout(40, 2)` 1d long-only | 40% / 1.12 / **39%** | 53% / 1.10 / **42%** |
+| `moving_average_crossover(4, 48)` 1d long-only | 53% / 1.21 / 61% | 62% / 1.12 / 61% |
+| `donchian_breakout(40, 10)` 1d long-only | 31% / 0.91 / 40% | 33% / 0.82 / 54% |
+| `keltner_breakout(40, 2)` 1d long/short | 31% / 0.82 / 57% | 52% / 0.98 / 70% |
+| `moving_average_crossover(8, 96)` 4h long-only | 42% / 1.08 / 51% | 42% / 0.92 / 54% |
+
+- **The 2022 bear market is where trend earns its keep.** Buy-and-hold lost 64% (BTC) and 67% (ETH). Long-only
+  Keltner lost 32% / 21%, long/short Keltner 23% / 9%, and long/short `trend_tstat` made +15% / +52%.
+- **The cost is lagging in strong bulls.** From 7 April to the end of 2020 buy-and-hold made +303% / +348% against
+  +239% / +195% for long-only Keltner, and in 2023-24 BTC buy-and-hold beat most rules.
+- **2025-2026 was choppy.** Buy-and-hold was -6% / -11% in 2025, and most trend rules were near flat, with ETH
+  long/short MA crossover (+127%) and Keltner (+100%) the exceptions.
+- **Long-only beats long/short on BTC** in every row and on ETH in most (`trend_tstat` is the exception). Shorts pay
+  off in 2022 and cost in bull years.
+- **Costs are small here**: daily rules trade 4-12 times a year. The 0.05%/day funding stress cut long-only CAGR by
+  7-12 points (longs pay funding) and long/short by 0-5 (shorts receive it); everything stayed positive.
+- **Drawdowns are still large at full size** (39-78%). Position sizing, not a better signal, is what would make
+  these tradable with real money.
+
+**Caveats.** The strategy families were picked from earlier research on 2025-26 data and the parameters here are
+plateau centres chosen on this same history, so this is a robustness check, not a clean out-of-sample test. BTC
+and ETH move together, so two coins are not two independent confirmations. 2020-21 dominates the compounding.
+Funding is a flat assumption before 2025. The inverse-contract prices stand in for the linear contracts.
+
+---
+
 ## 2026-09-25 (latest): Perp assumptions checked against Kraken Futures' public data
 
 Checked with `python main.py --futures-venue-check --futures-symbol BTC/USD` (public endpoints, no credentials):

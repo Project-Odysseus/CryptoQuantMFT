@@ -200,6 +200,10 @@ re-tested by accident.
 
 ## Getting more history
 
+For BTC/USD and ETH/USD perpetuals, `--source perp` (or `load_bars(symbol, interval, source="perp")`) loads Kraken
+Futures trade candles from 2020-02-26 to now, cached in `data/historical_cache/`, at any of 1m, 5m, 15m, 30m,
+1h, 4h, 12h, 1d. That is the easiest route to multi-year history.
+
 Kraken's public OHLC endpoint returns only the most recent 720 candles per pair and interval: 30 days at 1h,
 120 days at 4h, about 2 years at 1d. `since` does not unlock older data. For multi-year history, download Kraken's
 published OHLCVT CSV files (full history per pair and interval, on Kraken's support site under downloadable
