@@ -527,13 +527,30 @@ class PaperTradingEngine:
         open_orders = [
             order for order in adapter_orders if getattr(order, "status", None) not in {"FILLED", "CANCELED", "REJECTED", "NOT_FOUND"}
         ]
-        cash, position_size, avg_entry_price, fees_paid = self._current_account_state(price=price, symbol=symbol)
+        cash, position_size, avg_entry_price, fees_paid, position_opened_at = self._current_account_state(price=price, symbol=symbol)
         current_equity = cash + (position_size * price if position_size else 0.0)
 
         bar_day = timestamp.date() if hasattr(timestamp, "date") else None
         if bar_day is not None and bar_day != self._exchange_current_day:
             self._exchange_current_day = bar_day
             self._exchange_day_start_equity = current_equity
+
+        forced_exit_reason: str | None = None
+        if position_size != 0.0 and self.risk_manager is not None:
+            bars_held = 0
+            if position_opened_at is not None:
+                bars_held = sum(
+                    1 for candidate_bar in bars if (candidate_timestamp := _get_timestamp(candidate_bar)) is not None and candidate_timestamp >= position_opened_at
+                )
+            exit_decision = self.risk_manager.evaluate_exit(
+                bars=list(bars),
+                current_bar=bar,
+                position_side="long" if position_size > 0.0 else "short",
+                avg_entry_price=avg_entry_price,
+                bars_held=bars_held,
+            )
+            if exit_decision.force_exit:
+                forced_exit_reason = exit_decision.reason
 
         if open_orders:
             self._record_entry_decision(
@@ -549,12 +566,22 @@ class PaperTradingEngine:
                 position_size=position_size,
                 equity=current_equity,
             )
+        elif forced_exit_reason is not None:
+            exit_side = "sell" if position_size > 0.0 else "buy"
+            exit_order = self._create_order(timestamp=timestamp, side=exit_side, size=abs(position_size), bar=bar)
+            exit_order.last_reason = forced_exit_reason
+            cycle_orders.append(exit_order)
+            self._log_order_event(
+                order=exit_order,
+                timestamp=timestamp,
+                event_type="order_lifecycle",
+                message="position force-closed by risk control",
+                reason=forced_exit_reason,
+            )
+            maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)
+            if maybe_trade is not None:
+                trades.append(maybe_trade)
         elif position_size > 0.0 and signal < 0.0:
-            # NOTE: exit here is signal-driven only. RiskManager.evaluate_exit
-            # (time_stop / atr_stop_loss) is intentionally not wired into this
-            # exchange-backed cycle path yet: it needs how-long-has-this-been-
-            # open state that isn't persisted anywhere the account tracker
-            # exposes today. See todo_important.md before adding it blind.
             exit_order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar)
             cycle_orders.append(exit_order)
             maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)
@@ -621,7 +648,7 @@ class PaperTradingEngine:
                 equity=current_equity,
             )
 
-        cash, position_size, avg_entry_price, fees_paid = self._current_account_state(price=price, symbol=symbol)
+        cash, position_size, avg_entry_price, fees_paid, _position_opened_at = self._current_account_state(price=price, symbol=symbol)
         portfolio_snapshot = self._build_exchange_portfolio_snapshot(
             timestamp=timestamp,
             price=price,
@@ -957,20 +984,30 @@ class PaperTradingEngine:
             cost=cost,
         )
 
-    def _current_account_state(self, *, price: float, symbol: str | None) -> tuple[float, float, float | None, float]:
+    def _current_account_state(self, *, price: float, symbol: str | None) -> tuple[float, float, float | None, float, datetime | None]:
         account_snapshot = getattr(self.execution_adapter, "get_account_snapshot", lambda: {})() or {}
         balances = account_snapshot.get("balances", {}) or {}
         positions = account_snapshot.get("positions", {}) or {}
+        entry_prices = account_snapshot.get("position_entry_price", {}) or {}
+        opened_at_map = account_snapshot.get("position_opened_at", {}) or {}
         base_currency = getattr(self.execution_adapter, "_base_currency", None) or _get_quote_asset(symbol) or "USD"
         position_symbol = _get_position_asset(symbol)
         cash = float(balances.get(base_currency, 0.0))
         position_size = float(positions.get(position_symbol, 0.0)) if position_symbol is not None else 0.0
-        avg_entry_price = price if position_size > 0.0 else None
+        position_opened_at: datetime | None = None
+        if position_size > 0.0 and position_symbol is not None:
+            # Fall back to the current price/None when the adapter doesn't track
+            # real entry state (e.g. a test stub), rather than fabricating a
+            # value that would silently defeat the ATR-stop/time-stop checks.
+            avg_entry_price = entry_prices.get(position_symbol, price)
+            position_opened_at = opened_at_map.get(position_symbol)
+        else:
+            avg_entry_price = None
         fees_paid = 0.0
         adapter_orders = list(getattr(self.execution_adapter, "list_orders", lambda: [])() or [])
         for existing_order in adapter_orders:
             fees_paid += float(getattr(existing_order, "fee", 0.0) or 0.0)
-        return cash, position_size, avg_entry_price, fees_paid
+        return cash, position_size, avg_entry_price, fees_paid, position_opened_at
 
     def _build_exchange_portfolio_snapshot(
         self,

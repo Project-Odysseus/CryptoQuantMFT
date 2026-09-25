@@ -326,6 +326,67 @@ def test_exchange_cycle_closes_existing_long_on_sell_signal() -> None:
     assert result.portfolio_history[-1].position_size == 0.0
 
 
+def test_exchange_cycle_force_closes_position_on_time_stop_without_exit_signal() -> None:
+    """Exchange-backed cycles should force-close a stale position using the adapter's real entry state, even with no exit signal."""
+    from src.execution.adapters import SandboxExecutionAdapter
+
+    class FakeTradeLogger:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        def log_event(self, **kwargs: object) -> int:
+            self.events.append(kwargs)
+            return 1
+
+        def log_trade(self, **_: object) -> tuple[int, None]:
+            return 1, None
+
+        def log_equity_snapshot(self, **_: object) -> int:
+            return 1
+
+    logger = FakeTradeLogger()
+    adapter = SandboxExecutionAdapter(exchange_name="kraken")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._base_currency = "EUR"
+    adapter.submit_order(
+        order_id="opening-buy",
+        side="buy",
+        size=0.01,
+        price=68000.0,
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        symbol="BTC/EUR",
+    )
+
+    bars = [
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, index, tzinfo=timezone.utc),
+            open=68000.0,
+            high=68000.0,
+            low=68000.0,
+            close=68000.0,
+            volume=10.0,
+        )
+        for index in range(3)
+    ]
+    signals = [0.0, 0.0, 0.0]
+
+    risk_manager = RiskManager(RiskControlConfig(time_stop_bars=2))
+    engine = PaperTradingEngine(execution_adapter=adapter, exchange_name="kraken", risk_manager=risk_manager, trade_logger=logger)
+
+    result = engine.run_exchange_cycle(bars, signals)
+
+    sell_orders = [order for order in result.orders if order.side == "sell"]
+    assert sell_orders
+    assert len(result.trades) == 1
+    assert result.portfolio_history[-1].position_size == 0.0
+    force_close_events = [event for event in logger.events if event.get("message") == "position force-closed by risk control"]
+    assert force_close_events
+    assert force_close_events[0]["metadata"]["reason"] == "time_stop"
+
+
 def test_paper_trading_engine_sizes_buy_orders_to_risk_budget() -> None:
     """Buy orders should respect a portfolio risk budget based on current equity."""
     bars = [

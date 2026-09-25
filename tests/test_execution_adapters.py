@@ -207,6 +207,51 @@ def test_sandbox_adapter_tracks_positions_from_order_symbol() -> None:
     assert "BTC" not in snapshot["positions"]
 
 
+def test_adapter_tracks_real_entry_price_and_open_timestamp_across_fills() -> None:
+    """The base adapter should track a weighted-average entry price and open time, and clear them when flat again."""
+    adapter = SandboxExecutionAdapter(exchange_name="kraken")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._base_currency = "EUR"
+
+    adapter.submit_order(
+        order_id="btc-buy-1",
+        side="buy",
+        size=1.0,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+    snapshot_after_open = adapter.get_account_snapshot()
+    assert snapshot_after_open["position_opened_at"]["BTC"] == datetime(2024, 1, 1, 12, 0, 0)
+    assert snapshot_after_open["position_entry_price"]["BTC"] == 100.0
+
+    # Adding to the position should move the entry price but not the open time.
+    adapter.submit_order(
+        order_id="btc-buy-2",
+        side="buy",
+        size=1.0,
+        price=200.0,
+        timestamp=datetime(2024, 1, 1, 12, 5, 0),
+        symbol="BTC/EUR",
+    )
+    snapshot_after_add = adapter.get_account_snapshot()
+    assert snapshot_after_add["position_opened_at"]["BTC"] == datetime(2024, 1, 1, 12, 0, 0)
+    assert snapshot_after_add["position_entry_price"]["BTC"] == 150.0
+
+    # Fully closing the position should clear both.
+    adapter.submit_order(
+        order_id="btc-sell-1",
+        side="sell",
+        size=2.0,
+        price=250.0,
+        timestamp=datetime(2024, 1, 1, 12, 10, 0),
+        symbol="BTC/EUR",
+    )
+    snapshot_after_close = adapter.get_account_snapshot()
+    assert "BTC" not in snapshot_after_close["position_opened_at"]
+    assert "BTC" not in snapshot_after_close["position_entry_price"]
+
+
 def test_execution_router_builds_exchange_specific_adapter() -> None:
     """Test test execution router builds exchange specific adapter."""
     router = ExecutionRouter(mode="live", exchange="kraken")

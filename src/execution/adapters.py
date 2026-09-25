@@ -64,6 +64,12 @@ class ExecutionAdapter:
         self._remote_balances: dict[str, float] = {}
         self._remote_positions: dict[str, float] = {}
         self._account_reconciliation: dict[str, Any] = {}
+        # Tracks when each open position was first established and its real
+        # (weighted-average) entry price, so exchange-backed cycles can run
+        # time-stop / ATR-stop exit checks against real state instead of a
+        # placeholder. Keyed by position asset symbol (e.g. "BTC").
+        self._position_opened_at: dict[str, datetime] = {}
+        self._position_entry_price: dict[str, float] = {}
 
     def _coerce_float(self, value: Any) -> float | None:
         """Convert a value to a float when possible."""
@@ -160,6 +166,8 @@ class ExecutionAdapter:
             "remote_balances": dict(self._remote_balances),
             "remote_positions": dict(self._remote_positions),
             "account_reconciliation": dict(self._account_reconciliation),
+            "position_opened_at": dict(self._position_opened_at),
+            "position_entry_price": dict(self._position_entry_price),
         }
 
     def reconcile_account_state(
@@ -323,7 +331,17 @@ class ExecutionAdapter:
             price = float(fill_price or order.price or 0.0)
             fee_delta = max(0.0, (fee or 0.0) - previous_fee)
             self._balances[base_currency] = self._balances.get(base_currency, 0.0) - (fill_delta * price) - fee_delta
-            self._positions[position_symbol] = self._positions.get(position_symbol, 0.0) + fill_delta
+            previous_position_size = self._positions.get(position_symbol, 0.0)
+            new_position_size = previous_position_size + fill_delta
+            self._positions[position_symbol] = new_position_size
+            if previous_position_size <= 0.0:
+                self._position_opened_at[position_symbol] = order.timestamp
+                self._position_entry_price[position_symbol] = price
+            else:
+                previous_entry_price = self._position_entry_price.get(position_symbol, price)
+                self._position_entry_price[position_symbol] = (
+                    previous_entry_price * previous_position_size + price * fill_delta
+                ) / new_position_size
         elif order.side == "sell":
             fill_delta = filled_size - previous_fill_size
             if fill_delta <= 0.0:
@@ -334,6 +352,8 @@ class ExecutionAdapter:
             self._positions[position_symbol] = max(0.0, self._positions.get(position_symbol, 0.0) - fill_delta)
             if self._positions[position_symbol] == 0.0:
                 self._positions.pop(position_symbol, None)
+                self._position_opened_at.pop(position_symbol, None)
+                self._position_entry_price.pop(position_symbol, None)
 
     def _position_symbol(self, symbol: str | None) -> str:
         if not symbol:
