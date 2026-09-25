@@ -119,4 +119,42 @@ async def test_kraken_connector_parses_market_snapshot(monkeypatch: pytest.Monke
     assert snapshot.bid == pytest.approx(100.00)
     assert snapshot.ask == pytest.approx(100.50)
     assert snapshot.last == pytest.approx(100.25)
-    assert snapshot.volume == pytest.approx(4.56)
+    # First poll has no prior baseline to diff against, so it reports 0
+    # rather than the full since-midnight total ("v"[0] = 1.23).
+    assert snapshot.volume == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_kraken_connector_reports_incremental_volume_across_polls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KrakenConnector should report the delta in Kraken's cumulative today-volume counter, not the raw 24h rollup."""
+    cumulative_today_by_call = ["1.23", "1.50", "0.10"]
+
+    def fake_request_json(self: KrakenConnector, method: str, url: str, **_: object) -> dict[str, object]:
+        if "Ticker" not in url:
+            return {"error": [], "result": {"unixtime": 0}}
+        return {
+            "error": [],
+            "result": {
+                "XXBTZEUR": {
+                    "a": ["100.50", "1", "1.000"],
+                    "b": ["100.00", "1", "1.000"],
+                    "c": ["100.25", "0.01"],
+                    "v": [cumulative_today_by_call.pop(0), "999.0"],
+                }
+            },
+        }
+
+    monkeypatch.setattr(KrakenConnector, "_request_json", fake_request_json)
+    connector = KrakenConnector(symbol="BTC/EUR", api_key="test-key", api_secret="test-secret")
+    await connector.connect()
+
+    first = await connector.fetch_snapshot()
+    second = await connector.fetch_snapshot()
+    third = await connector.fetch_snapshot()
+
+    assert first.volume == pytest.approx(0.0)
+    assert second.volume == pytest.approx(0.27)  # 1.50 - 1.23
+    # Third call's cumulative total (0.10) is lower than the second call's
+    # (1.50): Kraken's UTC-midnight reset happened between polls, so the
+    # new total itself is the volume accumulated since that reset.
+    assert third.volume == pytest.approx(0.10)

@@ -262,6 +262,12 @@ class KrakenConnector(ExchangeConnector):
         super().__init__(name="kraken", symbol=symbol, store=store, aggregator=aggregator)
         self.api_key = api_key or settings.kraken_api_key
         self.api_secret = api_secret or settings.kraken_secret
+        # Kraken's ticker "v" field is [volume_today, volume_last_24h] — both
+        # are slow-moving cumulative totals, not a per-poll trade volume. We
+        # track volume_today across polls and report the delta, so downstream
+        # bars/signals see real incremental traded volume instead of a
+        # near-constant 24h rollup summed nonsensically across ticks.
+        self._last_cumulative_volume_today: float | None = None
 
     async def connect(self) -> None:
         """Connect the component to its backing source."""
@@ -301,7 +307,19 @@ class KrakenConnector(ExchangeConnector):
         ask = float(market.get("a", [0, 0, 0])[0])
         bid = float(market.get("b", [0, 0, 0])[0])
         last = float(market.get("c", [0, 0, 0])[0])
-        volume = float(market.get("v", [0, 0])[1])
+        cumulative_volume_today = float(market.get("v", [0, 0])[0])
+        if self._last_cumulative_volume_today is None:
+            # No baseline yet — report 0 rather than the full since-midnight
+            # total, which would look like a huge spike on the first tick.
+            incremental_volume = 0.0
+        elif cumulative_volume_today < self._last_cumulative_volume_today:
+            # Kraken's "today" counter reset at UTC midnight between polls;
+            # the counter's new value is exactly the volume accumulated
+            # since that reset.
+            incremental_volume = cumulative_volume_today
+        else:
+            incremental_volume = cumulative_volume_today - self._last_cumulative_volume_today
+        self._last_cumulative_volume_today = cumulative_volume_today
         tick = MarketTick(
             exchange=self.name,
             symbol=self.symbol,
@@ -309,8 +327,8 @@ class KrakenConnector(ExchangeConnector):
             bid=bid,
             ask=ask,
             last=last,
-            volume=volume,
-            raw={"source": "kraken", "market": market},
+            volume=incremental_volume,
+            raw={"source": "kraken", "market": market, "volume_today": cumulative_volume_today, "volume_24h": float(market.get("v", [0, 0])[1])},
         )
         self._persist_tick(tick)
         self._update_aggregator(tick)

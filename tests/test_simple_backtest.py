@@ -6,7 +6,86 @@ from datetime import datetime, timezone
 
 from src.backtest import SimpleBacktester, moving_average_crossover_strategy
 from src.backtest.costs import CostModel
+from src.backtest.simple_backtest import volume_confirmed_momentum_strategy
 from src.storage.bar_aggregator import OHLCVBar
+
+
+def _bar(*, close: float, volume: float, index: int) -> OHLCVBar:
+    return OHLCVBar(
+        exchange="mock",
+        symbol="BTC/EUR",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, index, tzinfo=timezone.utc),
+        open=close,
+        high=close,
+        low=close,
+        close=close,
+        volume=volume,
+    )
+
+
+def test_volume_confirmed_momentum_strategy_signals_long_on_confirmed_breakout() -> None:
+    """A price breakout accompanied by a volume spike should signal long."""
+    history = [
+        _bar(close=100.0, volume=1.0, index=0),
+        _bar(close=100.0, volume=1.0, index=1),
+        _bar(close=100.0, volume=1.0, index=2),
+        _bar(close=100.0, volume=10.0, index=3),
+        _bar(close=100.5, volume=10.0, index=4),
+        _bar(close=101.0, volume=10.0, index=5),
+        _bar(close=102.0, volume=20.0, index=6),
+    ]
+    strategy = volume_confirmed_momentum_strategy(lookback=3, threshold=0.01, volume_window=3, volume_multiplier=1.5)
+
+    signal = strategy(history, len(history) - 1, history[-1])
+
+    assert signal == 1
+
+
+def test_volume_confirmed_momentum_strategy_blocks_breakout_without_volume() -> None:
+    """The same price breakout without a volume spike should not signal."""
+    history = [
+        _bar(close=100.0, volume=1.0, index=0),
+        _bar(close=100.0, volume=1.0, index=1),
+        _bar(close=100.0, volume=1.0, index=2),
+        _bar(close=100.0, volume=10.0, index=3),
+        _bar(close=100.5, volume=10.0, index=4),
+        _bar(close=101.0, volume=10.0, index=5),
+        _bar(close=102.0, volume=10.0, index=6),
+    ]
+    strategy = volume_confirmed_momentum_strategy(lookback=3, threshold=0.01, volume_window=3, volume_multiplier=1.5)
+
+    signal = strategy(history, len(history) - 1, history[-1])
+
+    assert signal == 0
+
+
+def test_volume_confirmed_momentum_strategy_signals_short_on_confirmed_drop() -> None:
+    """A confirmed downward breakout should signal short."""
+    history = [
+        _bar(close=100.0, volume=1.0, index=0),
+        _bar(close=100.0, volume=1.0, index=1),
+        _bar(close=100.0, volume=1.0, index=2),
+        _bar(close=100.0, volume=10.0, index=3),
+        _bar(close=99.5, volume=10.0, index=4),
+        _bar(close=99.0, volume=10.0, index=5),
+        _bar(close=98.0, volume=20.0, index=6),
+    ]
+    strategy = volume_confirmed_momentum_strategy(lookback=3, threshold=0.01, volume_window=3, volume_multiplier=1.5)
+
+    signal = strategy(history, len(history) - 1, history[-1])
+
+    assert signal == -1
+
+
+def test_volume_confirmed_momentum_strategy_requires_enough_history() -> None:
+    """With too little history, the strategy should stay flat rather than error."""
+    history = [_bar(close=100.0, volume=1.0, index=0), _bar(close=101.0, volume=1.0, index=1)]
+    strategy = volume_confirmed_momentum_strategy(lookback=3, threshold=0.01, volume_window=3, volume_multiplier=1.5)
+
+    signal = strategy(history, len(history) - 1, history[-1])
+
+    assert signal == 0
 
 
 def test_simple_backtester_runs_on_ohlcv_bars() -> None:

@@ -59,3 +59,11 @@ def test_strategy_registry_can_resolve_runtime_style_strategy() -> None:
     strategy = resolve_strategy("momentum_breakout", registry=registry, lookback=3, threshold=0.02)
 
     assert callable(strategy)
+
+
+def test_strategy_registry_can_resolve_volume_confirmed_momentum_strategy() -> None:
+    """The strategy registry should provide the volume-confirmed momentum strategy entry."""
+    registry = StrategyRegistry()
+    strategy = resolve_strategy("volume_confirmed_momentum", registry=registry, lookback=5, volume_multiplier=2.0)
+
+    assert callable(strategy)

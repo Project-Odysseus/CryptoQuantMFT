@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
-from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, momentum_breakout_strategy, moving_average_crossover_strategy, signal_trend_strategy
+from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, momentum_breakout_strategy, moving_average_crossover_strategy, signal_trend_strategy, volume_confirmed_momentum_strategy
 from src.risk.controls import RiskControlConfig, RiskManager
 
 
@@ -50,6 +50,7 @@ class StrategyRegistry:
             "moving_average_crossover": moving_average_crossover_strategy,
             "momentum_breakout": momentum_breakout_strategy,
             "signal_trend": signal_trend_strategy,
+            "volume_confirmed_momentum": volume_confirmed_momentum_strategy,
         }
 
     def register(self, name: str, strategy: Any) -> None:
