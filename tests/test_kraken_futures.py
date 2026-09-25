@@ -108,3 +108,40 @@ def test_funding_summary_statistics() -> None:
     assert summary["min_pct_per_day"] == pytest.approx(-0.00001 * 24 * 100)
     with pytest.raises(ValueError):
         summarize_funding([])
+
+
+def test_perp_history_pages_forward_and_caches(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Long history is fetched in 2000-candle pages, the open candle dropped, and later calls only top up."""
+    from datetime import timedelta
+
+    from src.data.kraken_futures import load_or_fetch_perp_history
+
+    day = 86400
+    start = datetime(2020, 2, 26, tzinfo=timezone.utc)
+    now = start + timedelta(days=4500)
+    calls: list[tuple[int, int]] = []
+
+    def fake(method, url, params=None):
+        calls.append((params["from"], params["to"]))
+        first = (params["from"] + day - 1) // day * day
+        return {"candles": [{"time": ts * 1000, "open": "1", "high": "2", "low": "0.5", "close": "1.5", "volume": "10"} for ts in range(first, params["to"] + 1, day)]}
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(kraken_futures, "_request_json", fake)
+    monkeypatch.setattr(kraken_futures, "datetime", FrozenDatetime)
+    bars = load_or_fetch_perp_history("BTC/USD", interval_seconds=day, start=start, cache_dir=str(tmp_path))
+
+    assert len(calls) == 3  # 4500 days in pages of 2000
+    assert bars[0].timestamp == start and bars[-1].timestamp == now - timedelta(days=1)  # today's candle is still open
+    assert all((b.timestamp - a.timestamp).days == 1 for a, b in zip(bars, bars[1:]))
+    assert (tmp_path / "kraken_futures_PI_XBTUSD_86400s.parquet").exists()
+
+    calls.clear()
+    assert len(load_or_fetch_perp_history("BTC/USD", interval_seconds=day, start=start, cache_dir=str(tmp_path))) == len(bars)
+    assert len(calls) <= 1  # cache reused, at most a small top-up
+    with pytest.raises(ValueError, match="no long perpetual history"):
+        load_or_fetch_perp_history("SOL/USD", interval_seconds=day, start=start, cache_dir=str(tmp_path))

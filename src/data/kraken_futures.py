@@ -172,3 +172,88 @@ def fetch_candles(
         )
         for candle in completed[-count:]
     ]
+
+
+# Longest single-contract price history per coin. Kraken's inverse perpetuals (PI_) have trade candles from
+# 2020-02-26; the linear PF_ contracts only start in 2022. Their daily closes differ by a median of 0.05% (BTC) and
+# 0.09% (ETH), so the PI_ series stands in for the perpetual price when researching the longer history.
+HISTORY_VENUE_SYMBOLS: dict[str, str] = {"BTC/USD": "PI_XBTUSD", "ETH/USD": "PI_ETHUSD"}
+
+
+def fetch_perp_history(
+    venue_symbol: str,
+    *,
+    interval_seconds: int,
+    start: datetime,
+    end: datetime | None = None,
+    symbol: str | None = None,
+    tick_type: str = "trade",
+) -> list[Any]:
+    """All completed candles between `start` and `end` (default now), oldest first, paging 2000 at a time.
+
+    Trade candles carry volume (for inverse `PI_` contracts it is in USD
+    contracts, consistent through time). The still-open candle is dropped.
+    """
+    from datetime import timezone
+
+    from src.storage.bar_aggregator import OHLCVBar
+
+    if interval_seconds not in CANDLE_RESOLUTIONS:
+        raise ValueError(f"Kraken Futures has no {interval_seconds}s candles; use one of {sorted(CANDLE_RESOLUTIONS)}")
+    resolution = CANDLE_RESOLUTIONS[interval_seconds]
+    end_ts = int((end or datetime.now(timezone.utc)).timestamp())
+    cursor = int(start.timestamp())
+    collected: dict[int, dict[str, Any]] = {}
+    while cursor < end_ts:
+        page_end = min(end_ts, cursor + interval_seconds * 2000)
+        payload = _request_json("GET", f"{CHARTS_BASE}/{tick_type}/{venue_symbol}/{resolution}", params={"from": cursor, "to": page_end})
+        candles = payload.get("candles", []) if isinstance(payload, dict) else []
+        for candle in candles:
+            collected[int(candle["time"])] = candle
+        cursor = page_end
+    completed = sorted((c for t, c in collected.items() if t // 1000 + interval_seconds <= end_ts), key=lambda c: int(c["time"]))
+    return [
+        OHLCVBar(
+            exchange="kraken_futures",
+            symbol=symbol or venue_symbol,
+            interval_seconds=interval_seconds,
+            timestamp=datetime.fromtimestamp(int(c["time"]) // 1000, tz=timezone.utc),
+            open=float(c["open"]),
+            high=float(c["high"]),
+            low=float(c["low"]),
+            close=float(c["close"]),
+            volume=float(c.get("volume") or 0.0),
+        )
+        for c in completed
+    ]
+
+
+def load_or_fetch_perp_history(symbol: str, *, interval_seconds: int, start: datetime, cache_dir: str = "data/historical_cache", refresh: bool = False) -> list[Any]:
+    """`fetch_perp_history` for a runtime symbol (BTC/USD, ETH/USD), cached as parquet and topped up incrementally."""
+    from datetime import timedelta, timezone
+    from pathlib import Path
+
+    import pandas as pd
+
+    from src.storage.bar_aggregator import OHLCVBar
+
+    if symbol.upper() not in HISTORY_VENUE_SYMBOLS:
+        raise ValueError(f"no long perpetual history is mapped for {symbol!r}; known: {sorted(HISTORY_VENUE_SYMBOLS)}")
+    venue_symbol = HISTORY_VENUE_SYMBOLS[symbol.upper()]
+    path = Path(cache_dir) / f"kraken_futures_{venue_symbol}_{interval_seconds}s.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    bars: list[Any] = []
+    if path.exists() and not refresh:
+        frame = pd.read_parquet(path)
+        bars = [
+            OHLCVBar(exchange="kraken_futures", symbol=symbol, interval_seconds=interval_seconds, timestamp=row.timestamp.to_pydatetime(), open=row.open, high=row.high, low=row.low, close=row.close, volume=row.volume)
+            for row in frame.itertuples()
+        ]
+        if not bars or bars[0].timestamp > start + timedelta(seconds=interval_seconds):
+            bars = []
+    fetch_from = bars[-1].timestamp + timedelta(seconds=interval_seconds) if bars else start
+    if fetch_from + timedelta(seconds=interval_seconds) <= datetime.now(timezone.utc):
+        bars = bars + [bar for bar in fetch_perp_history(venue_symbol, interval_seconds=interval_seconds, start=fetch_from, symbol=symbol) if not bars or bar.timestamp > bars[-1].timestamp]
+        pd.DataFrame({key: [getattr(bar, key) for bar in bars] for key in ("timestamp", "open", "high", "low", "close", "volume")}).to_parquet(path, index=False)
+    return [bar for bar in bars if bar.timestamp >= start]

@@ -86,7 +86,7 @@ def _cmd_backtest(args: argparse.Namespace) -> None:
     params = _parse_assignments(args.param)
     if args.long_only:
         params["long_only"] = True
-    bars = load_bars(args.symbol, args.interval, lookback_days=args.lookback_days, refresh=args.refresh, csv_path=_csv_paths(args.csv).get(args.symbol))
+    bars = load_bars(args.symbol, args.interval, lookback_days=args.lookback_days, refresh=args.refresh, csv_path=_csv_paths(args.csv).get(args.symbol), source=args.source)
     run = run_strategy(bars, args.strategy, params=params, costs=_costs(args), holdout_fraction=args.holdout_fraction)
 
     print(f"\n{args.strategy} {params or '(defaults)'} on {args.symbol} {args.interval}, costs {_costs(args).round_trip_pct:.2f}% per round trip")
@@ -203,7 +203,7 @@ def _load_symbols(args: argparse.Namespace, interval: str) -> dict[str, list[Any
     csv_paths = _csv_paths(args.csv)
     data = {}
     for symbol in args.symbols:
-        bars = load_bars(symbol, interval, lookback_days=args.lookback_days, refresh=args.refresh, csv_path=csv_paths.get(symbol))
+        bars = load_bars(symbol, interval, lookback_days=args.lookback_days, refresh=args.refresh, csv_path=csv_paths.get(symbol), source=args.source)
         print(f"  {symbol} {interval}: {len(bars)} bars, {bars[0].timestamp:%Y-%m-%d} -> {bars[-1].timestamp:%Y-%m-%d}")
         data[symbol] = bars
     return data
@@ -220,7 +220,8 @@ def _common_start(data: dict[str, list[Any]], jobs: list[tuple[str, dict[str, An
 def _add_data_arguments(parser: argparse.ArgumentParser, *, multiple_symbols: bool) -> None:
     if multiple_symbols:
         parser.add_argument("--symbols", nargs="+", default=DEFAULT_SYMBOLS)
-    parser.add_argument("--lookback-days", type=int, default=None, help="Default: all Kraken gives (720 candles)")
+    parser.add_argument("--source", choices=["spot", "perp"], default="spot", help="spot = Kraken spot OHLC (last 720 candles); perp = Kraken Futures perpetual trade candles from 2020-02-26 (BTC/USD, ETH/USD)")
+    parser.add_argument("--lookback-days", type=int, default=None, help="Default: all history the source has")
     parser.add_argument("--refresh", action="store_true", help="Re-download instead of using data/historical_cache")
     parser.add_argument("--csv", action="append", default=[], metavar="SYMBOL=PATH", help="Use a downloaded OHLCV CSV for a symbol (repeatable)")
     parser.add_argument("--out", default=None, help="Output directory (default data/research/<command>_<timestamp>)")

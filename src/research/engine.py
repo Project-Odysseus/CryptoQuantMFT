@@ -22,7 +22,7 @@ import json
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +133,8 @@ def load_bars(
     lookback_days: int | None = None,
     refresh: bool = False,
     csv_path: str | Path | None = None,
+    source: str = "spot",
+    start: datetime | None = None,
 ) -> list[Any]:
     """Load bars for one symbol, from a CSV if given, otherwise from Kraken (cached locally).
 
@@ -142,6 +144,16 @@ def load_bars(
     CSV files and pass `csv_path`.
     """
     interval_seconds = parse_interval(interval)
+    if source == "perp":
+        # Kraken Futures perpetual trade candles, 2020-02-26 onwards for BTC/USD and ETH/USD (see HISTORY_VENUE_SYMBOLS).
+        from src.data.kraken_futures import load_or_fetch_perp_history
+
+        first = start or datetime(2020, 2, 26, tzinfo=timezone.utc)
+        if lookback_days is not None:
+            first = max(first, datetime.now(timezone.utc) - timedelta(days=lookback_days))
+        return load_or_fetch_perp_history(symbol, interval_seconds=interval_seconds, start=first, refresh=refresh)
+    if source != "spot":
+        raise ValueError("source must be 'spot' or 'perp'")
     if csv_path is not None:
         bars = load_ohlcv_csv(csv_path, symbol=symbol, interval_seconds=interval_seconds)
         if lookback_days is not None:
