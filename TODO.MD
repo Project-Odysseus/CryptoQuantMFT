@@ -110,20 +110,20 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] add preview-only manual close-position flow for Kraken spot holdings
   - [x] add guarded manual close submission with explicit live confirmations
   - [x] add a concise holdings/account-state CLI surface for balances, open orders, positions, and recent manual/live actions (2026-09-25: `--account-summary`, see `todo_important.md`)
-  - [ ] validate partial-fill and open-order behavior with real Kraken order states instead of immediate-fill assumptions
-  - [ ] complete one tiny real Kraken round-trip and compare:
+  - [ ] validate partial-fill and open-order behavior with real Kraken order states instead of immediate-fill assumptions (2026-09-25: async *full*-fill reconciliation now validated and fixed live, see `todo_important.md`; genuine partial fills still unexercised)
+  - [x] complete one tiny real Kraken round-trip and compare (2026-09-25, strategy-driven this time, not just manual — see `todo_important.md` for the full incident/fix record):
     - [x] manual preview output vs actual submitted size (true by construction — `submit_quote_order`/`submit_close_position` submit the exact `rounded_size` their own preview computed)
-    - [ ] remote Kraken order ids vs locally persisted order ids — not actually cross-checked against Kraken's own reported history yet
+    - [x] remote Kraken order ids vs locally persisted order ids (cross-checked directly against `fetch_closed_orders()` while correcting the tax ledger — remote order ids and fills matched local trade rows exactly once corrected)
     - [x] post-trade balances and positions vs reconciliation snapshot
-    - [ ] trade logger rows vs Kraken history — not actually cross-checked against `fetch_closed_orders()` yet
+    - [x] trade logger rows vs Kraken history (cross-checked and corrected 2026-09-25 — found and fixed a real gap where reconciled fills logged `fee=0.0` instead of the real fee; see `todo_important.md`)
     - [x] tax-ledger rows vs actual fill and fee data (backfilled and verified 2026-09-25, see `todo_important.md`)
 
 - [ ] **Priority 3C: Immediate next live-system milestones**
-  - [x] prove one real Kraken round-trip end to end before any broader live rollout (2026-09-18, see `todo_important.md`; the exchange-history cross-check above is still open)
+  - [x] prove one real Kraken round-trip end to end before any broader live rollout (2026-09-18 manual, 2026-09-25 strategy-driven — see `todo_important.md`)
   - [x] add a single-command holdings / portfolio / open-orders operator summary (2026-09-25: `--account-summary`)
   - [x] apply manual-order safety and exchange-rule enforcement consistently to strategy-driven live orders (2026-09-25: Kraken order-size/precision/balance parity, see `todo_important.md`)
-  - [ ] harden real-order lifecycle handling for open orders, partial fills, delayed fills, and cancel/replace decisions
-  - [ ] keep the first live rollout limited to long/flat spot trading until these checks pass
+  - [ ] harden real-order lifecycle handling for open orders, partial fills, delayed fills, and cancel/replace decisions (2026-09-25: open-order/delayed-fill handling fixed and validated live for full fills; partial fills and cancel/replace still open, see `todo_important.md`)
+  - [x] keep the first live rollout limited to long/flat spot trading until these checks pass (still enforced: `allow_short=False` unconditionally for `--runtime live`)
 
 - [ ] **Priority 4: Strategy Runtime Reliability**
   - [x] Treat paper mode as the source-of-truth validation lane before any live promotion
