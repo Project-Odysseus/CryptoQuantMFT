@@ -11,6 +11,7 @@ from main import build_runtime_orchestrator
 from config import settings
 from src.data.exchanges import MockExchangeConnector
 from src.data.pipeline import MarketDataPipeline
+from src.execution.adapters import KrakenExecutionAdapter
 from src.execution.paper_trading import PortfolioSnapshot
 from src.runtime.config import RuntimeConfig
 from src.runtime.orchestrator import RuntimeCycleResult, RuntimeOrchestrator
@@ -516,6 +517,12 @@ async def test_runtime_orchestrator_live_mode_uses_exchange_cycle_without_fake_f
 ) -> None:
     """Live mode should keep staged exchange orders open instead of treating them as canceled fake fills."""
     monkeypatch.setattr(settings, "database_path", tmp_path / "runtime.db")
+
+    def fake_fetch_balance_snapshot(self: KrakenExecutionAdapter) -> dict[str, object]:
+        return {"balances": {"EUR": 1000.0}, "positions": {}}
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "fetch_balance_snapshot", fake_fetch_balance_snapshot)
+
     runtime_config = RuntimeConfig(
         mode="live",
         exchange="kraken",
@@ -538,3 +545,67 @@ async def test_runtime_orchestrator_live_mode_uses_exchange_cycle_without_fake_f
     assert latest_order.status == "SUBMITTED"
     assert latest_order.execution_status == "SUBMITTED"
     assert "not configured" in (latest_order.execution_message or "").lower()
+
+
+def test_build_runtime_orchestrator_live_mode_seeds_equity_from_real_balance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--runtime live must use the real fetched balance as its equity reference, not a hardcoded default."""
+    monkeypatch.setattr(settings, "database_path", tmp_path / "runtime.db")
+
+    def fake_fetch_balance_snapshot(self: KrakenExecutionAdapter) -> dict[str, object]:
+        return {"balances": {"EUR": 14.14}, "positions": {}}
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "fetch_balance_snapshot", fake_fetch_balance_snapshot)
+
+    runtime_config = RuntimeConfig(
+        mode="live",
+        exchange="kraken",
+        use_mock_connector=True,
+        trading_symbol="BTC/EUR",
+        state_path=tmp_path / "runtime.state.json",
+    )
+    orchestrator, _pipeline = build_runtime_orchestrator(config=runtime_config, mode="live")
+
+    assert orchestrator.execution_engine.initial_cash == 14.14
+    assert orchestrator.execution_engine.execution_adapter._balances.get("EUR") == 14.14
+
+
+def test_build_runtime_orchestrator_live_mode_refuses_to_start_when_balance_fetch_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed real-balance fetch must refuse to start live trading rather than fall back to a fake default."""
+    monkeypatch.setattr(settings, "database_path", tmp_path / "runtime.db")
+
+    def fake_fetch_balance_snapshot(self: KrakenExecutionAdapter) -> dict[str, object]:
+        raise RuntimeError("Kraken API unavailable")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "fetch_balance_snapshot", fake_fetch_balance_snapshot)
+
+    runtime_config = RuntimeConfig(
+        mode="live",
+        exchange="kraken",
+        use_mock_connector=True,
+        trading_symbol="BTC/EUR",
+        state_path=tmp_path / "runtime.state.json",
+    )
+
+    with pytest.raises(SystemExit):
+        build_runtime_orchestrator(config=runtime_config, mode="live")
+
+
+def test_build_runtime_orchestrator_live_mode_refuses_to_start_with_zero_balance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real but empty balance must refuse to start live trading rather than proceed with nothing to trade."""
+    monkeypatch.setattr(settings, "database_path", tmp_path / "runtime.db")
+
+    def fake_fetch_balance_snapshot(self: KrakenExecutionAdapter) -> dict[str, object]:
+        return {"balances": {"EUR": 0.0}, "positions": {}}
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "fetch_balance_snapshot", fake_fetch_balance_snapshot)
+
+    runtime_config = RuntimeConfig(
+        mode="live",
+        exchange="kraken",
+        use_mock_connector=True,
+        trading_symbol="BTC/EUR",
+        state_path=tmp_path / "runtime.state.json",
+    )
+
+    with pytest.raises(SystemExit):
+        build_runtime_orchestrator(config=runtime_config, mode="live")

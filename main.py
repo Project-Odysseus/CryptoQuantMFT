@@ -131,8 +131,35 @@ def build_runtime_orchestrator(
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
     execution_router = ExecutionRouter(mode=runtime_config.mode, exchange=effective_exchange)
+
+    # --runtime live starts a brand-new adapter with no local balance/position
+    # state. Without this, equity/cash would silently read as 0 (or whatever
+    # the adapter's constructor default is) and get compared against a
+    # hardcoded 1000.0 "peak equity" reference that has nothing to do with
+    # the real account - producing a fake ~100% drawdown that blocks every
+    # entry. Fail closed rather than guess: if the real balance can't be
+    # fetched and reconciled, refuse to start live trading at all.
+    initial_cash = 1000.0
+    if runtime_config.mode == "live" and execution_router.adapter is not None:
+        fetch_balance_snapshot = getattr(execution_router.adapter, "fetch_balance_snapshot", None)
+        if not callable(fetch_balance_snapshot):
+            raise SystemExit("refusing to start --runtime live: execution adapter cannot fetch a real account balance")
+        try:
+            balance_snapshot = fetch_balance_snapshot()
+        except Exception as exc:
+            raise SystemExit(f"refusing to start --runtime live: could not fetch real Kraken balance to initialize equity ({exc})")
+        execution_router.adapter.reconcile_account_state(
+            balances=balance_snapshot.get("balances"),
+            positions=balance_snapshot.get("positions"),
+        )
+        base_currency = getattr(execution_router.adapter, "_base_currency", "EUR")
+        initial_cash = float((balance_snapshot.get("balances") or {}).get(base_currency, 0.0))
+        if initial_cash <= 0.0:
+            raise SystemExit(f"refusing to start --runtime live: fetched {base_currency} balance is {initial_cash}, nothing to trade with")
+        logger.info("runtime_live_balance_initialized base_currency={} initial_cash={}", base_currency, initial_cash)
+
     engine = PaperTradingEngine(
-        initial_cash=1000.0,
+        initial_cash=initial_cash,
         default_order_size=1.0,
         partial_fill_fraction=1.0,
         max_order_lifetime_bars=3,
