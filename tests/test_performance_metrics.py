@@ -59,7 +59,7 @@ def test_risk_manager_uses_fractional_kelly_sizing() -> None:
     ]
 
     manager = RiskManager(
-        RiskControlConfig(max_volatility_pct=0.5, risk_per_trade_pct=0.02, max_position_size=1.0, kelly_fraction=1.0)
+        RiskControlConfig(max_volatility_pct=0.5, risk_per_trade_pct=0.02, max_position_size=1.0, kelly_fraction=1.0, kelly_sizing=True)
     )
     decision = manager.evaluate(bars=bars, equity=100.0, peak_equity=100.0)
 

@@ -94,6 +94,7 @@ async def test_runtime_seeds_history_signals_at_once_but_only_trades_on_a_new_ba
     closed = await orchestrator.run_once()
     assert [decision["side"] for decision in closed.execution_result.entry_decisions] == ["buy"]
     assert len(closed.bars) == 31
+    assert orchestrator.execution_engine.execution_adapter.position_size() > 0.0  # and the entry was actually sized
 
 
 def test_seed_history_drops_other_symbols_and_overlap() -> None:

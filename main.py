@@ -147,7 +147,7 @@ def build_runtime_orchestrator(
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
-    perp_adapter = _build_perp_adapter(mode=runtime_config.mode, symbol=trading_symbol, max_leverage=perp_max_leverage, reset_sandbox=perp_sandbox_reset) if is_perp else None
+    perp_adapter = _build_perp_adapter(mode=runtime_config.mode, symbol=trading_symbol, max_leverage=perp_max_leverage, reset_sandbox=perp_sandbox_reset, mock_prices=runtime_config.use_mock_connector) if is_perp else None
     execution_router = ExecutionRouter(mode=runtime_config.mode, exchange=effective_exchange, adapter=perp_adapter)
 
     # --runtime live starts a brand-new adapter with no local balance/position
@@ -244,7 +244,7 @@ def _load_warmup_bars(*, is_perp: bool, symbol: str, interval_seconds: int, coun
     return completed[-count:]
 
 
-def _build_perp_adapter(*, mode: str, symbol: str, max_leverage: float, reset_sandbox: bool = False) -> Any:
+def _build_perp_adapter(*, mode: str, symbol: str, max_leverage: float, reset_sandbox: bool = False, mock_prices: bool = False) -> Any:
     """The margin adapter for a perpetual run: sandbox for live_dry_run, the real Kraken Futures API for live.
 
     Live fails closed: it needs futures API credentials and a contract spec
@@ -273,7 +273,8 @@ def _build_perp_adapter(*, mode: str, symbol: str, max_leverage: float, reset_sa
     except Exception as exc:
         logger.warning("perp_contract_spec_unavailable symbol={} error={} using offline placeholder", symbol, exc)
         contract = assumed_perp_contract(symbol)
-    state_path = PERP_SANDBOX_STATE_DIR / f"perp_sandbox_{contract.venue_symbol}.json"
+    # Mock-connector runs trade on invented prices, so they keep their own account file.
+    state_path = PERP_SANDBOX_STATE_DIR / f"perp_sandbox_{contract.venue_symbol}{'_mock' if mock_prices else ''}.json"
     if reset_sandbox and state_path.exists():
         backup = state_path.with_name(f"{state_path.stem}.{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.bak.json")
         state_path.replace(backup)

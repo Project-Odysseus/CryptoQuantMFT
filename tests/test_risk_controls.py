@@ -686,3 +686,30 @@ def test_simple_backtester_respects_risk_manager() -> None:
 
     assert result.trades == 1
     assert result.final_equity < 100.0
+
+
+def test_allowed_entries_are_not_sized_to_zero_after_a_falling_stretch() -> None:
+    """Regression: the market-return Kelly multiplier returned 0 after mostly-down bars, so 'allowed' entries got size 0.
+
+    It was on by default and ignored trade direction; it is now opt-in via kelly_sizing.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from src.risk.controls import RiskControlConfig, RiskManager
+    from src.storage.bar_aggregator import OHLCVBar
+
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    closes = [100.0]
+    for i in range(1, 30):
+        closes.append(closes[-1] + (0.2 if i % 4 == 0 else -0.3))  # a few small up-bars, mostly bigger down-bars
+    falling = [
+        OHLCVBar(exchange="kraken", symbol="BTC/EUR", interval_seconds=14400, timestamp=start + timedelta(hours=4 * i), open=close, high=close + 0.5, low=close - 0.5, close=close, volume=1.0)
+        for i, close in enumerate(closes)
+    ]
+    kwargs = dict(bars=falling, equity=1000.0, peak_equity=1000.0, current_position=0.0, current_bar=falling[-1], bar_index=29, signal_side="buy")
+
+    default = RiskManager(RiskControlConfig(risk_per_trade_pct=0.10, max_volatility_pct=0.5, paper_mode=True)).evaluate(**kwargs)
+    assert default.allow_entry and default.position_size > 0.0
+
+    with_kelly = RiskManager(RiskControlConfig(risk_per_trade_pct=0.10, max_volatility_pct=0.5, paper_mode=True, kelly_sizing=True)).evaluate(**kwargs)
+    assert with_kelly.allow_entry and with_kelly.position_size == 0.0  # the old behaviour, still available on request

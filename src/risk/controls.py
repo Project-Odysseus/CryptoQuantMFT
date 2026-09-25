@@ -53,6 +53,10 @@ class RiskControlConfig:
     volatility_window: int = 10
     kelly_fraction: float = 0.5
     kelly_window: int = 20
+    # Off by default: the multiplier is estimated from the market's recent bar returns, not from the strategy's
+    # trades, so it returns 0 whenever recent bars fell more than they rose (about 40% of the time on BTC 4h bars)
+    # and it ignores trade direction. With it on, allowed entries were silently sized to zero.
+    kelly_sizing: bool = False
     max_slippage_pct: float = 0.03
     max_spread_pct: float = 0.03
     max_quote_age_seconds: int = 900
@@ -262,7 +266,7 @@ class RiskManager:
             return RiskDecision(allow_entry=True, position_size=max(0.0, min(self._resolve_position_limit(exchange_name=exchange_name), position_size)))
 
         base_position_size = min(self._resolve_position_limit(exchange_name=exchange_name), self.config.risk_per_trade_pct / volatility_pct)
-        kelly_multiplier = self._estimate_kelly_multiplier(bars)
+        kelly_multiplier = self._estimate_kelly_multiplier(bars) if self.config.kelly_sizing else 1.0
         position_size = base_position_size * kelly_multiplier
         position_size = self._apply_inventory_penalty(
             position_size=position_size,

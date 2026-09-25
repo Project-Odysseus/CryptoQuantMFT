@@ -138,3 +138,15 @@ def test_derivative_event_rejects_unknown_types(ledger: TradeLogger) -> None:
     """Only the three perp cash-flow types are accepted."""
     with pytest.raises(ValueError, match="unsupported"):
         ledger.log_derivative_event(timestamp=T0, venue_symbol="PF_XBTUSD", transaction_type="BUY", amount=1.0)
+
+
+def test_mock_price_runs_keep_a_separate_sandbox_account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A position opened on invented mock prices must not carry into a run on the real feed."""
+    import main
+
+    monkeypatch.setattr(main, "PERP_SANDBOX_STATE_DIR", tmp_path)
+    monkeypatch.setattr("src.data.kraken_futures.fetch_instrument", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
+    mock = main._build_perp_adapter(mode="live_dry_run", symbol="BTC/USD", max_leverage=2.0, mock_prices=True)
+    mock.submit_order(order_id="o1", side="buy", size=0.01, price=98000.0, timestamp=T0, symbol="BTC/USD")
+    real = main._build_perp_adapter(mode="live_dry_run", symbol="BTC/USD", max_leverage=2.0)
+    assert real.position_size() == 0.0 and not real.restored_from_state

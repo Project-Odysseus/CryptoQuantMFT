@@ -95,7 +95,8 @@ matching the contract.
 - **Dry-run account**: the sandbox saves itself to `data/perp_sandbox_<contract>.json` after every fill and
   market update and restores from it at startup, so a restarted dry run continues with the same wallet,
   position, entry price, open time and totals. `--perp-sandbox-reset` starts fresh and moves the old file aside
-  as a `.bak.json`.
+  as a `.bak.json`. Runs with `--use-mock-connector` use a separate `..._mock.json` account, since their prices are
+  invented.
 - **Live account**: nothing is stored locally; the adapter re-reads position and margin from Kraken at startup.
   The position's open time restarts at the restart (it matters for time stops), and orders still pending when
   the process died are not re-logged as trades, although the position itself is correct.
