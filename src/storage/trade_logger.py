@@ -554,6 +554,52 @@ class TradeLogger:
             connection.commit()
         return entry_id
 
+    def log_derivative_event(
+        self,
+        *,
+        timestamp: datetime,
+        venue_symbol: str,
+        transaction_type: str,
+        amount: float,
+        currency: str = "USD",
+        source: str = "runtime",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Record a perpetual-futures cash flow (realized PnL, fee or funding) in the tax ledger.
+
+        Uses the same ledger and transaction types as spot, so the yearly
+        summary includes it, but no spot FIFO lots are touched: the futures
+        wallet is separate from the spot EUR pool. `amount` is signed in the
+        settlement currency (gain / received positive, cost negative) and is
+        valued in NOK at Norges Bank's rate for that day; `amount_eur` holds
+        the EUR equivalent so existing reports keep working. This is
+        record-keeping, not a tax ruling: check how Skatteetaten treats
+        derivative gains before filing.
+        """
+        if transaction_type not in {"REALIZED_PNL", "TRADING_FEE", "FUNDING_FEE"}:
+            raise ValueError(f"unsupported derivative transaction type: {transaction_type}")
+        currency = currency.upper()
+        eur_nok = float(self.fx_rate_collector.get_rate("EUR/NOK", at=timestamp))
+        currency_nok = eur_nok if currency == "EUR" else float(self.fx_rate_collector.get_rate(f"{currency}/NOK", at=timestamp))
+        amount_nok = float(amount) * currency_nok
+        return self.log_tax_event(
+            timestamp=timestamp,
+            transaction_type=transaction_type,
+            symbol=venue_symbol,
+            amount_eur=amount_nok / eur_nok,
+            norges_bank_fx_rate=eur_nok,
+            amount_nok=amount_nok,
+            cost_basis_nok=0.0,
+            metadata={
+                "instrument": "perpetual",
+                "currency": currency,
+                "amount": float(amount),
+                "currency_nok_rate": currency_nok,
+                "source": source,
+                **(metadata or {}),
+            },
+        )
+
     def record_trade_tax_events(
         self,
         *,
@@ -760,6 +806,23 @@ class TradeLogger:
             "total_funding_fees_nok": float(funding_fees_nok),
             "tax_event_count": len(events),
             "wealth_tax_snapshot": wealth_snapshot,
+            "derivatives": self._derivative_totals(events),
+        }
+
+    def _derivative_totals(self, events: list[dict[str, Any]]) -> dict[str, float]:
+        """Perpetual-futures part of the year, in NOK (already included in the totals above)."""
+        derivative_events = [event for event in events if (event.get("metadata") or {}).get("instrument") == "perpetual"]
+
+        def total(kind: str, sign: float) -> float:
+            return float(sum(sign * event["amount_nok"] for event in derivative_events if event["transaction_type"] == kind and sign * event["amount_nok"] > 0.0))
+
+        return {
+            "event_count": float(len(derivative_events)),
+            "realized_gains_nok": total("REALIZED_PNL", 1.0),
+            "realized_losses_nok": total("REALIZED_PNL", -1.0),
+            "fees_nok": total("TRADING_FEE", -1.0),
+            "funding_paid_nok": total("FUNDING_FEE", -1.0),
+            "funding_received_nok": total("FUNDING_FEE", 1.0),
         }
 
     def export_tax_ledger(self, *, path: str | Path, tax_year: int | None = None, export_format: str | None = None) -> Path:

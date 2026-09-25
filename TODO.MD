@@ -156,7 +156,8 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [ ] Product availability for the account holder (Norway) is not in the public data: confirm with Kraken
   - [x] Real Kraken Futures execution adapter (signed REST, IOC market orders with unique cliOrdId, reduce-only closes, fill reconciliation via /fills, position/margin sync) behind the live gates: futures credentials, verified contract, <=3x leverage, kraken_futures risk limits, kill-switch cancel-all (2026-09-26). Tested against recorded response shapes only; `--futures-verify-credentials` is the first real check
   - [x] Futures market-data feed: `KrakenFuturesConnector` prices perp runs on the contract mark price (2026-09-26); also fixed the runtime dashboard computing perp equity as cash + notional
-  - [ ] Persisted perp account state and a tax treatment for derivative P&L
+  - [x] Persisted perp dry-run account (`data/perp_sandbox_<contract>.json`, `--perp-sandbox-reset`) and perp cash flows (realized PnL, fees, funding) in the tax ledger at Norges Bank USD/NOK for live runs (2026-09-26). Also fixed buying power ignoring the entry fee, which rejected max-size perp entries
+  - [ ] Capture live funding and actual fees from Kraken's account log (fills carry neither), and confirm the Norwegian tax treatment of derivative flows
   - [ ] Kill-switch flatten (close the open position), not just cancel
 - [ ] **Priority 5: Resolve the Incomplete Futures Track** (the older dated-futures scaffolding below is a different product from the perpetuals above)
   - [ ] Preferred sequencing: explicitly defer futures behind the spot/Kraken runtime unless there is a short-term need to trade futures first

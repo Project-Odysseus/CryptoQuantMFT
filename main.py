@@ -66,6 +66,7 @@ def build_runtime_orchestrator(
     exchange: str | None = None,
     risk_per_trade_pct: float | None = None,
     perp_max_leverage: float = 2.0,
+    perp_sandbox_reset: bool = False,
 ) -> tuple[RuntimeOrchestrator, MarketDataPipeline]:
     """Build the runtime orchestrator and its market-data pipeline for a run."""
     runtime_config = config or RuntimeConfig(
@@ -145,7 +146,7 @@ def build_runtime_orchestrator(
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
-    perp_adapter = _build_perp_adapter(mode=runtime_config.mode, symbol=trading_symbol, max_leverage=perp_max_leverage) if is_perp else None
+    perp_adapter = _build_perp_adapter(mode=runtime_config.mode, symbol=trading_symbol, max_leverage=perp_max_leverage, reset_sandbox=perp_sandbox_reset) if is_perp else None
     execution_router = ExecutionRouter(mode=runtime_config.mode, exchange=effective_exchange, adapter=perp_adapter)
 
     # --runtime live starts a brand-new adapter with no local balance/position
@@ -185,6 +186,7 @@ def build_runtime_orchestrator(
         exchange_name=PERP_EXCHANGE_NAME if is_perp else effective_exchange,
         # The tax ledger models spot FIFO lots only; derivative P&L is not written into it.
         enable_tax_logging=(runtime_config.mode == "live" and not is_perp),
+        record_derivative_ledger=(runtime_config.mode == "live" and is_perp),
         strategy_id=runtime_config.strategy_name,
         # PaperTradingEngine.run() (used by "paper") has always allowed
         # shorting unconditionally, regardless of this flag - it only gates
@@ -221,7 +223,7 @@ def build_runtime_orchestrator(
     return orchestrator, pipeline
 
 
-def _build_perp_adapter(*, mode: str, symbol: str, max_leverage: float) -> Any:
+def _build_perp_adapter(*, mode: str, symbol: str, max_leverage: float, reset_sandbox: bool = False) -> Any:
     """The margin adapter for a perpetual run: sandbox for live_dry_run, the real Kraken Futures API for live.
 
     Live fails closed: it needs futures API credentials and a contract spec
@@ -250,7 +252,15 @@ def _build_perp_adapter(*, mode: str, symbol: str, max_leverage: float) -> Any:
     except Exception as exc:
         logger.warning("perp_contract_spec_unavailable symbol={} error={} using offline placeholder", symbol, exc)
         contract = assumed_perp_contract(symbol)
-    return SandboxPerpExecutionAdapter(contract=contract, max_leverage=max_leverage)
+    state_path = Path("data") / f"perp_sandbox_{contract.venue_symbol}.json"
+    if reset_sandbox and state_path.exists():
+        backup = state_path.with_name(f"{state_path.stem}.{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.bak.json")
+        state_path.replace(backup)
+        logger.info("perp_sandbox_reset previous_state_moved_to={}", backup)
+    adapter = SandboxPerpExecutionAdapter(contract=contract, max_leverage=max_leverage, state_path=state_path)
+    if adapter.restored_from_state:
+        logger.info("perp_sandbox_restored path={} wallet={} position={}", state_path, adapter.wallet_balance(), adapter.position_size())
+    return adapter
 
 
 def _resolve_trading_symbol(*, exchange: str | None = None) -> str:
@@ -396,6 +406,7 @@ async def run_runtime_orchestrator(
     resume_runtime: bool = False,
     risk_per_trade_pct: float | None = None,
     perp_max_leverage: float = 2.0,
+    perp_sandbox_reset: bool = False,
 ) -> RuntimeOrchestrator | None:
     """Run the runtime orchestrator over a simple market-data pipeline."""
     runtime_config = config or RuntimeConfig(
@@ -420,6 +431,7 @@ async def run_runtime_orchestrator(
             exchange=runtime_config.exchange,
             risk_per_trade_pct=risk_per_trade_pct,
             perp_max_leverage=perp_max_leverage,
+            perp_sandbox_reset=perp_sandbox_reset and attempt == 0,
         )
         loop = asyncio.get_running_loop()
 
@@ -933,6 +945,20 @@ def print_tax_report(*, tax_year: int, export_path: str | None = None, export_fo
     print(f"Trading fees (NOK): {summary['total_trading_fees_nok']:.4f}")
     print(f"Funding fees (NOK): {summary['total_funding_fees_nok']:.4f}")
     print(f"Tax events: {summary['tax_event_count']}")
+    derivatives = summary.get("derivatives") or {}
+    if derivatives.get("event_count"):
+        print(
+            "Of which perpetual futures (NOK): gains {gains:.4f}, losses {losses:.4f}, fees {fees:.4f}, funding paid {paid:.4f}, funding received {received:.4f} ({count} events)".format(
+                gains=derivatives["realized_gains_nok"],
+                losses=derivatives["realized_losses_nok"],
+                fees=derivatives["fees_nok"],
+                paid=derivatives["funding_paid_nok"],
+                received=derivatives["funding_received_nok"],
+                count=int(derivatives["event_count"]),
+            )
+        )
+        print("  Perpetual rows are record-keeping, valued at Norges Bank USD/NOK. Funding received is not in the gross gains total above.")
+        print("  Confirm how Skatteetaten treats derivative gains, fees and funding before filing.")
 
     wealth_snapshot = summary.get("wealth_tax_snapshot")
     if wealth_snapshot is None:
@@ -1554,6 +1580,7 @@ def main() -> None:
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
     parser.add_argument("--risk-per-trade-pct", type=float, default=None, help="Override the fraction of equity risked per trade (default 0.10); needed for very small accounts to clear exchange minimum order sizes")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures trades perpetual futures: the in-process margin sandbox under live_dry_run, real Kraken Futures orders under live")
+    parser.add_argument("--perp-sandbox-reset", action="store_true", help="Start the perpetual-futures dry-run account fresh; the previous saved state (data/perp_sandbox_<contract>.json) is moved aside, not deleted")
     parser.add_argument("--perp-max-leverage", type=float, default=2.0, help="Leverage cap this runtime enforces on a perpetual-futures account (default 2; live refuses more than 3)")
     parser.add_argument("--enable-live-trading", action="store_true", help=f"Required explicit opt-in before --runtime live is allowed. Pair with --live-confirmation {LIVE_TRADING_CONFIRMATION}")
     parser.add_argument("--live-confirmation", default=None, help=f"Exact confirmation token required with --runtime live: {LIVE_TRADING_CONFIRMATION}")
@@ -1772,6 +1799,7 @@ def main() -> None:
                 resume_runtime=args.resume_runtime,
                 risk_per_trade_pct=args.risk_per_trade_pct,
                 perp_max_leverage=args.perp_max_leverage,
+                perp_sandbox_reset=args.perp_sandbox_reset,
             )
         )
         if args.dashboard:

@@ -14,6 +14,10 @@ from typing import Any
 from config import settings
 
 NORGES_BANK_EUR_NOK_URL = "https://data.norges-bank.no/api/data/EXR/B.EUR.NOK.SP"
+NORGES_BANK_SERIES_URLS = {
+    "EUR/NOK": NORGES_BANK_EUR_NOK_URL,
+    "USD/NOK": "https://data.norges-bank.no/api/data/EXR/B.USD.NOK.SP",
+}
 
 
 class FXRateCollector:
@@ -42,9 +46,14 @@ class FXRateCollector:
             connection.commit()
 
     def get_rate(self, pair: str = "EUR/NOK", at: date | datetime | str | None = None) -> float:
-        """Return the official daily FX rate for the requested date or prior business day."""
+        """Return the official daily FX rate for the requested date or prior business day.
+
+        EUR/NOK falls back to the configured `eur_nok_fallback` when Norges
+        Bank is unreachable. USD/NOK has no fallback: a tax figure built on a
+        guessed rate is worse than a visible failure, so it raises instead.
+        """
         normalized_pair = pair.upper()
-        if normalized_pair != "EUR/NOK":
+        if normalized_pair not in NORGES_BANK_SERIES_URLS:
             raise ValueError(f"Unsupported FX pair: {pair}")
 
         target_date = self._normalize_target_date(at)
@@ -64,13 +73,15 @@ class FXRateCollector:
             self._store_rate(normalized_pair, candidate_date, fetched_rate, source="norges_bank")
             return fetched_rate
 
+        if normalized_pair != "EUR/NOK":
+            raise LookupError(f"no Norges Bank {normalized_pair} rate found for {target_date} or the 7 days before")
         return float(settings.eur_nok_fallback)
 
     def _fetch_rate_for_date(self, pair: str, target_date: date) -> float | None:
-        if pair != "EUR/NOK":
+        if pair not in NORGES_BANK_SERIES_URLS:
             raise ValueError(f"Unsupported FX pair: {pair}")
         payload = self._request_json(
-            NORGES_BANK_EUR_NOK_URL,
+            NORGES_BANK_SERIES_URLS[pair],
             params={
                 "format": "sdmx-json",
                 "startPeriod": target_date.isoformat(),

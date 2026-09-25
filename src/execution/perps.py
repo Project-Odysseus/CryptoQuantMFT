@@ -22,8 +22,10 @@ any exchange; see `PerpContract.verified`.
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from datetime import datetime
 from typing import Any
 
@@ -235,9 +237,14 @@ class MarginAccountAdapter(ExecutionAdapter):
         return initial_margin(self.position_size(), mark, self.max_leverage)
 
     def buying_power(self, mark_price: float | None = None) -> float:
-        """Notional of new exposure the free margin can support at `max_leverage`."""
+        """Notional of new exposure the free margin can support at `max_leverage`, after the entry fee.
+
+        Solves ``notional / leverage + notional * fee_rate <= free margin``, so
+        an order sized to exactly this value passes `_validate_order` instead
+        of being rejected for the fee it pays.
+        """
         free_margin = self.equity(mark_price) - self.used_initial_margin(mark_price)
-        return max(0.0, free_margin) * self.max_leverage
+        return max(0.0, free_margin) * self.max_leverage / (1.0 + self.max_leverage * self.contract.taker_fee_rate)
 
     def liquidation_price(self) -> float | None:
         """Mark price at which the open position would be liquidated, or None when flat."""
@@ -374,6 +381,7 @@ class SandboxPerpExecutionAdapter(MarginAccountAdapter):
         max_leverage: float = 2.0,
         funding_pct_per_day: float = 0.01,
         exchange_name: str = "kraken_futures",
+        state_path: str | Path | None = None,
     ) -> None:
         """Create a margin account holding `starting_collateral` in the contract's collateral currency.
 
@@ -383,6 +391,10 @@ class SandboxPerpExecutionAdapter(MarginAccountAdapter):
             funding_pct_per_day: Percent of notional per day longs pay and
                 shorts receive (negative reverses it). 0.01 is close to the
                 measured one-year mean for BTC and ETH on Kraken Futures.
+            state_path: JSON file the account is saved to after every change
+                and restored from at startup, so a restarted dry run continues
+                with the same wallet and position instead of a fresh 1000.
+                `starting_collateral` only applies when the file doesn't exist.
         """
         super().__init__(contract=contract or assumed_perp_contract(), max_leverage=max_leverage, exchange_name=exchange_name)
         if starting_collateral < 0.0:
@@ -392,6 +404,57 @@ class SandboxPerpExecutionAdapter(MarginAccountAdapter):
         self._remote_balances = dict(self._balances)
         self._last_market_update: datetime | None = None
         self._liquidation_count = 0
+        self.state_path = Path(state_path) if state_path is not None else None
+        self.restored_from_state = self._load_state()
+
+    def save_state(self) -> None:
+        """Write the account to `state_path` (no-op without one). Written atomically via a temp file."""
+        if self.state_path is None:
+            return
+        key = self.position_symbol
+        opened_at = self._position_opened_at.get(key)
+        payload = {
+            "venue_symbol": self.contract.venue_symbol,
+            "collateral_currency": self._base_currency,
+            "wallet": self.wallet_balance(),
+            "position_size": self.position_size(),
+            "entry_price": self._position_entry_price.get(key),
+            "opened_at": opened_at.isoformat() if opened_at else None,
+            "mark_price": self._mark_price,
+            "last_market_update": self._last_market_update.isoformat() if self._last_market_update else None,
+            "funding_paid_total": self.funding_paid_total,
+            "realized_pnl_total": self.realized_pnl_total,
+            "fees_paid_total": self.fees_paid_total,
+            "liquidation_count": self._liquidation_count,
+        }
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        temporary.replace(self.state_path)
+
+    def _load_state(self) -> bool:
+        if self.state_path is None or not self.state_path.exists():
+            return False
+        payload = json.loads(self.state_path.read_text())
+        if payload.get("venue_symbol") != self.contract.venue_symbol:
+            raise ValueError(f"{self.state_path} holds a {payload.get('venue_symbol')} account, not {self.contract.venue_symbol}; move it aside or use another path")
+        key = self.position_symbol
+        self._balances[self._base_currency] = float(payload["wallet"])
+        size = float(payload.get("position_size") or 0.0)
+        if size:
+            self._positions[key] = size
+            self._position_entry_price[key] = float(payload["entry_price"])
+            if payload.get("opened_at"):
+                self._position_opened_at[key] = datetime.fromisoformat(payload["opened_at"])
+        self._mark_price = payload.get("mark_price")
+        if payload.get("last_market_update"):
+            self._last_market_update = datetime.fromisoformat(payload["last_market_update"])
+        self.funding_paid_total = float(payload.get("funding_paid_total", 0.0))
+        self.realized_pnl_total = float(payload.get("realized_pnl_total", 0.0))
+        self.fees_paid_total = float(payload.get("fees_paid_total", 0.0))
+        self._liquidation_count = int(payload.get("liquidation_count", 0))
+        self._remote_balances = dict(self._balances)
+        return True
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
         """Fill an order at `price` if it passes the contract, margin and leverage checks, else reject it."""
@@ -416,6 +479,7 @@ class SandboxPerpExecutionAdapter(MarginAccountAdapter):
         )
         self._orders[order_id] = order
         self._apply_fill_to_account_state(order=order, filled_size=rounded, fill_price=price, fee=fee, previous_fill_size=0.0, previous_fee=0.0)
+        self.save_state()
         return ExecutionReport(order_id=order_id, status="FILLED", fill_price=price, filled_size=rounded, fee=fee, message=order.message)
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
@@ -457,6 +521,7 @@ class SandboxPerpExecutionAdapter(MarginAccountAdapter):
             maintenance = maintenance_margin(size, mark_price, self.contract.maintenance_rate_at(abs(size) * mark_price))
             if self.equity(mark_price) <= maintenance:
                 events.append(self._liquidate(mark_price=mark_price, timestamp=timestamp, maintenance=maintenance))
+        self.save_state()
         return events
 
     def _liquidate(self, *, mark_price: float, timestamp: datetime, maintenance: float) -> dict[str, Any]:

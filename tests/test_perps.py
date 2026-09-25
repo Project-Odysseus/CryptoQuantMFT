@@ -328,3 +328,10 @@ def test_orchestrator_dashboard_reports_margin_equity_not_cash_plus_notional() -
 
     RuntimeOrchestrator._refresh_latest_snapshot_prices(fake_orchestrator, cycle)
     assert snapshot.equity == pytest.approx(adapter.wallet_balance() + size * 1000.0)
+
+
+def test_an_entry_sized_to_full_buying_power_is_not_rejected_for_its_fee() -> None:
+    """Regression: buying power ignored the entry fee, so a max-size entry failed the margin check."""
+    adapter = _adapter(collateral=1000.0, leverage=2.0)
+    size = adapter.round_size(adapter.buying_power(50000.0) / 50000.0)
+    assert _order(adapter, "max", "buy", size, 50000.0).status == "FILLED"

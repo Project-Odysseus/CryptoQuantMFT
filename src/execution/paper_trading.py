@@ -103,6 +103,7 @@ class PaperTradingEngine:
         enable_tax_logging: bool = False,
         strategy_id: str | None = None,
         allow_short: bool = False,
+        record_derivative_ledger: bool = False,
     ) -> None:
         """Initialize the object with its runtime state."""
         if initial_cash <= 0:
@@ -133,6 +134,9 @@ class PaperTradingEngine:
         # live_dry_run (always sandbox-simulated, never a real order) can
         # exercise short-side behavior for research/testing.
         self.allow_short = allow_short
+        # Perpetual futures: book realized PnL, fees and funding from a margin adapter into the tax ledger.
+        self.record_derivative_ledger = record_derivative_ledger
+        self._derivative_ledger_seen: dict[str, float] | None = None
         self._order_counter = 0
         # Instance-level so the daily-loss reference survives across cycles
         # within one running process (exchange-cycle mode has no other place
@@ -537,6 +541,7 @@ class PaperTradingEngine:
         entry_decisions: list[dict[str, Any]] = []
         trades: list[PaperTrade] = list(self._reconcile_exchange_fills(timestamp=timestamp))
         cycle_orders: list[PaperOrder] = []
+        self._capture_derivative_baseline()
         self._apply_market_update(symbol=symbol, price=price, timestamp=timestamp)
         adapter_orders = list(getattr(self.execution_adapter, "list_orders", lambda: [])() or [])
         open_orders = [
@@ -716,6 +721,7 @@ class PaperTradingEngine:
                     if maybe_trade is not None:
                         trades.append(maybe_trade)
 
+        self._record_derivative_ledger(timestamp=timestamp)
         cash, position_size, avg_entry_price, fees_paid, _position_opened_at = self._current_account_state(price=price, symbol=symbol)
         portfolio_snapshot = self._build_exchange_portfolio_snapshot(
             timestamp=timestamp,
@@ -1128,6 +1134,47 @@ class PaperTradingEngine:
                     strategy_id=self.strategy_id,
                 )
         return new_trades
+
+    def _derivative_totals(self) -> dict[str, float]:
+        adapter = self.execution_adapter
+        return {
+            "REALIZED_PNL": float(getattr(adapter, "realized_pnl_total", 0.0)),
+            "TRADING_FEE": float(getattr(adapter, "fees_paid_total", 0.0)),
+            "FUNDING_FEE": float(getattr(adapter, "funding_paid_total", 0.0)),
+        }
+
+    def _capture_derivative_baseline(self) -> None:
+        # The first cycle only sets the baseline, so totals restored from a saved sandbox state are not booked twice.
+        if self.record_derivative_ledger and self._is_margin_account() and self._derivative_ledger_seen is None:
+            self._derivative_ledger_seen = self._derivative_totals()
+
+    def _record_derivative_ledger(self, *, timestamp: datetime) -> None:
+        """Book realized PnL, fees and funding that the margin account accrued this cycle into the tax ledger."""
+        if not self.record_derivative_ledger or self.trade_logger is None or self._derivative_ledger_seen is None:
+            return
+        contract = getattr(self.execution_adapter, "contract", None)
+        venue_symbol = getattr(contract, "venue_symbol", None) or "perpetual"
+        currency = getattr(contract, "collateral_currency", None) or "USD"
+        current = self._derivative_totals()
+        for kind, total in current.items():
+            delta = total - self._derivative_ledger_seen[kind]
+            if abs(delta) < 1e-9:
+                continue
+            # Fees and funding totals count money paid out; the ledger stores cash flows (paid = negative).
+            amount = delta if kind == "REALIZED_PNL" else -delta
+            try:
+                self.trade_logger.log_derivative_event(timestamp=timestamp, venue_symbol=venue_symbol, transaction_type=kind, amount=amount, currency=currency, source=self.strategy_id or "runtime")
+            except Exception as exc:
+                self.trade_logger.log_event(
+                    timestamp=timestamp,
+                    level="ERROR",
+                    event_type="derivative_tax_event_failed",
+                    message="could not record a perpetual-futures cash flow in the tax ledger",
+                    source="paper_trading",
+                    metadata={"kind": kind, "amount": amount, "error": str(exc)},
+                )
+                continue
+            self._derivative_ledger_seen[kind] = total
 
     def _is_margin_account(self) -> bool:
         return bool(getattr(self.execution_adapter, "margin_account", False))

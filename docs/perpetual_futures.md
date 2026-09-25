@@ -86,13 +86,28 @@ Before a first live run: `python main.py --futures-verify-credentials --futures-
 The runtime symbol for perps is USD-quoted (`--trading-symbol BTC/USD`, the default when `kraken_futures` is used),
 matching the contract.
 
+## Restarts and tax records
+
+- **Dry-run account**: the sandbox saves itself to `data/perp_sandbox_<contract>.json` after every fill and
+  market update and restores from it at startup, so a restarted dry run continues with the same wallet,
+  position, entry price, open time and totals. `--perp-sandbox-reset` starts fresh and moves the old file aside
+  as a `.bak.json`.
+- **Live account**: nothing is stored locally; the adapter re-reads position and margin from Kraken at startup.
+  The position's open time restarts at the restart (it matters for time stops), and orders still pending when
+  the process died are not re-logged as trades, although the position itself is correct.
+- **Tax ledger** (`--runtime live` only): every cycle, realized PnL, fees and funding the margin account accrued
+  are written to the same `tax_ledger` as spot, as `REALIZED_PNL`, `TRADING_FEE` and `FUNDING_FEE` rows with
+  `metadata.instrument = "perpetual"`, valued in NOK at Norges Bank's USD/NOK rate for that day (with a EUR
+  equivalent in `amount_eur`). USD/NOK has no fallback rate: if Norges Bank is unreachable the row is not written
+  and a `derivative_tax_event_failed` event is logged. Spot FIFO lots are not touched. `--tax-report` prints a
+  perpetual-futures line; funding received is shown there but is not in the gross gains total.
+- Limits: with the real adapter, fees are estimated from the taker rate and **live funding is not captured**
+  (Kraken's fill data has neither). Reconcile a tax year against Kraken's own account-log export. How Norway taxes
+  these flows is not settled in this code: confirm with Skatteetaten or an accountant.
+
 ## Not built yet (roughly in order)
 
 1. **Availability**: whether Kraken Futures is open to the account holder in Norway is not in the public data.
-2. **Persistence**: the sandbox account state is in memory only (a restart resets it), and funding is not stored
-   per payment beyond the event log.
-3. **Tax**: `enable_tax_logging` is off for perps. The FIFO spot ledger does not model derivatives, and the
-   Norwegian treatment needs checking before real money.
-4. **Flatten on kill switch**: the kill switch cancels orders but does not close an open position.
-6. **Strategy timeframes**: the runtime builds bars from ticks (1s default) and has no history warmup, so the
+2. **Flatten on kill switch**: the kill switch cancels orders but does not close an open position.
+3. **Strategy timeframes**: the runtime builds bars from ticks (1s default) and has no history warmup, so the
    4h/daily strategies that research favours cannot run meaningfully yet (see `todo_important.md`).
