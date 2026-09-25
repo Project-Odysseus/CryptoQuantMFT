@@ -12,7 +12,7 @@ from typing import Any
 
 from config import settings
 from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, evaluate_walk_forward, resolve_strategy, run_backtest
-from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
+from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector, KrakenFuturesConnector
 from src.execution import ExecutionRouter, KrakenExecutionAdapter, PaperTradingEngine
 from src.execution.perps import SandboxPerpExecutionAdapter, assumed_perp_contract
 from src.risk.controls import DEFAULT_EXCHANGE_RISK_LIMITS, RiskControlConfig, RiskManager
@@ -90,6 +90,10 @@ def build_runtime_orchestrator(
 
     if runtime_config.use_mock_connector:
         pipeline.add_connector(MockExchangeConnector(symbol=trading_symbol))
+    elif is_perp:
+        # Perps are priced, margined and liquidated on the contract's mark price, so bars come from it too.
+        pipeline.add_connector(KrakenFuturesConnector(symbol=trading_symbol))
+        effective_exchange = PERP_EXCHANGE_NAME
     else:
         if requested_exchange == "kraken":
             pipeline.add_connector(KrakenConnector(symbol=trading_symbol))

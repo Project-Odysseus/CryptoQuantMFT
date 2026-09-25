@@ -342,3 +342,79 @@ class KrakenConnector(ExchangeConnector):
             "ETH/USD": "XETHZUSD",
         }
         return symbol_map.get(symbol, symbol.upper().replace("/", ""))
+
+
+class KrakenFuturesConnector(ExchangeConnector):
+    """Market data for a Kraken Futures perpetual from its public ticker.
+
+    `last` is set to the contract's **mark price**, because the exchange
+    marks positions, computes margin and liquidates on it, so bars, stops and
+    the liquidation buffer should see the same price. The contract's own
+    bid/ask are passed through, and the index and last trade price are kept
+    in `raw`. Kraken only publishes a rolling 24h volume, so `volume` is the
+    change in that rolling total between polls, floored at zero: a rough
+    proxy, not the true traded volume.
+    """
+
+    PUBLIC_TICKER_URL = "https://futures.kraken.com/derivatives/api/v3/tickers/{venue_symbol}"
+
+    def __init__(
+        self,
+        symbol: str = "BTC/USD",
+        store: "MarketStore | None" = None,
+        aggregator: "StreamingAggregator | None" = None,
+    ) -> None:
+        """Create a connector for the perpetual that `symbol` (e.g. BTC/USD) maps to."""
+        from src.data.kraken_futures import venue_symbol_for
+
+        super().__init__(name="kraken_futures", symbol=symbol, store=store, aggregator=aggregator)
+        self.venue_symbol = venue_symbol_for(symbol)
+        self._last_rolling_volume: float | None = None
+
+    async def connect(self) -> None:
+        """Check the ticker is reachable and the contract is not suspended."""
+        ticker = self._fetch_ticker()
+        if ticker.get("suspended"):
+            raise RuntimeError(f"Kraken Futures {self.venue_symbol} is suspended")
+        self._connected = True
+
+    async def disconnect(self) -> None:
+        """Disconnect the component from its backing source."""
+        self._connected = False
+
+    async def fetch_snapshot(self) -> MarketTick:
+        """Fetch the current mark price, book top and rolling volume."""
+        if not self._connected:
+            raise RuntimeError("connector is not connected")
+        ticker = self._fetch_ticker()
+        mark = float(ticker["markPrice"])
+        rolling_volume = float(ticker.get("vol24h") or 0.0)
+        volume = 0.0 if self._last_rolling_volume is None else max(0.0, rolling_volume - self._last_rolling_volume)
+        self._last_rolling_volume = rolling_volume
+        tick = MarketTick(
+            exchange=self.name,
+            symbol=self.symbol,
+            timestamp=datetime.now(timezone.utc),
+            bid=float(ticker.get("bid") or mark),
+            ask=float(ticker.get("ask") or mark),
+            last=mark,
+            volume=volume,
+            raw={
+                "source": "kraken_futures",
+                "venue_symbol": self.venue_symbol,
+                "mark_price": mark,
+                "index_price": ticker.get("indexPrice"),
+                "last_trade": ticker.get("last"),
+                "funding_rate": ticker.get("fundingRate"),
+                "suspended": ticker.get("suspended"),
+            },
+        )
+        self._persist_tick(tick)
+        self._update_aggregator(tick)
+        return tick
+
+    def _fetch_ticker(self) -> dict[str, Any]:
+        payload = self._request_json("GET", self.PUBLIC_TICKER_URL.format(venue_symbol=self.venue_symbol))
+        if not isinstance(payload, dict) or payload.get("result") != "success" or not isinstance(payload.get("ticker"), dict):
+            raise RuntimeError(f"Unexpected Kraken Futures ticker payload for {self.venue_symbol}")
+        return payload["ticker"]

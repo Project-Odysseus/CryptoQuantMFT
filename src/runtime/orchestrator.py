@@ -720,7 +720,13 @@ class RuntimeOrchestrator:
         avg_entry_price = getattr(latest_snapshot, "avg_entry_price", None)
         cash = float(getattr(latest_snapshot, "cash", 0.0))
         latest_snapshot.mark_price = latest_price
-        latest_snapshot.equity = cash + (position_size * latest_price if position_size else 0.0)
+        account_equity = getattr(self.execution_engine, "_account_equity", None)
+        if callable(account_equity):
+            # Same rule the engine uses: margin accounts are wallet + unrealized PnL, spot is cash + holdings.
+            entry = float(avg_entry_price) if avg_entry_price is not None else None
+            latest_snapshot.equity = account_equity(cash=cash, position_size=position_size, avg_entry_price=entry, price=latest_price)
+        else:
+            latest_snapshot.equity = cash + (position_size * latest_price if position_size else 0.0)
         if position_size > 0.0:
             latest_snapshot.position_side = "long"
         elif position_size < 0.0:

@@ -309,3 +309,22 @@ def test_runtime_builds_a_perp_dry_run_with_a_margin_adapter(monkeypatch: pytest
     assert adapter.max_leverage == 3.0
     assert orchestrator.execution_engine.risk_manager.config.liquidation_buffer_pct == 0.10
     assert orchestrator.execution_engine.enable_tax_logging is False
+
+
+def test_orchestrator_dashboard_reports_margin_equity_not_cash_plus_notional() -> None:
+    """Regression: the runtime snapshot refresh used the spot formula (cash + size * price) for perps too."""
+    from types import SimpleNamespace
+
+    from src.execution.paper_trading import PortfolioSnapshot
+    from src.runtime.orchestrator import RuntimeOrchestrator
+
+    adapter = _adapter()
+    engine = _engine(adapter)
+    engine.run_exchange_cycle([_bar(0, 50000.0)], [1.0])
+    size = adapter.position_size()
+    snapshot = PortfolioSnapshot(timestamp=T0, cash=adapter.wallet_balance(), position_size=size, avg_entry_price=50000.0, equity=0.0, unrealized_pnl=0.0, realized_pnl=0.0, position_side="long", mark_price=50000.0, fees_paid=0.0)
+    cycle = SimpleNamespace(execution_result=SimpleNamespace(portfolio_history=[snapshot]), snapshots=[SimpleNamespace(last=51000.0)], bars=[])
+    fake_orchestrator = SimpleNamespace(execution_engine=engine, _resolve_latest_market_price=lambda cycle: 51000.0)
+
+    RuntimeOrchestrator._refresh_latest_snapshot_prices(fake_orchestrator, cycle)
+    assert snapshot.equity == pytest.approx(adapter.wallet_balance() + size * 1000.0)

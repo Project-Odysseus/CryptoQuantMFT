@@ -41,8 +41,10 @@ confirm with Kraken. The contract is USD-quoted, so a EUR account carries curren
 - `RiskControlConfig.liquidation_buffer_pct`: forces an exit once price is within that fraction of the
   liquidation price (10% in the perp dry-run wiring).
 - `main.py`: `--execution-exchange kraken_futures` with `--runtime live_dry_run`, and `--perp-max-leverage`
-  (default 2, contract cap 5). Market data still comes from the Kraken **spot** feed, so the mark price is the
-  spot price (no basis or index price). `--runtime paper` and `--runtime live` with `kraken_futures` exit with an
+  (default 2). Market data comes from `KrakenFuturesConnector` (`src/data/exchanges.py`): bars close on the
+  contract's **mark price** (what Kraken margins and liquidates on), bid/ask are the contract's own book, and the
+  index price and funding rate are kept in the tick's raw data. Volume is the change in Kraken's rolling 24h volume
+  between polls, floored at zero, which is only a rough proxy. `--runtime paper` and `--runtime live` with `kraken_futures` exit with an
   error; `ExecutionRouter` also refuses `live`.
 
 ## Run it
@@ -87,11 +89,10 @@ matching the contract.
 ## Not built yet (roughly in order)
 
 1. **Availability**: whether Kraken Futures is open to the account holder in Norway is not in the public data.
-2. **Market data**: the runtime still takes prices from the Kraken spot feed, not the futures mark price.
-3. **Persistence**: the sandbox account state is in memory only (a restart resets it), and funding is not stored
+2. **Persistence**: the sandbox account state is in memory only (a restart resets it), and funding is not stored
    per payment beyond the event log.
-4. **Tax**: `enable_tax_logging` is off for perps. The FIFO spot ledger does not model derivatives, and the
+3. **Tax**: `enable_tax_logging` is off for perps. The FIFO spot ledger does not model derivatives, and the
    Norwegian treatment needs checking before real money.
-5. **Flatten on kill switch**: the kill switch cancels orders but does not close an open position.
+4. **Flatten on kill switch**: the kill switch cancels orders but does not close an open position.
 6. **Strategy timeframes**: the runtime builds bars from ticks (1s default) and has no history warmup, so the
    4h/daily strategies that research favours cannot run meaningfully yet (see `todo_important.md`).
