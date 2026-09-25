@@ -147,7 +147,15 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [ ] define close/exit behavior clearly when the live strategy flips from buy to sell
     - [ ] confirm live strategy orders remain long/flat only for Kraken spot until shorting support is explicitly designed
 
-- [ ] **Priority 5: Resolve the Incomplete Futures Track**
+- [ ] **Perpetual futures: first slice (2026-09-25)**: simulation only, see `docs/perpetual_futures.md`.
+  - [x] Contract spec, margin math (equity, initial/maintenance margin, liquidation price) and `SandboxPerpExecutionAdapter` with leverage cap, funding accrual and liquidation (`src/execution/perps.py`)
+  - [x] Engine support for margin accounts (margin equity, buying-power sizing, funding/liquidation events) and `RiskControlConfig.liquidation_buffer_pct`
+  - [x] `--execution-exchange kraken_futures` (`live_dry_run` only) and `--perp-max-leverage`; `paper` and `live` refuse it
+  - [x] Fixed: exchange-cycle stops (drawdown/time/ATR) never fired on shorts because no entry price was tracked for them
+  - [ ] Verify real contract spec, fee schedule and funding history for the target venue, and product availability for the account holder
+  - [ ] Real futures connector + execution adapter (auth, orders, positions, margin, funding feed), behind the same live safety gates
+  - [ ] Futures reconciliation, persisted account state, kill-switch cancel/flatten, exchange risk limits, tax treatment
+- [ ] **Priority 5: Resolve the Incomplete Futures Track** (the older dated-futures scaffolding below is a different product from the perpetuals above)
   - [ ] Preferred sequencing: explicitly defer futures behind the spot/Kraken runtime unless there is a short-term need to trade futures first
   - [ ] Decide whether futures support is part of the near-term critical path or should be explicitly deferred behind the spot/Kraken runtime
   - [ ] If futures remains in scope, finish the incomplete futures implementation:

@@ -137,6 +137,9 @@ python main.py \
   --report
 ```
 
+   Perpetual futures can be rehearsed the same way with `--execution-exchange kraken_futures` (simulation only,
+   `live_dry_run` only, market data from the Kraken spot feed); see `docs/perpetual_futures.md`.
+
 8. Verify after startup:
    - runtime mode reports `live_dry_run`
    - account state shows the expected exchange/base currency

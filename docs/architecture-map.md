@@ -109,6 +109,9 @@ flowchart TD
     - `ExecutionRouter`
   - This is where order placement, order state, and basic reconciliation live.
 
+- `src/execution/perps.py`
+  - Perpetual-futures contract spec, margin math and `SandboxPerpExecutionAdapter` (margin account with funding and liquidation). Simulation only; selected with `--execution-exchange kraken_futures` in `live_dry_run`. See `docs/perpetual_futures.md`.
+
 - `src/execution/paper_trading.py`
   - `PaperTradingEngine` is the engine that turns signals into orders and fills.
   - It uses the execution adapter when present, otherwise it behaves as a pure paper engine.

@@ -75,6 +75,9 @@ class RiskControlConfig:
     # "cut it if it's down N%" stop, distinct from the ATR stop's volatility-
     # scaled distance.
     position_drawdown_stop_pct: float | None = None
+    # Margin accounts only: force-close once price is within this fraction of the
+    # liquidation price (e.g. 0.05 = 5% away), before the venue does it at a worse price.
+    liquidation_buffer_pct: float | None = None
     # When True, skip execution-quality checks (spread/slippage/volatility) that
     # are only meaningful for live fills.  Paper trading does not have real
     # execution risk so these checks just prevent signals from filling.
@@ -276,6 +279,7 @@ class RiskManager:
         position_side: str | None,
         avg_entry_price: float | None,
         bars_held: int,
+        liquidation_price: float | None = None,
     ) -> ExitDecision:
         """Return whether an open position must be force-closed this bar.
 
@@ -286,6 +290,14 @@ class RiskManager:
         """
         if position_side not in {"long", "short"} or avg_entry_price is None:
             return ExitDecision(force_exit=False)
+
+        buffer_pct = self.config.liquidation_buffer_pct
+        if buffer_pct is not None and buffer_pct > 0.0 and liquidation_price is not None:
+            current_price = _get_close(current_bar)
+            if current_price > 0.0:
+                distance_pct = (current_price - liquidation_price) / current_price if position_side == "long" else (liquidation_price - current_price) / current_price
+                if distance_pct <= buffer_pct:
+                    return ExitDecision(force_exit=True, reason="liquidation_buffer")
 
         drawdown_stop_pct = self.config.position_drawdown_stop_pct
         if drawdown_stop_pct is not None and drawdown_stop_pct > 0.0 and avg_entry_price > 0.0:

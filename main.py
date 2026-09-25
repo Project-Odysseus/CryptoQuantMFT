@@ -14,6 +14,7 @@ from config import settings
 from src.backtest import BacktestConfig, EventDrivenSimulator, StrategyPlotter, compare_backtests, evaluate_walk_forward, resolve_strategy, run_backtest
 from src.data.exchanges import FiriConnector, KrakenConnector, MockExchangeConnector
 from src.execution import ExecutionRouter, KrakenExecutionAdapter, PaperTradingEngine
+from src.execution.perps import SandboxPerpExecutionAdapter, assumed_perp_contract
 from src.risk.controls import DEFAULT_EXCHANGE_RISK_LIMITS, RiskControlConfig, RiskManager
 from src.risk.kill_switch import KillSwitchController
 from src.data.historical import fetch_kraken_ohlcv
@@ -26,6 +27,7 @@ from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
 
 LIVE_TRADING_CONFIRMATION = "ENABLE_LIVE_TRADING"
+PERP_EXCHANGE_NAME = "kraken_futures"
 KRAKEN_MANUAL_ORDER_CONFIRMATION = "SUBMIT_KRAKEN_ORDER"
 
 
@@ -62,6 +64,7 @@ def build_runtime_orchestrator(
     watchdog_timeout_seconds: float | None = None,
     exchange: str | None = None,
     risk_per_trade_pct: float | None = None,
+    perp_max_leverage: float = 2.0,
 ) -> tuple[RuntimeOrchestrator, MarketDataPipeline]:
     """Build the runtime orchestrator and its market-data pipeline for a run."""
     runtime_config = config or RuntimeConfig(
@@ -78,6 +81,11 @@ def build_runtime_orchestrator(
     requested_exchange = _resolve_runtime_exchange(runtime_config.exchange)
     effective_exchange = requested_exchange
     trading_symbol = runtime_config.trading_symbol or _resolve_trading_symbol(exchange=requested_exchange)
+    # Perpetual futures reuse the Kraken spot feed as the mark price and only run against the in-process margin
+    # sandbox. There is no real futures adapter yet, so every other mode is refused rather than silently downgraded.
+    is_perp = (runtime_config.exchange or "").lower() == PERP_EXCHANGE_NAME
+    if is_perp and runtime_config.mode != "live_dry_run":
+        raise SystemExit(f"--execution-exchange {PERP_EXCHANGE_NAME} only runs with --runtime live_dry_run (no real futures adapter exists yet)")
 
     if runtime_config.use_mock_connector:
         pipeline.add_connector(MockExchangeConnector(symbol=trading_symbol))
@@ -127,10 +135,15 @@ def build_runtime_orchestrator(
             # above: cuts a position (long or short) once it's down this much
             # from entry, regardless of ATR-implied distance.
             position_drawdown_stop_pct=0.05,
+            # Perps only: cut a position when price is within 10% of its liquidation price.
+            liquidation_buffer_pct=0.10 if is_perp else None,
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
-    execution_router = ExecutionRouter(mode=runtime_config.mode, exchange=effective_exchange)
+    perp_adapter = (
+        SandboxPerpExecutionAdapter(contract=assumed_perp_contract(trading_symbol), max_leverage=perp_max_leverage) if is_perp else None
+    )
+    execution_router = ExecutionRouter(mode=runtime_config.mode, exchange=effective_exchange, adapter=perp_adapter)
 
     # --runtime live starts a brand-new adapter with no local balance/position
     # state. Without this, equity/cash would silently read as 0 (or whatever
@@ -238,6 +251,8 @@ def _validate_live_runtime_request(
         raise SystemExit("refusing to start --runtime live with --use-mock-connector")
     if runtime_config.exchange is None:
         raise SystemExit("refusing to start --runtime live without an explicit --execution-exchange")
+    if runtime_config.exchange.lower() == PERP_EXCHANGE_NAME:
+        raise SystemExit(f"refusing to start --runtime live with {PERP_EXCHANGE_NAME}: real perpetual-futures execution is not implemented")
 
     exchange_name = _resolve_runtime_exchange(runtime_config.exchange)
     if exchange_name not in DEFAULT_EXCHANGE_RISK_LIMITS:
@@ -340,6 +355,7 @@ async def run_runtime_orchestrator(
     exchange: str | None = None,
     resume_runtime: bool = False,
     risk_per_trade_pct: float | None = None,
+    perp_max_leverage: float = 2.0,
 ) -> RuntimeOrchestrator | None:
     """Run the runtime orchestrator over a simple market-data pipeline."""
     runtime_config = config or RuntimeConfig(
@@ -363,6 +379,7 @@ async def run_runtime_orchestrator(
             watchdog_timeout_seconds=runtime_config.watchdog_timeout_seconds,
             exchange=runtime_config.exchange,
             risk_per_trade_pct=risk_per_trade_pct,
+            perp_max_leverage=perp_max_leverage,
         )
         loop = asyncio.get_running_loop()
 
@@ -1459,7 +1476,8 @@ def main() -> None:
     parser.add_argument("--runtime-iterations", type=int, default=3, help="Number of runtime cycles to execute")
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
     parser.add_argument("--risk-per-trade-pct", type=float, default=None, help="Override the fraction of equity risked per trade (default 0.10); needed for very small accounts to clear exchange minimum order sizes")
-    parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi"], default="auto", help="Exchange routing target for the runtime execution adapter")
+    parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures runs perpetual futures in the in-process margin sandbox (live_dry_run only; no real futures orders exist yet)")
+    parser.add_argument("--perp-max-leverage", type=float, default=2.0, help="Leverage cap enforced by the perpetual-futures sandbox account (1 up to the contract cap of 5)")
     parser.add_argument("--enable-live-trading", action="store_true", help=f"Required explicit opt-in before --runtime live is allowed. Pair with --live-confirmation {LIVE_TRADING_CONFIRMATION}")
     parser.add_argument("--live-confirmation", default=None, help=f"Exact confirmation token required with --runtime live: {LIVE_TRADING_CONFIRMATION}")
     parser.add_argument("--trading-symbol", default=None, help="Trading symbol for the runtime connector and execution context, e.g. BTC/EUR or BTC/NOK")
@@ -1664,6 +1682,7 @@ def main() -> None:
                 exchange=None if args.execution_exchange == "auto" else args.execution_exchange,
                 resume_runtime=args.resume_runtime,
                 risk_per_trade_pct=args.risk_per_trade_pct,
+                perp_max_leverage=args.perp_max_leverage,
             )
         )
         if args.dashboard:

@@ -537,12 +537,13 @@ class PaperTradingEngine:
         entry_decisions: list[dict[str, Any]] = []
         trades: list[PaperTrade] = list(self._reconcile_exchange_fills(timestamp=timestamp))
         cycle_orders: list[PaperOrder] = []
+        self._apply_market_update(symbol=symbol, price=price, timestamp=timestamp)
         adapter_orders = list(getattr(self.execution_adapter, "list_orders", lambda: [])() or [])
         open_orders = [
             order for order in adapter_orders if getattr(order, "status", None) not in {"FILLED", "CANCELED", "REJECTED", "NOT_FOUND"}
         ]
         cash, position_size, avg_entry_price, fees_paid, position_opened_at = self._current_account_state(price=price, symbol=symbol)
-        current_equity = cash + (position_size * price if position_size else 0.0)
+        current_equity = self._account_equity(cash=cash, position_size=position_size, avg_entry_price=avg_entry_price, price=price)
 
         bar_day = timestamp.date() if hasattr(timestamp, "date") else None
         if bar_day is not None and bar_day != self._exchange_current_day:
@@ -562,6 +563,7 @@ class PaperTradingEngine:
                 position_side="long" if position_size > 0.0 else "short",
                 avg_entry_price=avg_entry_price,
                 bars_held=bars_held,
+                liquidation_price=self._liquidation_price(),
             )
             if exit_decision.force_exit:
                 forced_exit_reason = exit_decision.reason
@@ -642,7 +644,7 @@ class PaperTradingEngine:
             if risk_decision.allow_entry:
                 order_size = self._resolve_order_size(
                     price=price,
-                    cash=cash,
+                    cash=self._entry_buying_power(cash=cash, price=price),
                     equity=current_equity,
                     requested_size=self.default_order_size,
                     risk_position_size=risk_decision.position_size,
@@ -702,7 +704,7 @@ class PaperTradingEngine:
             if risk_decision.allow_entry:
                 order_size = self._resolve_order_size(
                     price=price,
-                    cash=cash,
+                    cash=self._entry_buying_power(cash=cash, price=price),
                     equity=current_equity,
                     requested_size=self.default_order_size,
                     risk_position_size=risk_decision.position_size,
@@ -1127,6 +1129,53 @@ class PaperTradingEngine:
                 )
         return new_trades
 
+    def _is_margin_account(self) -> bool:
+        return bool(getattr(self.execution_adapter, "margin_account", False))
+
+    def _account_equity(self, *, cash: float, position_size: float, avg_entry_price: float | None, price: float) -> float:
+        """Equity for the current account type.
+
+        Spot: cash plus the position valued at `price` (a short is a
+        negative holding whose sale proceeds are already in cash). Margin
+        account: the wallet already holds only realized results, so equity
+        is wallet plus the position's unrealized PnL against its entry.
+        """
+        if not position_size:
+            return cash
+        if self._is_margin_account():
+            entry = avg_entry_price if avg_entry_price is not None else price
+            return cash + position_size * (price - entry)
+        return cash + position_size * price
+
+    def _entry_buying_power(self, *, cash: float, price: float) -> float:
+        """Cash-like amount used to cap a new entry: cash for spot, free margin times leverage for a margin account."""
+        buying_power = getattr(self.execution_adapter, "buying_power", None)
+        if self._is_margin_account() and callable(buying_power):
+            return float(buying_power(price))
+        return cash
+
+    def _liquidation_price(self) -> float | None:
+        getter = getattr(self.execution_adapter, "liquidation_price", None)
+        return getter() if self._is_margin_account() and callable(getter) else None
+
+    def _apply_market_update(self, *, symbol: str | None, price: float, timestamp: datetime) -> None:
+        """Let a margin adapter mark to market, accrue funding and liquidate, and log what it reports."""
+        on_market_update = getattr(self.execution_adapter, "on_market_update", None)
+        if not callable(on_market_update):
+            return
+        for event in on_market_update(symbol=symbol, mark_price=price, timestamp=timestamp):
+            if self.trade_logger is None:
+                continue
+            liquidated = event.get("type") == "liquidation"
+            self.trade_logger.log_event(
+                timestamp=timestamp,
+                level="ERROR" if liquidated else "INFO",
+                event_type="position_liquidated" if liquidated else "funding_accrued",
+                message="position liquidated by the margin account" if liquidated else "funding charged on the open position",
+                source="paper_trading",
+                metadata={key: value for key, value in event.items() if key != "type"},
+            )
+
     def _current_account_state(self, *, price: float, symbol: str | None) -> tuple[float, float, float | None, float, datetime | None]:
         account_snapshot = getattr(self.execution_adapter, "get_account_snapshot", lambda: {})() or {}
         balances = account_snapshot.get("balances", {}) or {}
@@ -1138,7 +1187,7 @@ class PaperTradingEngine:
         cash = float(balances.get(base_currency, 0.0))
         position_size = float(positions.get(position_symbol, 0.0)) if position_symbol is not None else 0.0
         position_opened_at: datetime | None = None
-        if position_size > 0.0 and position_symbol is not None:
+        if position_size != 0.0 and position_symbol is not None:
             # Fall back to the current price/None when the adapter doesn't track
             # real entry state (e.g. a test stub), rather than fabricating a
             # value that would silently defeat the ATR-stop/time-stop checks.
@@ -1162,13 +1211,13 @@ class PaperTradingEngine:
         avg_entry_price: float | None,
         fees_paid: float,
     ) -> PortfolioSnapshot:
-        equity = cash + (position_size * price if position_size else 0.0)
+        equity = self._account_equity(cash=cash, position_size=position_size, avg_entry_price=avg_entry_price, price=price)
         unrealized_pnl = 0.0
         position_side = "flat"
-        if position_size > 0.0:
-            position_side = "long"
+        if position_size != 0.0:
+            position_side = "long" if position_size > 0.0 else "short"
             if avg_entry_price is not None:
-                unrealized_pnl = (position_size * price) - (position_size * avg_entry_price)
+                unrealized_pnl = position_size * (price - avg_entry_price)
         return PortfolioSnapshot(
             timestamp=timestamp,
             cash=cash,

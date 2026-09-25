@@ -1857,6 +1857,12 @@ class ExecutionRouter:
         if mode in {"paper", None}:
             return None
         normalized_exchange = (exchange or "").strip().lower()
+        if normalized_exchange == "kraken_futures":
+            if mode == "live":
+                raise ValueError("real perpetual-futures execution is not implemented; use --runtime live_dry_run")
+            from src.execution.perps import SandboxPerpExecutionAdapter
+
+            return SandboxPerpExecutionAdapter()
         if mode == "live_dry_run":
             if normalized_exchange in {"kraken", "firi"}:
                 return SandboxExecutionAdapter(exchange_name=normalized_exchange)
