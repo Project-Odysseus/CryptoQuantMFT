@@ -51,8 +51,12 @@ confirm with Kraken. The contract is USD-quoted, so a EUR account carries curren
 
 ```bash
 python main.py --runtime live_dry_run --execution-exchange kraken_futures --perp-max-leverage 2 \
+  --bar-interval 4h --warmup-bars 200 --runtime-interval 60 --runtime-iterations 100000 \
   --strategy keltner_breakout --strategy-params '{"window": 20, "atr_multiplier": 1.5}' --dashboard --report
 ```
+
+Warmup for perps uses Kraken Futures mark-price candles, which carry no volume, so volume-based strategies
+(`volume_confirmed_momentum*`) have nothing to work with on perps.
 
 Strategies return the same -1/0/1 target position as everywhere else; 0 closes whatever is open.
 
@@ -109,5 +113,3 @@ matching the contract.
 
 1. **Availability**: whether Kraken Futures is open to the account holder in Norway is not in the public data.
 2. **Flatten on kill switch**: the kill switch cancels orders but does not close an open position.
-3. **Strategy timeframes**: the runtime builds bars from ticks (1s default) and has no history warmup, so the
-   4h/daily strategies that research favours cannot run meaningfully yet (see `todo_important.md`).

@@ -33,6 +33,10 @@ class MarketDataPipeline:
             await connector.disconnect()
         return results
 
+    def drain_completed_bars(self, now: Any) -> list[Any]:
+        """Bars whose time bucket has ended by `now` (the current bar keeps collecting ticks)."""
+        return self.aggregator.drain_completed(now)
+
     def flush_bars(self) -> list[Any]:
         """Finalize any currently open bars and return them."""
         return self.aggregator.flush()

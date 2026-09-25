@@ -28,6 +28,7 @@ from src.utils.logger import logger
 
 LIVE_TRADING_CONFIRMATION = "ENABLE_LIVE_TRADING"
 PERP_EXCHANGE_NAME = "kraken_futures"
+PERP_SANDBOX_STATE_DIR = Path("data")
 LIVE_PERP_MAX_LEVERAGE = 3.0
 KRAKEN_MANUAL_ORDER_CONFIRMATION = "SUBMIT_KRAKEN_ORDER"
 
@@ -77,7 +78,7 @@ def build_runtime_orchestrator(
         exchange=exchange,
     )
 
-    market_data_interval_seconds = max(1, int(round(runtime_config.interval_seconds)))
+    market_data_interval_seconds = runtime_config.bar_interval_seconds or max(1, int(round(runtime_config.interval_seconds)))
     store = MarketStore(database_path=settings.database_path)
     pipeline = MarketDataPipeline(store=store, interval_seconds=market_data_interval_seconds)
     requested_exchange = _resolve_runtime_exchange(runtime_config.exchange)
@@ -219,8 +220,28 @@ def build_runtime_orchestrator(
         live_plot=runtime_config.live_plot,
         live_plot_path=runtime_config.live_plot_path,
         trading_symbol=primary_symbol,
+        bar_interval_seconds=runtime_config.bar_interval_seconds,
     )
+    if runtime_config.bar_interval_seconds and runtime_config.warmup_bars > 0 and not runtime_config.use_mock_connector:
+        try:
+            history = _load_warmup_bars(is_perp=is_perp, symbol=primary_symbol, interval_seconds=runtime_config.bar_interval_seconds, count=runtime_config.warmup_bars)
+            seeded = orchestrator.seed_history(history)
+            logger.info("runtime_history_seeded bars={} interval_seconds={} first={} last={}", seeded, runtime_config.bar_interval_seconds, history[0].timestamp if history else None, history[-1].timestamp if history else None)
+        except Exception as exc:
+            logger.warning("runtime_history_seed_failed error={} strategies will wait for enough live bars before signalling", exc)
     return orchestrator, pipeline
+
+
+def _load_warmup_bars(*, is_perp: bool, symbol: str, interval_seconds: int, count: int) -> list[Any]:
+    """The last `count` completed bars for the runtime symbol: futures mark candles for perps, spot OHLC otherwise."""
+    if is_perp:
+        from src.data.kraken_futures import fetch_candles, venue_symbol_for
+
+        return fetch_candles(venue_symbol_for(symbol), interval_seconds=interval_seconds, count=count, symbol=symbol)
+    bars = fetch_kraken_ohlcv(symbol=symbol, interval_seconds=interval_seconds, count=min(count + 1, 720))
+    now = datetime.now(timezone.utc)
+    completed = [bar for bar in bars if bar.timestamp.timestamp() + interval_seconds <= now.timestamp()]
+    return completed[-count:]
 
 
 def _build_perp_adapter(*, mode: str, symbol: str, max_leverage: float, reset_sandbox: bool = False) -> Any:
@@ -252,7 +273,7 @@ def _build_perp_adapter(*, mode: str, symbol: str, max_leverage: float, reset_sa
     except Exception as exc:
         logger.warning("perp_contract_spec_unavailable symbol={} error={} using offline placeholder", symbol, exc)
         contract = assumed_perp_contract(symbol)
-    state_path = Path("data") / f"perp_sandbox_{contract.venue_symbol}.json"
+    state_path = PERP_SANDBOX_STATE_DIR / f"perp_sandbox_{contract.venue_symbol}.json"
     if reset_sandbox and state_path.exists():
         backup = state_path.with_name(f"{state_path.stem}.{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.bak.json")
         state_path.replace(backup)
@@ -1578,6 +1599,8 @@ def main() -> None:
     parser.add_argument("--runtime", choices=["paper", "live_dry_run", "live"], help="Run the runtime orchestrator with the requested mode")
     parser.add_argument("--runtime-iterations", type=int, default=3, help="Number of runtime cycles to execute")
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
+    parser.add_argument("--bar-interval", default=None, choices=["1m", "5m", "15m", "30m", "1h", "4h", "1d"], help="Bar length for the strategy, independent of --runtime-interval (how often prices are polled). The strategy only acts when a bar completes. Default: one bar per poll")
+    parser.add_argument("--warmup-bars", type=int, default=200, help="With --bar-interval: completed historical bars loaded at startup (Kraken spot OHLC, or futures mark candles for kraken_futures) so long-window strategies can signal immediately. 0 disables")
     parser.add_argument("--risk-per-trade-pct", type=float, default=None, help="Override the fraction of equity risked per trade (default 0.10); needed for very small accounts to clear exchange minimum order sizes")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures trades perpetual futures: the in-process margin sandbox under live_dry_run, real Kraken Futures orders under live")
     parser.add_argument("--perp-sandbox-reset", action="store_true", help="Start the perpetual-futures dry-run account fresh; the previous saved state (data/perp_sandbox_<contract>.json) is moved aside, not deleted")

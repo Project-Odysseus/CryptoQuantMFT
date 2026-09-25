@@ -112,6 +112,24 @@ python main.py --tax-report --tax-year 2026
 python main.py --tax-log-fiat-eur 1000 --tax-fx-rate 11.50 --tax-reference initial_capital
 ```
 
+## Running a strategy on its researched timeframe
+
+Strategies researched on 4h or daily bars need the runtime to build the same bars:
+
+```bash
+python main.py --runtime live_dry_run --execution-exchange kraken \
+  --bar-interval 4h --warmup-bars 200 --runtime-interval 60 --runtime-iterations 100000 \
+  --strategy moving_average_crossover --strategy-params '{"short_window": 8, "long_window": 96}' --dashboard
+```
+
+- `--runtime-interval` is how often prices are polled; `--bar-interval` is the bar length. Between bar closes a
+  cycle only marks the account to market (fills, funding, liquidation checks); the strategy acts when a bar
+  completes, on the bar's close.
+- `--warmup-bars` loads that many completed candles at startup (Kraken spot OHLC, max 720; futures mark candles
+  for `kraken_futures`). The dashboard shows the current signal immediately, but the first trade waits for the
+  next bar close, so a restart never acts on a bar that closed hours earlier.
+- The time stop counts bars, so `time_stop_bars=60` on 4h bars is 10 days.
+
 ## Promotion checklist: paper -> live_dry_run
 
 Use this only after the paper baseline has been stable. The goal is to exercise exchange-shaped execution and reconciliation without enabling production trading.

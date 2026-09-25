@@ -114,3 +114,61 @@ def summarize_funding(rates: list[FundingRate]) -> dict[str, float]:
         "min_pct_per_day": daily[0],
         "max_pct_per_day": daily[-1],
     }
+
+
+CANDLE_RESOLUTIONS: dict[int, str] = {60: "1m", 300: "5m", 900: "15m", 1800: "30m", 3600: "1h", 14400: "4h", 43200: "12h", 86400: "1d", 604800: "1w"}
+CHARTS_BASE = "https://futures.kraken.com/api/charts/v1"
+
+
+def fetch_candles(
+    venue_symbol: str,
+    *,
+    interval_seconds: int,
+    count: int,
+    symbol: str | None = None,
+    tick_type: str = "mark",
+    now: datetime | None = None,
+) -> list[Any]:
+    """The last `count` completed candles for a perpetual, oldest first, as OHLCVBar.
+
+    `tick_type="mark"` matches what `KrakenFuturesConnector` builds live bars
+    from (the mark price), so warmup and live bars are the same series. Mark
+    candles carry no volume (Kraken reports 0); use `tick_type="trade"` when
+    volume matters. The still-open candle is dropped. Kraken returns up to
+    2000 candles per request, so this pages backwards as needed.
+    """
+    from datetime import timezone
+
+    from src.storage.bar_aggregator import OHLCVBar
+
+    if interval_seconds not in CANDLE_RESOLUTIONS:
+        raise ValueError(f"Kraken Futures has no {interval_seconds}s candles; use one of {sorted(CANDLE_RESOLUTIONS)}")
+    resolution = CANDLE_RESOLUTIONS[interval_seconds]
+    end = int((now or datetime.now(timezone.utc)).timestamp())
+    collected: dict[int, dict[str, Any]] = {}
+    to_ts = end
+    for _ in range(10):
+        from_ts = to_ts - interval_seconds * min(count + 2, 2000)
+        payload = _request_json("GET", f"{CHARTS_BASE}/{tick_type}/{venue_symbol}/{resolution}", params={"from": from_ts, "to": to_ts})
+        candles = payload.get("candles", []) if isinstance(payload, dict) else []
+        for candle in candles:
+            collected[int(candle["time"])] = candle
+        if len(collected) >= count + 1 or not candles:
+            break
+        to_ts = from_ts
+    completed = [candle for time_ms, candle in collected.items() if time_ms // 1000 + interval_seconds <= end]
+    completed.sort(key=lambda candle: int(candle["time"]))
+    return [
+        OHLCVBar(
+            exchange="kraken_futures",
+            symbol=symbol or venue_symbol,
+            interval_seconds=interval_seconds,
+            timestamp=datetime.fromtimestamp(int(candle["time"]) // 1000, tz=timezone.utc),
+            open=float(candle["open"]),
+            high=float(candle["high"]),
+            low=float(candle["low"]),
+            close=float(candle["close"]),
+            volume=float(candle.get("volume") or 0.0),
+        )
+        for candle in completed[-count:]
+    ]

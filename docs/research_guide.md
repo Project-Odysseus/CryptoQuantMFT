@@ -224,6 +224,7 @@ row naming those columns. `--lookback-days` trims it.
   is the portfolio stage.
 - **No stop-loss research yet.** After a forced exit the backtester re-enters on the next bar if the signal still
   says "long", which defeats a stop. That needs fixing before stops can be evaluated.
-- **Bar interval gap with the runtime.** The runtime builds bars from live ticks (1s by default) and has no
-  historical warmup. A strategy researched on 4h or daily bars needs the runtime set to that interval *and*
-  seeded with history, or it will wait weeks for its first signal.
+- **Running a researched timeframe.** The runtime can now trade the same bars the research used:
+  `--bar-interval 4h` (or `1d`, ...) builds bars of that length regardless of the polling interval, the strategy
+  only acts when a bar completes, and `--warmup-bars 200` loads recent history at startup so long windows work
+  from the first cycle. Kraken spot OHLC only goes back 720 candles, which caps warmup at 30 days of 1h bars.

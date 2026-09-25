@@ -29,6 +29,11 @@ class RuntimeConfig:
     live_plot_path: str | Path | None = None
     config_path: str | Path | None = None
     state_path: str | Path | None = None
+    # When set, bars cover this many seconds (e.g. 14400 = 4h) regardless of how often the market is polled,
+    # and the strategy only acts when a bar completes. None keeps the old behaviour: one bar per poll.
+    bar_interval_seconds: int | None = None
+    # Completed historical bars loaded at startup so long-window strategies can signal immediately.
+    warmup_bars: int = 0
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "RuntimeConfig":
@@ -54,6 +59,8 @@ class RuntimeConfig:
             "live_plot_path": str(self.live_plot_path) if self.live_plot_path is not None else None,
             "config_path": str(self.config_path) if self.config_path is not None else None,
             "state_path": str(self.state_path) if self.state_path is not None else None,
+            "bar_interval_seconds": self.bar_interval_seconds,
+            "warmup_bars": self.warmup_bars,
         }
 
     @classmethod
@@ -76,6 +83,8 @@ class RuntimeConfig:
             live_plot_path=payload.get("live_plot_path"),
             config_path=payload.get("config_path"),
             state_path=payload.get("state_path"),
+            bar_interval_seconds=int(payload["bar_interval_seconds"]) if payload.get("bar_interval_seconds") else None,
+            warmup_bars=int(payload.get("warmup_bars", 0) or 0),
         )
 
     def save(self, path: str | Path) -> None:
@@ -199,10 +208,33 @@ def build_runtime_config_from_args(args: argparse.Namespace, argv: list[str] | N
         live_plot_path=live_plot_path,
         config_path=config_path or (str(loaded_config.config_path) if loaded_config is not None and loaded_config.config_path is not None else None),
         state_path=state_path,
+        bar_interval_seconds=_parse_bar_interval(
+            _resolve_cli_value(effective_argv, "--bar-interval", getattr(args, "bar_interval", None), loaded_config.bar_interval_seconds if loaded_config is not None else None)
+        ),
+        warmup_bars=int(
+            _resolve_cli_value(effective_argv, "--warmup-bars", getattr(args, "warmup_bars", 0), loaded_config.warmup_bars if loaded_config is not None else 0) or 0
+        ),
     )
     if config_path:
         runtime_config.save(config_path)
     return runtime_config
+
+
+BAR_INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
+
+
+def _parse_bar_interval(value: Any) -> int | None:
+    """Turn '4h' / 14400 / None into seconds (None means one bar per poll)."""
+    if value in (None, "", "poll"):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip().lower()
+    if text in BAR_INTERVALS:
+        return BAR_INTERVALS[text]
+    if text.isdigit():
+        return int(text)
+    raise ValueError(f"unsupported bar interval {value!r}; use one of {', '.join(BAR_INTERVALS)}")
 
 
 def _argument_was_provided(argv: list[str] | None, option: str) -> bool:

@@ -63,7 +63,7 @@ def test_runtime_reset_moves_the_old_state_aside(tmp_path: Path, monkeypatch: py
     """--perp-sandbox-reset starts fresh but keeps the previous file as a backup."""
     import main
 
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "PERP_SANDBOX_STATE_DIR", tmp_path / "data")
     monkeypatch.setattr("src.data.kraken_futures.fetch_instrument", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
     adapter = main._build_perp_adapter(mode="live_dry_run", symbol="BTC/USD", max_leverage=2.0)
     adapter.submit_order(order_id="o1", side="buy", size=0.01, price=50000.0, timestamp=T0, symbol="BTC/USD")

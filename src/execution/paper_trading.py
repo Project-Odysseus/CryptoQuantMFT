@@ -748,6 +748,23 @@ class PaperTradingEngine:
             entry_decisions=entry_decisions,
         )
 
+    def run_mark_cycle(self, *, symbol: str | None, price: float, timestamp: datetime) -> PaperTradingResult:
+        """Between bar closes: settle pending fills and mark the account to `price`, without trading.
+
+        With a bar interval longer than the poll interval, the strategy only
+        acts when a bar completes. The polls in between still pick up fills,
+        let a margin account accrue funding and liquidate, and report equity.
+        """
+        if self.execution_adapter is None:
+            raise ValueError("mark cycles require an execution adapter")
+        trades = list(self._reconcile_exchange_fills(timestamp=timestamp))
+        self._capture_derivative_baseline()
+        self._apply_market_update(symbol=symbol, price=price, timestamp=timestamp)
+        self._record_derivative_ledger(timestamp=timestamp)
+        cash, position_size, avg_entry_price, fees_paid, _opened_at = self._current_account_state(price=price, symbol=symbol)
+        snapshot = self._build_exchange_portfolio_snapshot(timestamp=timestamp, price=price, cash=cash, position_size=position_size, avg_entry_price=avg_entry_price, fees_paid=fees_paid)
+        return PaperTradingResult(orders=self._merge_cycle_orders([]), trades=trades, equity_curve=[snapshot.equity], portfolio_history=[snapshot], entry_decisions=[])
+
     def _record_entry_decision(
         self,
         *,

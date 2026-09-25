@@ -107,8 +107,16 @@ class RuntimeOrchestrator:
         live_plot: bool = False,
         live_plot_path: str | Path | None = None,
         trading_symbol: str | None = None,
+        bar_interval_seconds: int | None = None,
     ) -> None:
-        """Initialize the object with its runtime state."""
+        """Initialize the object with its runtime state.
+
+        Args:
+            bar_interval_seconds: When set, the pipeline builds bars of this
+                length and the strategy only runs when one completes; polls in
+                between only mark the account to market. None keeps one bar
+                per poll.
+        """
         if mode not in {"paper", "live_dry_run", "live"}:
             raise ValueError("mode must be one of: paper, live_dry_run, live")
         self.pipeline = pipeline
@@ -132,6 +140,8 @@ class RuntimeOrchestrator:
         self.last_cycle: RuntimeCycleResult | None = None
         self.history: list[RuntimeCycleResult] = []
         self._bar_history: list[Any] = []
+        self.bar_interval_seconds = bar_interval_seconds
+        self._last_signals: list[float] = []
         self._latest_live_price: float | None = None
         self._latest_live_price_source: str = "unknown"
         self.health = RuntimeHealth()
@@ -318,7 +328,10 @@ class RuntimeOrchestrator:
 
         try:
             snapshots = await self.pipeline.run_once()
-            new_bars = self.pipeline.flush_bars()
+            if self.bar_interval_seconds:
+                new_bars = self.pipeline.drain_completed_bars(datetime.now(timezone.utc))
+            else:
+                new_bars = self.pipeline.flush_bars()
         except Exception as exc:
             self._mark_unhealthy(f"pipeline cycle failed: {exc}")
             self.request_shutdown(reason=f"pipeline_error:{exc}")
@@ -354,10 +367,21 @@ class RuntimeOrchestrator:
         if self.trading_symbol:
             new_bars = [b for b in new_bars if getattr(b, "symbol", self.trading_symbol) == self.trading_symbol]
         self._bar_history.extend(new_bars)
-        signals = self._build_signals(self._bar_history)
+        waiting_for_bar_close = bool(self.bar_interval_seconds) and not new_bars
+        if waiting_for_bar_close:
+            if not self._last_signals and self._bar_history:
+                # First cycle after seeding: show where the strategy stands now. It still only trades at a bar close,
+                # so it never acts on a bar that closed hours before the process started.
+                self._last_signals = self._build_signals(self._bar_history)
+            signals = list(self._last_signals)
+        else:
+            signals = self._build_signals(self._bar_history)
+            self._last_signals = list(signals)
 
         try:
-            if self.mode == "paper":
+            if waiting_for_bar_close:
+                execution_result = self._run_between_bars(snapshots)
+            elif self.mode == "paper":
                 execution_result = self.execution_engine.run(self._bar_history, signals)
             else:
                 execution_result = self.execution_engine.run_exchange_cycle(self._bar_history, signals)
@@ -421,6 +445,30 @@ class RuntimeOrchestrator:
             )
         self.save_checkpoint()
         return cycle
+
+    def seed_history(self, bars: Sequence[Any]) -> int:
+        """Prepend completed historical bars (oldest first) so long-window strategies can signal from the first cycle.
+
+        Bars for other symbols, and any at or after the first live bar, are
+        dropped so the series stays one clean, ordered history.
+        """
+        keep = [bar for bar in bars if not self.trading_symbol or getattr(bar, "symbol", self.trading_symbol) == self.trading_symbol]
+        if self._bar_history:
+            first_live = self._bar_history[0].timestamp
+            keep = [bar for bar in keep if bar.timestamp < first_live]
+        keep.sort(key=lambda bar: bar.timestamp)
+        self._bar_history = keep + self._bar_history
+        return len(keep)
+
+    def _run_between_bars(self, snapshots: Sequence[Any]) -> Any:
+        """Mark to market on a poll that completed no bar; the strategy does not run."""
+        price = self._latest_live_price
+        if self.mode == "paper" or price is None:
+            previous = getattr(self.last_cycle, "execution_result", None) if self.last_cycle is not None else None
+            if previous is not None:
+                return previous
+            return self.execution_engine.run(self._bar_history, self._last_signals) if self._bar_history else None
+        return self.execution_engine.run_mark_cycle(symbol=self.trading_symbol, price=price, timestamp=datetime.now(timezone.utc))
 
     async def run_loop(self, iterations: int = 3, *, interval_seconds: float | None = None, resume_from_checkpoint: bool = False) -> list[RuntimeCycleResult]:
         """Run the orchestrator for a number of iterations with a small sleep between cycles."""
