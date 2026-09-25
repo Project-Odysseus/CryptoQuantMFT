@@ -48,7 +48,7 @@ def test_paper_trading_engine_advances_orders_through_state_machine() -> None:
             volume=10.0,
         ),
     ]
-    signals = [1.0, 0.0, 0.0]
+    signals = [1.0, 1.0, 1.0]
 
     result = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=5).run(bars, signals)
 
@@ -118,7 +118,7 @@ def test_paper_trading_engine_closes_positions_when_signal_flips() -> None:
             volume=10.0,
         ),
     ]
-    signals = [1.0, 0.0, -1.0, 0.0, 0.0]
+    signals = [1.0, 1.0, -1.0, 0.0, 0.0]
 
     result = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=5).run(bars, signals)
 
@@ -890,7 +890,7 @@ def test_paper_trading_engine_force_closes_position_on_time_stop() -> None:
         )
         for index in range(7)
     ]
-    signals = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    signals = [1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0]  # signal stays long until after the time stop fires, so only the time stop can exit
 
     risk_manager = RiskManager(RiskControlConfig(time_stop_bars=2, paper_mode=True))
     result = PaperTradingEngine(
@@ -905,3 +905,57 @@ def test_paper_trading_engine_force_closes_position_on_time_stop() -> None:
     assert time_stop_orders
     assert time_stop_orders[0].status == "FILLED"
     assert result.portfolio_history[-1].position_size == 0.0
+
+
+def test_engine_closes_a_long_when_signal_returns_to_zero() -> None:
+    """Signal 0 means 'be flat': a strategy that exits by returning 0 must actually exit (matches the backtester)."""
+    bars = [
+        OHLCVBar(
+            exchange="mock",
+            symbol="BTC/NOK",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, index, tzinfo=timezone.utc),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=10.0,
+        )
+        for index in range(6)
+    ]
+
+    result = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=5).run(bars, [1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+
+    assert [order.side for order in result.orders] == ["buy", "sell"]
+    assert result.portfolio_history[-1].position_size == 0.0
+
+
+def test_exchange_cycle_closes_long_and_short_positions_when_signal_returns_to_zero() -> None:
+    """Exchange-backed cycles should treat signal 0 as 'be flat' for both sides, not 'hold'."""
+    from src.execution.adapters import SandboxExecutionAdapter
+
+    def bar(minute: int, price: float) -> OHLCVBar:
+        return OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, minute, tzinfo=timezone.utc),
+            open=price,
+            high=price,
+            low=price,
+            close=price,
+            volume=10.0,
+        )
+
+    for entry_signal, entry_side, exit_side in ((1.0, "buy", "sell"), (-1.0, "sell", "buy")):
+        adapter = SandboxExecutionAdapter(exchange_name="kraken")
+        adapter._balances = {"EUR": 1000.0}
+        adapter._base_currency = "EUR"
+        engine = PaperTradingEngine(execution_adapter=adapter, exchange_name="kraken", default_order_size=1.0, allow_short=True)
+
+        opened = engine.run_exchange_cycle([bar(0, 68000.0)], [entry_signal])
+        assert [trade.side for trade in opened.trades] == [entry_side]
+
+        closed = engine.run_exchange_cycle([bar(0, 68000.0), bar(1, 68000.0)], [entry_signal, 0.0])
+        assert [trade.side for trade in closed.trades] == [exit_side]
+        assert closed.portfolio_history[-1].position_size == 0.0

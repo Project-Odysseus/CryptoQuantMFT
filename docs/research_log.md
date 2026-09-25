@@ -83,8 +83,8 @@ BTC/ETH/SOL are highly correlated, and daily long/short drawdowns of 35–54% at
 
 ### What this points to next
 
-0. **Blocker before paper-trading either candidate:** the runtime treats signal 0 as "hold" while all research
-   treats it as "be flat" (both candidates exit by returning 0 when long-only). Tracked in `todo_important.md`.
+0. ~~Blocker: runtime treated signal 0 as "hold" while research treats it as "flat"~~ Fixed 2026-09-25, the
+   runtime now closes on 0.
 1. **More history.** Load Kraken's OHLCVT CSVs (see the guide) and re-run this sweep over several cycles. It is the
    biggest single improvement to confidence, and cheap.
 2. **Limit (maker) orders for execution.** Cutting the round trip from ~1.0% to ~0.5% roughly doubles the 4h trend

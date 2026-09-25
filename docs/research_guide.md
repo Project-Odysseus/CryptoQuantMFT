@@ -55,10 +55,8 @@ The return value is the **position to hold**, not an order. 1 = be long, -1 = be
 opens a position when the value turns non-zero and closes it as soon as the value is 0 or flips. A strategy that
 wants to stay in a trade must keep returning 1 on every bar.
 
-> **Runtime caveat (open as of 2026-09-25, tracked in `todo_important.md`):** the paper/live runtime currently
-> treats 0 as "hold" and only closes a long on -1. Until that is aligned with the backtester, only strategies that
-> are almost always ±1 (e.g. `moving_average_crossover`) behave the same in research and in the runtime. A strategy
-> that exits by returning 0 would keep holding live.
+The paper and live runtime follow the same rule (aligned on 2026-09-25; before that the runtime treated 0 as
+"hold" and only closed a long on -1). There is no size scaling yet, so 0 always means "exit whatever you hold".
 
 That makes "enter on X, hold until Y" awkward to write by hand, so there is a helper. Compute indicator arrays over
 the whole history, turn your rules into boolean arrays, and let `latch_position` decide:
@@ -212,8 +210,6 @@ row naming those columns. `--lookback-days` trims it.
 
 ## Known limitations
 
-- **Research and runtime disagree on what 0 means** (see the caveat under "How a strategy works"). Fix that before
-  paper-trading anything that exits by returning 0.
 - **Short samples.** 4h data covers about 4 months (one regime). Daily covers about 2 years. More history is the
   single biggest improvement to confidence.
 - **Per-symbol, not portfolio.** Each symbol is traded alone with 100% of equity. Combining strategies and symbols

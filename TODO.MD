@@ -240,7 +240,7 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - `src/research/` (catalog with hypotheses and sweep grids, IS/holdout evaluation on mark-to-market equity, sweeps, robustness summary, heatmaps), `scripts/research/research.py` (`list`/`backtest`/`compare`/`sweep`, replaces `walk_forward_scan.py`), `notebooks/strategy_research.ipynb`, CSV loader for multi-year Kraken OHLCVT history.
   - Finding: costs (~1% round trip) decide most results. Mean reversion and short-horizon momentum lose net of costs. Slow trend-following is the only robust family, but it lags buy-and-hold in rallies and earns its keep in bear markets.
   - [ ] Re-run the sweep on multi-year history (Kraken OHLCVT CSVs) before trusting any candidate
-  - [ ] Fix the research ↔ runtime signal-parity gaps tracked in `todo_important.md` before paper-trading a researched strategy
+  - [ ] Fix the remaining research ↔ runtime gaps tracked in `todo_important.md` (re-entry after a forced exit, 4h/1d bar interval + history warmup) before paper-trading a researched strategy. Exit-on-zero semantics fixed 2026-09-25.
   - [ ] Evaluate maker (post-only limit) execution: ~0.5% instead of ~1.0% round trip roughly doubles the 4h trend family's Sharpe (see Phase 6)
   - [ ] Cross-strategy return correlation in the research summary (needed for the portfolio stage)
 - [ ] **Single-Exchange Mean Reversion & Regime Signals**

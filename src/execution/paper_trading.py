@@ -338,7 +338,7 @@ class PaperTradingEngine:
                     active_orders.remove(order)
                 bars_held = 0
             elif not active_orders:
-                if position_size > 0.0 and signal < 0.0:
+                if position_size > 0.0 and signal <= 0.0:
                     order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar)
                     active_orders.append(order)
                     orders.append(order)
@@ -353,7 +353,7 @@ class PaperTradingEngine:
                     )
                     if order.status in {"FILLED", "CANCELED"}:
                         active_orders.remove(order)
-                elif position_size < 0.0 and signal > 0.0:
+                elif position_size < 0.0 and signal >= 0.0:
                     order = self._create_order(timestamp=timestamp, side="buy", size=abs(position_size), bar=bar)
                     active_orders.append(order)
                     orders.append(order)
@@ -595,13 +595,13 @@ class PaperTradingEngine:
             maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)
             if maybe_trade is not None:
                 trades.append(maybe_trade)
-        elif position_size > 0.0 and signal < 0.0:
+        elif position_size > 0.0 and signal <= 0.0:
             exit_order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar)
             cycle_orders.append(exit_order)
             maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)
             if maybe_trade is not None:
                 trades.append(maybe_trade)
-        elif position_size < 0.0 and signal > 0.0:
+        elif position_size < 0.0 and signal >= 0.0:
             exit_order = self._create_order(timestamp=timestamp, side="buy", size=abs(position_size), bar=bar)
             cycle_orders.append(exit_order)
             maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)

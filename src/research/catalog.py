@@ -1,9 +1,8 @@
 """The strategies the research tools know about, with their hypotheses and sweep grids.
 
 Every entry points at a factory registered in `StrategyRegistry` (the
-runtime runs the same factories; but see the exit-semantics caveat in
-docs/research_guide.md before assuming identical behaviour) and adds what
-research needs on top:
+runtime runs the same factories with the same signal semantics) and adds
+what research needs on top:
 
 - `hypothesis`: one line on *why* this should make money. If you can't
   write one, the backtest result is just curve-fitting.
