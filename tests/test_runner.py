@@ -69,6 +69,14 @@ def test_strategy_registry_can_resolve_volume_confirmed_momentum_strategy() -> N
     assert callable(strategy)
 
 
+def test_strategy_registry_can_resolve_volume_confirmed_momentum_biased_strategy() -> None:
+    """The strategy registry should provide the long-biased momentum strategy entry."""
+    registry = StrategyRegistry()
+    strategy = resolve_strategy("volume_confirmed_momentum_biased", registry=registry, short_threshold_multiplier=3.0)
+
+    assert callable(strategy)
+
+
 def test_strategy_registry_reports_short_capability() -> None:
     """The registry should expose whether each registered strategy can emit a short signal."""
     registry = StrategyRegistry()

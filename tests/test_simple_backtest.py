@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from src.backtest import SimpleBacktester, moving_average_crossover_strategy
 from src.backtest.costs import CostModel
-from src.backtest.simple_backtest import volume_confirmed_momentum_strategy
+from src.backtest.simple_backtest import volume_confirmed_momentum_strategy, volume_confirmed_momentum_biased_strategy
 from src.risk.controls import RiskControlConfig, RiskManager
 from src.storage.bar_aggregator import OHLCVBar
 
@@ -87,6 +87,60 @@ def test_volume_confirmed_momentum_strategy_requires_enough_history() -> None:
     signal = strategy(history, len(history) - 1, history[-1])
 
     assert signal == 0
+
+
+def test_volume_confirmed_momentum_biased_strategy_still_allows_long_at_base_threshold() -> None:
+    """The long side of the biased variant should behave exactly like the symmetric strategy."""
+    history = [
+        _bar(close=100.0, volume=1.0, index=0),
+        _bar(close=100.0, volume=1.0, index=1),
+        _bar(close=100.0, volume=1.0, index=2),
+        _bar(close=100.0, volume=10.0, index=3),
+        _bar(close=100.5, volume=10.0, index=4),
+        _bar(close=101.0, volume=10.0, index=5),
+        _bar(close=102.0, volume=20.0, index=6),
+    ]
+    strategy = volume_confirmed_momentum_biased_strategy(lookback=3, threshold=0.01, volume_window=3, volume_multiplier=1.5)
+
+    signal = strategy(history, len(history) - 1, history[-1])
+
+    assert signal == 1
+
+
+def test_volume_confirmed_momentum_biased_strategy_blocks_short_that_would_pass_symmetric() -> None:
+    """A drop that clears the plain threshold/volume bar should still be blocked by the stricter short bar."""
+    history = [
+        _bar(close=100.0, volume=1.0, index=0),
+        _bar(close=100.0, volume=1.0, index=1),
+        _bar(close=100.0, volume=1.0, index=2),
+        _bar(close=100.0, volume=10.0, index=3),
+        _bar(close=99.5, volume=10.0, index=4),
+        _bar(close=99.0, volume=10.0, index=5),
+        _bar(close=98.0, volume=20.0, index=6),  # -2% move, 2x volume: triggers the symmetric strategy
+    ]
+    symmetric = volume_confirmed_momentum_strategy(lookback=3, threshold=0.01, volume_window=3, volume_multiplier=1.5)
+    biased = volume_confirmed_momentum_biased_strategy(lookback=3, threshold=0.01, volume_window=3, volume_multiplier=1.5)
+
+    assert symmetric(history, len(history) - 1, history[-1]) == -1
+    assert biased(history, len(history) - 1, history[-1]) == 0
+
+
+def test_volume_confirmed_momentum_biased_strategy_allows_short_past_the_stricter_bar() -> None:
+    """A big enough drop with a strong enough volume spike should still short even with the stricter bar."""
+    history = [
+        _bar(close=100.0, volume=1.0, index=0),
+        _bar(close=100.0, volume=1.0, index=1),
+        _bar(close=100.0, volume=1.0, index=2),
+        _bar(close=100.0, volume=10.0, index=3),
+        _bar(close=99.0, volume=10.0, index=4),
+        _bar(close=98.0, volume=10.0, index=5),
+        _bar(close=97.0, volume=25.0, index=6),  # -3% move, 2.5x volume: past the 2%/2.25x short bar
+    ]
+    biased = volume_confirmed_momentum_biased_strategy(lookback=3, threshold=0.01, volume_window=3, volume_multiplier=1.5)
+
+    signal = biased(history, len(history) - 1, history[-1])
+
+    assert signal == -1
 
 
 def test_simple_backtester_force_closes_short_on_position_drawdown_stop() -> None:

@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
-from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, momentum_breakout_strategy, moving_average_crossover_strategy, signal_trend_strategy, volume_confirmed_momentum_strategy
+from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, momentum_breakout_strategy, moving_average_crossover_strategy, signal_trend_strategy, volume_confirmed_momentum_strategy, volume_confirmed_momentum_biased_strategy
 from src.risk.controls import RiskControlConfig, RiskManager
 
 
@@ -51,17 +51,20 @@ class StrategyRegistry:
             "momentum_breakout": momentum_breakout_strategy,
             "signal_trend": signal_trend_strategy,
             "volume_confirmed_momentum": volume_confirmed_momentum_strategy,
+            "volume_confirmed_momentum_biased": volume_confirmed_momentum_biased_strategy,
         }
         # Whether each strategy can emit a short (-1) signal at all. This is
         # about the signal itself, not whether a given runtime mode is
         # allowed to act on it - live spot trading blocks opening a short
         # regardless of what a "short-capable" strategy emits. Every
-        # currently registered strategy emits -1/0/1, so all are True today.
+        # currently registered strategy emits -1/0/1, so all are True today
+        # ("biased" still can short, just under stricter criteria).
         self._short_capable: dict[str, bool] = {
             "moving_average_crossover": True,
             "momentum_breakout": True,
             "signal_trend": True,
             "volume_confirmed_momentum": True,
+            "volume_confirmed_momentum_biased": True,
         }
 
     def register(self, name: str, strategy: Any, *, can_short: bool = True) -> None:

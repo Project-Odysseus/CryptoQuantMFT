@@ -511,8 +511,24 @@ def volume_confirmed_momentum_strategy(
     threshold: float = 0.01,
     volume_window: int = 10,
     volume_multiplier: float = 1.5,
+    short_threshold: float | None = None,
+    short_volume_multiplier: float | None = None,
+    allow_short: bool = True,
 ) -> StrategyFn:
-    """Create a momentum strategy that only signals when the move is confirmed by above-average volume."""
+    """Create a momentum strategy that only signals when the move is confirmed by above-average volume.
+
+    Args:
+        short_threshold: Price-move threshold required for a short signal. Defaults
+            to ``threshold`` (symmetric). Pass a larger value to require a bigger
+            confirmed drop before shorting than before going long.
+        short_volume_multiplier: Volume-spike multiplier required for a short
+            signal. Defaults to ``volume_multiplier`` (symmetric). Pass a larger
+            value to require heavier volume confirmation before shorting.
+        allow_short: When False, never emit a short signal at all (flat instead),
+            regardless of how the price/volume conditions resolve.
+    """
+    resolved_short_threshold = threshold if short_threshold is None else short_threshold
+    resolved_short_volume_multiplier = volume_multiplier if short_volume_multiplier is None else short_volume_multiplier
 
     def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
         """Generate a long/short signal only when price momentum is confirmed by a volume spike."""
@@ -526,7 +542,11 @@ def volume_confirmed_momentum_strategy(
             return 0
 
         return_pct = (current_close - baseline_close) / baseline_close
-        if abs(return_pct) <= threshold:
+        is_bullish = return_pct > 0
+        active_threshold = threshold if is_bullish else resolved_short_threshold
+        if abs(return_pct) <= active_threshold:
+            return 0
+        if not is_bullish and not allow_short:
             return 0
 
         # Compare this bar's volume to the average of the *preceding* bars,
@@ -537,12 +557,38 @@ def volume_confirmed_momentum_strategy(
             return 0
         avg_volume = sum(_get_volume(bar) for bar in prior_bars) / len(prior_bars)
         current_volume = _get_volume(current_bar)
-        if avg_volume <= 0.0 or current_volume < avg_volume * volume_multiplier:
+        active_multiplier = volume_multiplier if is_bullish else resolved_short_volume_multiplier
+        if avg_volume <= 0.0 or current_volume < avg_volume * active_multiplier:
             return 0
 
-        return 1 if return_pct > 0 else -1
+        return 1 if is_bullish else -1
 
     return strategy
+
+
+def volume_confirmed_momentum_biased_strategy(
+    lookback: int = 5,
+    threshold: float = 0.01,
+    volume_window: int = 10,
+    volume_multiplier: float = 1.5,
+    short_threshold_multiplier: float = 2.0,
+    short_volume_multiplier_factor: float = 1.5,
+) -> StrategyFn:
+    """Long-biased variant of volume_confirmed_momentum_strategy.
+
+    Longs use the plain thresholds; shorts require a bigger confirmed move
+    (``threshold * short_threshold_multiplier``) and heavier volume
+    confirmation (``volume_multiplier * short_volume_multiplier_factor``),
+    so the strategy leans long without being long-only.
+    """
+    return volume_confirmed_momentum_strategy(
+        lookback=lookback,
+        threshold=threshold,
+        volume_window=volume_window,
+        volume_multiplier=volume_multiplier,
+        short_threshold=threshold * short_threshold_multiplier,
+        short_volume_multiplier=volume_multiplier * short_volume_multiplier_factor,
+    )
 
 
 def _normalize_signal(raw_signal: float | int | str | None) -> float:
