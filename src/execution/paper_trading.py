@@ -102,6 +102,7 @@ class PaperTradingEngine:
         exchange_name: str | None = None,
         enable_tax_logging: bool = False,
         strategy_id: str | None = None,
+        allow_short: bool = False,
     ) -> None:
         """Initialize the object with its runtime state."""
         if initial_cash <= 0:
@@ -126,6 +127,12 @@ class PaperTradingEngine:
         self.exchange_name = exchange_name or getattr(execution_adapter, "exchange_name", None) or getattr(execution_adapter, "name", None) or "paper"
         self.enable_tax_logging = enable_tax_logging
         self.strategy_id = strategy_id
+        # Only meaningful for run_exchange_cycle() (live_dry_run/live): whether
+        # a flat position may be opened short. Real Kraken spot has no margin
+        # support, so this must stay False for --runtime live; it exists so
+        # live_dry_run (always sandbox-simulated, never a real order) can
+        # exercise short-side behavior for research/testing.
+        self.allow_short = allow_short
         self._order_counter = 0
         # Instance-level so the daily-loss reference survives across cycles
         # within one running process (exchange-cycle mode has no other place
@@ -587,7 +594,13 @@ class PaperTradingEngine:
             maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)
             if maybe_trade is not None:
                 trades.append(maybe_trade)
-        elif signal > 0.0 and position_size <= 0.0:
+        elif position_size < 0.0 and signal > 0.0:
+            exit_order = self._create_order(timestamp=timestamp, side="buy", size=abs(position_size), bar=bar)
+            cycle_orders.append(exit_order)
+            maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)
+            if maybe_trade is not None:
+                trades.append(maybe_trade)
+        elif signal > 0.0 and position_size == 0.0:
             risk_decision = self._evaluate_risk(
                 bars=list(bars),
                 equity=current_equity,
@@ -633,7 +646,7 @@ class PaperTradingEngine:
                     maybe_trade = self._route_exchange_order(order=entry_order, price=price, timestamp=timestamp)
                     if maybe_trade is not None:
                         trades.append(maybe_trade)
-        elif signal < 0.0 and position_size <= 0.0:
+        elif signal < 0.0 and position_size == 0.0 and not self.allow_short:
             self._record_entry_decision(
                 decisions=entry_decisions,
                 signal=signal,
@@ -647,6 +660,52 @@ class PaperTradingEngine:
                 position_size=position_size,
                 equity=current_equity,
             )
+        elif signal < 0.0 and position_size == 0.0 and self.allow_short:
+            risk_decision = self._evaluate_risk(
+                bars=list(bars),
+                equity=current_equity,
+                peak_equity=max(self.initial_cash, current_equity),
+                current_position=position_size,
+                current_bar=bar,
+                bar_index=len(bars) - 1,
+                signal_side="sell",
+                current_notional=max(0.0, position_size * price),
+                open_positions=1 if position_size != 0.0 else 0,
+                exchange_name=self.exchange_name,
+                exchange_position_size=position_size,
+                current_exchange_notional=max(0.0, position_size * price),
+                exchange_open_positions=1 if position_size != 0.0 else 0,
+                open_orders_count=0,
+                daily_reference_equity=self._exchange_day_start_equity,
+            )
+            self._record_entry_decision(
+                decisions=entry_decisions,
+                signal=signal,
+                side="sell",
+                allowed=risk_decision.allow_entry,
+                reason=getattr(risk_decision, "reason", None),
+                price=price,
+                timestamp=timestamp,
+                order_size=risk_decision.position_size,
+                cash=cash,
+                position_size=position_size,
+                equity=current_equity,
+                risk_details=self._build_risk_details(bars=list(bars), price=price, equity=current_equity, risk_decision=risk_decision),
+            )
+            if risk_decision.allow_entry:
+                order_size = self._resolve_order_size(
+                    price=price,
+                    cash=cash,
+                    equity=current_equity,
+                    requested_size=self.default_order_size,
+                    risk_position_size=risk_decision.position_size,
+                )
+                if order_size > 0.0:
+                    entry_order = self._create_order(timestamp=timestamp, side="sell", size=order_size, bar=bar)
+                    cycle_orders.append(entry_order)
+                    maybe_trade = self._route_exchange_order(order=entry_order, price=price, timestamp=timestamp)
+                    if maybe_trade is not None:
+                        trades.append(maybe_trade)
 
         cash, position_size, avg_entry_price, fees_paid, _position_opened_at = self._current_account_state(price=price, symbol=symbol)
         portfolio_snapshot = self._build_exchange_portfolio_snapshot(

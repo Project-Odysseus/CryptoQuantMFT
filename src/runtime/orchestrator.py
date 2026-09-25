@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from src.backtest.runner import StrategyRegistry
 from src.backtest.simple_backtest import moving_average_crossover_strategy
 from src.runtime.config import RuntimeConfig
 from src.execution.paper_trading import PaperTradingEngine
@@ -864,11 +865,20 @@ class RuntimeOrchestrator:
         kill_switch_state = health_report["kill_switch"]
         risk_manager = getattr(getattr(self.execution_engine, "risk_manager", None), "config", None)
 
+        try:
+            strategy_can_short = StrategyRegistry().can_short(self.strategy_name)
+            short_capability = "yes" if strategy_can_short else "no (long/flat only)"
+        except KeyError:
+            short_capability = "unknown (unregistered strategy)"
+        shorting_enabled = bool(getattr(self.execution_engine, "allow_short", False))
+
         lines = [
             "=== Runtime startup summary ===",
             f"mode: {self.mode}",
             f"strategy: {self.strategy_name}",
             f"strategy_params: {self.strategy_params}",
+            f"strategy_can_short: {short_capability}",
+            f"shorting_enabled_this_run: {shorting_enabled}",
             f"exchange: {account_state.get('exchange') or 'unknown'}",
             f"connectors: {len(getattr(self.pipeline, 'connectors', []))}",
             f"risk_limits: max_drawdown={getattr(risk_manager, 'max_drawdown_pct', 'n/a')} volatility={getattr(risk_manager, 'max_volatility_pct', 'n/a')} risk_per_trade={getattr(risk_manager, 'risk_per_trade_pct', 'n/a')} max_position={getattr(risk_manager, 'max_position_size', 'n/a')}",

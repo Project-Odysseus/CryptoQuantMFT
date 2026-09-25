@@ -52,10 +52,28 @@ class StrategyRegistry:
             "signal_trend": signal_trend_strategy,
             "volume_confirmed_momentum": volume_confirmed_momentum_strategy,
         }
+        # Whether each strategy can emit a short (-1) signal at all. This is
+        # about the signal itself, not whether a given runtime mode is
+        # allowed to act on it - live spot trading blocks opening a short
+        # regardless of what a "short-capable" strategy emits. Every
+        # currently registered strategy emits -1/0/1, so all are True today.
+        self._short_capable: dict[str, bool] = {
+            "moving_average_crossover": True,
+            "momentum_breakout": True,
+            "signal_trend": True,
+            "volume_confirmed_momentum": True,
+        }
 
-    def register(self, name: str, strategy: Any) -> None:
+    def register(self, name: str, strategy: Any, *, can_short: bool = True) -> None:
         """Register a new named strategy."""
         self._strategies[name] = strategy
+        self._short_capable[name] = can_short
+
+    def can_short(self, name: str) -> bool:
+        """Return whether the named strategy can emit a short signal."""
+        if name not in self._strategies:
+            raise KeyError(f"Unknown strategy: {name}")
+        return self._short_capable.get(name, True)
 
     def get(self, name: str) -> Any:
         """Return a strategy callable for a given name."""

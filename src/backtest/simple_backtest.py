@@ -27,6 +27,7 @@ class TradeRecord:
     return_pct: float
     equity_after_trade: float
     cost: float = 0.0
+    reason: str | None = None
 
 
 @dataclass(slots=True)
@@ -97,6 +98,7 @@ class SimpleBacktester:
         entry_size = 1.0
 
         cost_model = self.cost_model
+        bars_held = 0
 
         for index in range(1, len(bars)):
             history = list(bars[: index + 1])
@@ -105,6 +107,20 @@ class SimpleBacktester:
             signal = _normalize_signal(signal_value)
             close_price = _get_close(current_bar)
             timestamp = _get_timestamp(current_bar)
+
+            bars_held = bars_held + 1 if current_position != 0.0 else 0
+
+            forced_exit_reason: str | None = None
+            if self.risk_manager is not None and current_position != 0.0 and entry_price is not None:
+                exit_decision = self.risk_manager.evaluate_exit(
+                    bars=history,
+                    current_bar=current_bar,
+                    position_side="long" if current_position > 0.0 else "short",
+                    avg_entry_price=entry_price,
+                    bars_held=bars_held,
+                )
+                if exit_decision.force_exit:
+                    forced_exit_reason = exit_decision.reason
 
             if index == len(bars) - 1 and current_position != 0.0:
                 if current_position > 0.0:
@@ -158,6 +174,39 @@ class SimpleBacktester:
                 current_position = 0.0
                 entry_price = None
                 entry_timestamp = None
+            elif forced_exit_reason is not None:
+                exit_side = "sell" if current_position > 0.0 else "buy"
+                exit_price = self._apply_cost(close_price, side=exit_side, cost_model=cost_model)
+                if current_position > 0.0:
+                    return_pct = (exit_price - entry_price) / entry_price
+                else:
+                    return_pct = (entry_price - exit_price) / entry_price
+                trade_count += 1
+                if return_pct > 0:
+                    wins += 1
+                equity *= 1 + entry_size * return_pct
+                trade_prices.append(exit_price)
+                trade_timestamps.append(timestamp)
+                trade_returns.append(return_pct)
+                trade_sizes.append(entry_size)
+                trade_costs.append(abs(exit_price - close_price) + abs(entry_price - close_price))
+                trade_records.append(
+                    TradeRecord(
+                        timestamp=timestamp,
+                        side="long" if current_position > 0.0 else "short",
+                        entry_price=entry_price,
+                        exit_price=exit_price,
+                        size=entry_size,
+                        return_pct=return_pct,
+                        equity_after_trade=equity,
+                        cost=abs(exit_price - close_price) + abs(entry_price - close_price),
+                        reason=forced_exit_reason,
+                    )
+                )
+                current_position = 0.0
+                entry_price = None
+                entry_timestamp = None
+                bars_held = 0
             elif current_position == 0.0:
                 risk_decision = self._evaluate_risk(
                     history=history,

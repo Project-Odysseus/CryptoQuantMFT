@@ -252,6 +252,138 @@ def test_adapter_tracks_real_entry_price_and_open_timestamp_across_fills() -> No
     assert "BTC" not in snapshot_after_close["position_entry_price"]
 
 
+def test_adapter_supports_opening_and_tracking_a_short_position() -> None:
+    """Selling from flat should open a negative position with a fresh entry price/time, not clamp to zero."""
+    adapter = SandboxExecutionAdapter(exchange_name="kraken")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._base_currency = "EUR"
+
+    adapter.submit_order(
+        order_id="btc-short-1",
+        side="sell",
+        size=1.0,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+    snapshot = adapter.get_account_snapshot()
+    assert snapshot["positions"]["BTC"] == -1.0
+    assert snapshot["position_opened_at"]["BTC"] == datetime(2024, 1, 1, 12, 0, 0)
+    assert snapshot["position_entry_price"]["BTC"] == 100.0
+
+    # Adding to the short should move the (short) entry price but not the open time.
+    adapter.submit_order(
+        order_id="btc-short-2",
+        side="sell",
+        size=1.0,
+        price=80.0,
+        timestamp=datetime(2024, 1, 1, 12, 5, 0),
+        symbol="BTC/EUR",
+    )
+    snapshot = adapter.get_account_snapshot()
+    assert snapshot["positions"]["BTC"] == -2.0
+    assert snapshot["position_opened_at"]["BTC"] == datetime(2024, 1, 1, 12, 0, 0)
+    assert snapshot["position_entry_price"]["BTC"] == 90.0
+
+    # Covering (buying back) the full short should clear both.
+    adapter.submit_order(
+        order_id="btc-cover-1",
+        side="buy",
+        size=2.0,
+        price=70.0,
+        timestamp=datetime(2024, 1, 1, 12, 10, 0),
+        symbol="BTC/EUR",
+    )
+    snapshot = adapter.get_account_snapshot()
+    assert "BTC" not in snapshot["positions"]
+    assert "BTC" not in snapshot["position_opened_at"]
+    assert "BTC" not in snapshot["position_entry_price"]
+
+
+def test_adapter_preserves_short_entry_price_on_partial_cover() -> None:
+    """Partially covering a short should reduce its size without resetting its entry price/open time."""
+    adapter = SandboxExecutionAdapter(exchange_name="kraken")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._base_currency = "EUR"
+
+    adapter.submit_order(
+        order_id="btc-short-1",
+        side="sell",
+        size=2.0,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+    adapter.submit_order(
+        order_id="btc-cover-partial",
+        side="buy",
+        size=1.0,
+        price=90.0,
+        timestamp=datetime(2024, 1, 1, 12, 5, 0),
+        symbol="BTC/EUR",
+    )
+    snapshot = adapter.get_account_snapshot()
+    assert snapshot["positions"]["BTC"] == -1.0
+    assert snapshot["position_opened_at"]["BTC"] == datetime(2024, 1, 1, 12, 0, 0)
+    assert snapshot["position_entry_price"]["BTC"] == 100.0
+
+
+def test_adapter_flips_short_to_long_within_a_single_fill() -> None:
+    """Buying more than covers the current short should close it and open a fresh long at this fill's price."""
+    adapter = SandboxExecutionAdapter(exchange_name="kraken")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._base_currency = "EUR"
+
+    adapter.submit_order(
+        order_id="btc-short-1",
+        side="sell",
+        size=1.0,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+    adapter.submit_order(
+        order_id="btc-flip-1",
+        side="buy",
+        size=3.0,
+        price=90.0,
+        timestamp=datetime(2024, 1, 1, 12, 5, 0),
+        symbol="BTC/EUR",
+    )
+    snapshot = adapter.get_account_snapshot()
+    assert snapshot["positions"]["BTC"] == 2.0
+    assert snapshot["position_opened_at"]["BTC"] == datetime(2024, 1, 1, 12, 5, 0)
+    assert snapshot["position_entry_price"]["BTC"] == 90.0
+
+
+def test_adapter_flips_long_to_short_within_a_single_fill() -> None:
+    """Selling more than the current long should close it and open a fresh short at this fill's price."""
+    adapter = SandboxExecutionAdapter(exchange_name="kraken")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._base_currency = "EUR"
+
+    adapter.submit_order(
+        order_id="btc-buy-1",
+        side="buy",
+        size=1.0,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+    adapter.submit_order(
+        order_id="btc-flip-1",
+        side="sell",
+        size=3.0,
+        price=90.0,
+        timestamp=datetime(2024, 1, 1, 12, 5, 0),
+        symbol="BTC/EUR",
+    )
+    snapshot = adapter.get_account_snapshot()
+    assert snapshot["positions"]["BTC"] == -2.0
+    assert snapshot["position_opened_at"]["BTC"] == datetime(2024, 1, 1, 12, 5, 0)
+    assert snapshot["position_entry_price"]["BTC"] == 90.0
+
+
 def test_execution_router_builds_exchange_specific_adapter() -> None:
     """Test test execution router builds exchange specific adapter."""
     router = ExecutionRouter(mode="live", exchange="kraken")

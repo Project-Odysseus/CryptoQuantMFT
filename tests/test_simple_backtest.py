@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from src.backtest import SimpleBacktester, moving_average_crossover_strategy
 from src.backtest.costs import CostModel
 from src.backtest.simple_backtest import volume_confirmed_momentum_strategy
+from src.risk.controls import RiskControlConfig, RiskManager
 from src.storage.bar_aggregator import OHLCVBar
 
 
@@ -86,6 +87,29 @@ def test_volume_confirmed_momentum_strategy_requires_enough_history() -> None:
     signal = strategy(history, len(history) - 1, history[-1])
 
     assert signal == 0
+
+
+def test_simple_backtester_force_closes_short_on_position_drawdown_stop() -> None:
+    """A short that moves 5%+ against entry should be force-closed even though the strategy never reverses."""
+
+    def always_short_strategy(history: list, index: int, current_bar) -> int:
+        return -1 if index >= 1 else 0
+
+    bars = [
+        _bar(close=100.0, volume=1.0, index=0),
+        _bar(close=100.0, volume=1.0, index=1),  # opens short here at 100.0
+        _bar(close=102.0, volume=1.0, index=2),  # +2%, within the 5% budget
+        _bar(close=106.0, volume=1.0, index=3),  # +6%, breaches the 5% stop
+        _bar(close=110.0, volume=1.0, index=4),
+    ]
+    risk_manager = RiskManager(RiskControlConfig(paper_mode=True, position_drawdown_stop_pct=0.05))
+
+    result = SimpleBacktester(strategy=always_short_strategy, initial_equity=1000.0, risk_manager=risk_manager).run(bars)
+
+    assert result.trades == 1
+    assert result.trade_records[0].side == "short"
+    assert result.trade_records[0].reason == "position_drawdown_stop"
+    assert result.trade_records[0].exit_price == 106.0
 
 
 def test_simple_backtester_runs_on_ohlcv_bars() -> None:

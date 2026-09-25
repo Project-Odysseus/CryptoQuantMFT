@@ -424,6 +424,86 @@ def test_risk_manager_evaluate_exit_triggers_atr_stop_loss() -> None:
     assert decision.reason == "atr_stop_loss"
 
 
+def test_risk_manager_evaluate_exit_triggers_position_drawdown_stop_on_long() -> None:
+    """A long down 5% from entry should be force-closed by the plain percentage stop."""
+    bar = OHLCVBar(
+        exchange="mock",
+        symbol="BTC/NOK",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        open=95.0,
+        high=95.0,
+        low=95.0,
+        close=95.0,
+        volume=10.0,
+    )
+    manager = RiskManager(RiskControlConfig(position_drawdown_stop_pct=0.05))
+
+    decision = manager.evaluate_exit(
+        bars=[bar],
+        current_bar=bar,
+        position_side="long",
+        avg_entry_price=100.0,
+        bars_held=1,
+    )
+
+    assert decision.force_exit is True
+    assert decision.reason == "position_drawdown_stop"
+
+
+def test_risk_manager_evaluate_exit_triggers_position_drawdown_stop_on_short() -> None:
+    """A short up 5% from entry (adverse for a short) should be force-closed."""
+    bar = OHLCVBar(
+        exchange="mock",
+        symbol="BTC/NOK",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        open=105.0,
+        high=105.0,
+        low=105.0,
+        close=105.0,
+        volume=10.0,
+    )
+    manager = RiskManager(RiskControlConfig(position_drawdown_stop_pct=0.05))
+
+    decision = manager.evaluate_exit(
+        bars=[bar],
+        current_bar=bar,
+        position_side="short",
+        avg_entry_price=100.0,
+        bars_held=1,
+    )
+
+    assert decision.force_exit is True
+    assert decision.reason == "position_drawdown_stop"
+
+
+def test_risk_manager_evaluate_exit_does_not_trigger_drawdown_stop_within_budget() -> None:
+    """A short move that hasn't reached the drawdown threshold should not be force-closed."""
+    bar = OHLCVBar(
+        exchange="mock",
+        symbol="BTC/NOK",
+        interval_seconds=60,
+        timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        open=103.0,
+        high=103.0,
+        low=103.0,
+        close=103.0,
+        volume=10.0,
+    )
+    manager = RiskManager(RiskControlConfig(position_drawdown_stop_pct=0.05))
+
+    decision = manager.evaluate_exit(
+        bars=[bar],
+        current_bar=bar,
+        position_side="short",
+        avg_entry_price=100.0,
+        bars_held=1,
+    )
+
+    assert decision.force_exit is False
+
+
 def test_risk_manager_evaluate_exit_ignores_flat_position() -> None:
     """A flat position (no side, no entry price) should never be force-closed."""
     bar = OHLCVBar(

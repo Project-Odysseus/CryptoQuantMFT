@@ -122,6 +122,10 @@ def build_runtime_orchestrator(
             time_stop_bars=60,
             atr_stop_multiplier=3.0,
             atr_window=14,
+            # A plain percentage stop against entry, on top of the ATR stop
+            # above: cuts a position (long or short) once it's down this much
+            # from entry, regardless of ATR-implied distance.
+            position_drawdown_stop_pct=0.05,
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
@@ -137,6 +141,15 @@ def build_runtime_orchestrator(
         exchange_name=effective_exchange,
         enable_tax_logging=(runtime_config.mode == "live"),
         strategy_id=runtime_config.strategy_name,
+        # PaperTradingEngine.run() (used by "paper") has always allowed
+        # shorting unconditionally, regardless of this flag - it only gates
+        # the exchange-backed run_exchange_cycle() path (live_dry_run/live).
+        # Reflect that here so the startup banner is accurate for paper too.
+        # live_dry_run always routes through the sandbox adapter regardless
+        # of exchange, so enabling it there can never reach a real order;
+        # --runtime live must never get allow_short=True (real Kraken/Firi
+        # spot has no margin/short capability).
+        allow_short=(runtime_config.mode in {"paper", "live_dry_run"}),
     )
     strategy = resolve_strategy(runtime_config.strategy_name, **runtime_config.strategy_params)
     # Derive the primary trading symbol from the first connector so bars and

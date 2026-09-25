@@ -334,14 +334,26 @@ class ExecutionAdapter:
             previous_position_size = self._positions.get(position_symbol, 0.0)
             new_position_size = previous_position_size + fill_delta
             self._positions[position_symbol] = new_position_size
-            if previous_position_size <= 0.0:
+            if new_position_size < 0.0:
+                pass  # partial cover of an existing short; its entry price/opened_at are unchanged
+            elif new_position_size == 0.0:
+                self._positions.pop(position_symbol, None)
+                self._position_opened_at.pop(position_symbol, None)
+                self._position_entry_price.pop(position_symbol, None)
+            elif previous_position_size < 0.0:
+                # Flipped from short to long within a single fill: the long
+                # is a fresh position starting at this fill, not an average
+                # with the short it just closed out of.
                 self._position_opened_at[position_symbol] = order.timestamp
                 self._position_entry_price[position_symbol] = price
             else:
+                # Already flat or long; this fill opens or adds to the long.
                 previous_entry_price = self._position_entry_price.get(position_symbol, price)
                 self._position_entry_price[position_symbol] = (
                     previous_entry_price * previous_position_size + price * fill_delta
                 ) / new_position_size
+                if previous_position_size == 0.0:
+                    self._position_opened_at[position_symbol] = order.timestamp
         elif order.side == "sell":
             fill_delta = filled_size - previous_fill_size
             if fill_delta <= 0.0:
@@ -349,11 +361,29 @@ class ExecutionAdapter:
             price = float(fill_price or order.price or 0.0)
             fee_delta = max(0.0, (fee or 0.0) - previous_fee)
             self._balances[base_currency] = self._balances.get(base_currency, 0.0) + (fill_delta * price) - fee_delta
-            self._positions[position_symbol] = max(0.0, self._positions.get(position_symbol, 0.0) - fill_delta)
-            if self._positions[position_symbol] == 0.0:
+            previous_position_size = self._positions.get(position_symbol, 0.0)
+            new_position_size = previous_position_size - fill_delta
+            self._positions[position_symbol] = new_position_size
+            if new_position_size > 0.0:
+                pass  # partial reduction of an existing long; its entry price/opened_at are unchanged
+            elif new_position_size == 0.0:
                 self._positions.pop(position_symbol, None)
                 self._position_opened_at.pop(position_symbol, None)
                 self._position_entry_price.pop(position_symbol, None)
+            elif previous_position_size > 0.0:
+                # Flipped from long to short within a single fill: the short
+                # is a fresh position starting at this fill, not an average
+                # with the long it just closed out of.
+                self._position_opened_at[position_symbol] = order.timestamp
+                self._position_entry_price[position_symbol] = price
+            else:
+                # Already flat or short; this fill opens or adds to the short.
+                previous_entry_price = self._position_entry_price.get(position_symbol, price)
+                self._position_entry_price[position_symbol] = (
+                    previous_entry_price * abs(previous_position_size) + price * fill_delta
+                ) / abs(new_position_size)
+                if previous_position_size == 0.0:
+                    self._position_opened_at[position_symbol] = order.timestamp
 
     def _position_symbol(self, symbol: str | None) -> str:
         if not symbol:

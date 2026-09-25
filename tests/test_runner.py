@@ -67,3 +67,17 @@ def test_strategy_registry_can_resolve_volume_confirmed_momentum_strategy() -> N
     strategy = resolve_strategy("volume_confirmed_momentum", registry=registry, lookback=5, volume_multiplier=2.0)
 
     assert callable(strategy)
+
+
+def test_strategy_registry_reports_short_capability() -> None:
+    """The registry should expose whether each registered strategy can emit a short signal."""
+    registry = StrategyRegistry()
+
+    assert registry.can_short("moving_average_crossover") is True
+    assert registry.can_short("volume_confirmed_momentum") is True
+
+    def long_only_stub(**_: object) -> object:
+        return lambda history, index, bar: 0
+
+    registry.register("long_only_stub", long_only_stub, can_short=False)
+    assert registry.can_short("long_only_stub") is False

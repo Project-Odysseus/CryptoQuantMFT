@@ -326,6 +326,89 @@ def test_exchange_cycle_closes_existing_long_on_sell_signal() -> None:
     assert result.portfolio_history[-1].position_size == 0.0
 
 
+def test_exchange_cycle_blocks_short_entry_by_default() -> None:
+    """Exchange-backed cycles should still refuse to open a short unless allow_short is set."""
+    from src.execution.adapters import SandboxExecutionAdapter
+
+    adapter = SandboxExecutionAdapter(exchange_name="kraken")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._base_currency = "EUR"
+    bars = [
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=68000.0,
+            high=68000.0,
+            low=68000.0,
+            close=68000.0,
+            volume=10.0,
+        )
+    ]
+    engine = PaperTradingEngine(execution_adapter=adapter, exchange_name="kraken", allow_short=False)
+
+    result = engine.run_exchange_cycle(bars, [-1.0])
+
+    assert result.trades == []
+    assert result.entry_decisions
+    assert result.entry_decisions[-1]["reason"] == "spot_shorting_disabled"
+    assert result.portfolio_history[-1].position_size == 0.0
+
+
+def test_exchange_cycle_opens_and_closes_a_short_when_allowed() -> None:
+    """With allow_short=True, exchange-backed cycles should open a short on a sell signal and cover it on a buy signal."""
+    from src.execution.adapters import SandboxExecutionAdapter
+
+    adapter = SandboxExecutionAdapter(exchange_name="kraken")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._base_currency = "EUR"
+    engine = PaperTradingEngine(
+        execution_adapter=adapter,
+        exchange_name="kraken",
+        default_order_size=1.0,
+        allow_short=True,
+    )
+
+    open_bar = [
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=68000.0,
+            high=68000.0,
+            low=68000.0,
+            close=68000.0,
+            volume=10.0,
+        )
+    ]
+    open_result = engine.run_exchange_cycle(open_bar, [-1.0])
+
+    assert len(open_result.trades) == 1
+    assert open_result.trades[0].side == "sell"
+    assert open_result.portfolio_history[-1].position_size < 0.0
+
+    close_bar = open_bar + [
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+            open=67000.0,
+            high=67000.0,
+            low=67000.0,
+            close=67000.0,
+            volume=10.0,
+        )
+    ]
+    close_result = engine.run_exchange_cycle(close_bar, [-1.0, 1.0])
+
+    assert len(close_result.trades) == 1
+    assert close_result.trades[0].side == "buy"
+    assert close_result.portfolio_history[-1].position_size == 0.0
+
+
 def test_exchange_cycle_force_closes_position_on_time_stop_without_exit_signal() -> None:
     """Exchange-backed cycles should force-close a stale position using the adapter's real entry state, even with no exit signal."""
     from src.execution.adapters import SandboxExecutionAdapter

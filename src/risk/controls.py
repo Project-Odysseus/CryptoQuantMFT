@@ -69,6 +69,12 @@ class RiskControlConfig:
     time_stop_bars: int | None = None
     atr_stop_multiplier: float | None = None
     atr_window: int = 14
+    # A fixed percentage stop against the entry price, independent of ATR.
+    # Applies to either side: a long is stopped if price falls this far below
+    # entry, a short if price rises this far above entry. This is the plain
+    # "cut it if it's down N%" stop, distinct from the ATR stop's volatility-
+    # scaled distance.
+    position_drawdown_stop_pct: float | None = None
     # When True, skip execution-quality checks (spread/slippage/volatility) that
     # are only meaningful for live fills.  Paper trading does not have real
     # execution risk so these checks just prevent signals from filling.
@@ -280,6 +286,16 @@ class RiskManager:
         """
         if position_side not in {"long", "short"} or avg_entry_price is None:
             return ExitDecision(force_exit=False)
+
+        drawdown_stop_pct = self.config.position_drawdown_stop_pct
+        if drawdown_stop_pct is not None and drawdown_stop_pct > 0.0 and avg_entry_price > 0.0:
+            current_price = _get_close(current_bar)
+            if position_side == "long":
+                adverse_pct = (avg_entry_price - current_price) / avg_entry_price
+            else:
+                adverse_pct = (current_price - avg_entry_price) / avg_entry_price
+            if adverse_pct >= drawdown_stop_pct:
+                return ExitDecision(force_exit=True, reason="position_drawdown_stop")
 
         time_stop_bars = self.config.time_stop_bars
         if time_stop_bars is not None and time_stop_bars > 0 and bars_held >= time_stop_bars:
