@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.backtest.costs import build_default_cost_model
 from src.backtest.runner import BacktestConfig, StrategyRegistry
-from src.backtest.simple_backtest import (
+from src.backtest.strategies import (
     band_reversion_strategy,
     make_long_only,
     make_regime_gated,

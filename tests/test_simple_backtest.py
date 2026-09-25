@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from src.backtest import SimpleBacktester, moving_average_crossover_strategy
 from src.backtest.costs import CostModel
-from src.backtest.simple_backtest import band_reversion_strategy, make_long_only, make_regime_gated, volume_confirmed_momentum_strategy, volume_confirmed_momentum_biased_strategy
+from src.backtest.strategies import band_reversion_strategy, make_long_only, make_regime_gated, volume_confirmed_momentum_strategy, volume_confirmed_momentum_biased_strategy
 from src.risk.controls import RiskControlConfig, RiskManager
 from src.storage.bar_aggregator import OHLCVBar
 
@@ -390,3 +392,24 @@ def test_make_regime_gated_blocks_signal_outside_required_regime() -> None:
 
     gated_for_ranging = make_regime_gated(always_long, required_regime="ranging", regime_window=20)
     assert gated_for_ranging(choppy_history, len(choppy_history) - 1, choppy_history[-1]) == 1
+
+
+def test_backtester_marks_open_positions_to_market_every_bar() -> None:
+    """MTM equity should move with price while a position is open and match realized equity once flat."""
+    closes = [100.0, 100.0, 110.0, 120.0, 90.0]
+    signals = iter([1, 1, 1, 0])
+
+    def scripted(history, index, current_bar) -> int:
+        return next(signals)
+
+    bars = [_bar(close=close, volume=1.0, index=index) for index, close in enumerate(closes)]
+    result = SimpleBacktester(strategy=scripted).run(bars)
+
+    assert len(result.mtm_equity_series) == len(bars)
+    assert result.position_series == [0.0, 1.0, 1.0, 1.0, 0.0]
+    assert result.mtm_equity_series[2] == pytest.approx(110.0)
+    assert result.mtm_equity_series[3] == pytest.approx(120.0)
+    # Realized equity stays flat until the exit, MTM already showed the gain.
+    assert result.equity_series[3] == 100.0
+    assert result.mtm_equity_series[-1] == pytest.approx(result.equity_series[-1])
+    assert result.equity_series[-1] == pytest.approx(90.0)

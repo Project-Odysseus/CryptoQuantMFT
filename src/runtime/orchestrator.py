@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from src.backtest.runner import StrategyRegistry
-from src.backtest.simple_backtest import moving_average_crossover_strategy
+from src.backtest.strategies import moving_average_crossover_strategy
 from src.runtime.config import RuntimeConfig
 from src.execution.paper_trading import PaperTradingEngine
 from src.execution.reconciliation import SessionAccountStateTracker

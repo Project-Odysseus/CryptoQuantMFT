@@ -6,7 +6,21 @@ from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
-from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, band_reversion_strategy, momentum_breakout_strategy, moving_average_crossover_strategy, signal_trend_strategy, volume_confirmed_momentum_strategy, volume_confirmed_momentum_biased_strategy
+from src.backtest.simple_backtest import BacktestResult, SimpleBacktester
+from src.backtest.strategies import (
+    band_reversion_strategy,
+    donchian_breakout_strategy,
+    keltner_breakout_strategy,
+    momentum_breakout_strategy,
+    moving_average_crossover_strategy,
+    rsi_reversion_strategy,
+    signal_trend_strategy,
+    trend_pullback_strategy,
+    trend_tstat_strategy,
+    volatility_squeeze_strategy,
+    volume_confirmed_momentum_biased_strategy,
+    volume_confirmed_momentum_strategy,
+)
 from src.risk.controls import RiskControlConfig, RiskManager
 
 
@@ -53,6 +67,12 @@ class StrategyRegistry:
             "volume_confirmed_momentum": volume_confirmed_momentum_strategy,
             "volume_confirmed_momentum_biased": volume_confirmed_momentum_biased_strategy,
             "band_reversion": band_reversion_strategy,
+            "donchian_breakout": donchian_breakout_strategy,
+            "keltner_breakout": keltner_breakout_strategy,
+            "trend_tstat": trend_tstat_strategy,
+            "volatility_squeeze": volatility_squeeze_strategy,
+            "rsi_reversion": rsi_reversion_strategy,
+            "trend_pullback": trend_pullback_strategy,
         }
         # Whether each strategy can emit a short (-1) signal at all. This is
         # about the signal itself, not whether a given runtime mode is
@@ -67,6 +87,12 @@ class StrategyRegistry:
             "volume_confirmed_momentum": True,
             "volume_confirmed_momentum_biased": True,
             "band_reversion": True,
+            "donchian_breakout": True,
+            "keltner_breakout": True,
+            "trend_tstat": True,
+            "volatility_squeeze": True,
+            "rsi_reversion": True,
+            "trend_pullback": True,
         }
 
     def register(self, name: str, strategy: Any, *, can_short: bool = True) -> None:

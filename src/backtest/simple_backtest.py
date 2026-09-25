@@ -48,6 +48,11 @@ class BacktestResult:
     trade_records: list[TradeRecord] = field(default_factory=list)
     trade_costs: list[float] = field(default_factory=list)
     metrics: PerformanceMetrics = field(default_factory=PerformanceMetrics)
+    # `equity_series` only moves when a trade closes. These two are marked to
+    # market every bar (one entry per input bar), which is what Sharpe,
+    # drawdown and period-by-period returns should be computed from.
+    mtm_equity_series: list[float] = field(default_factory=list)
+    position_series: list[float] = field(default_factory=list)
 
 
 class SimpleBacktester:
@@ -84,6 +89,8 @@ class SimpleBacktester:
         trade_count = 0
         wins = 0
         equity_series: list[float] = [equity]
+        mtm_equity_series: list[float] = [equity]
+        position_series: list[float] = [0.0]
         timestamps: list[datetime] = [_get_timestamp(bars[0])]
         trade_prices: list[float] = []
         trade_timestamps: list[datetime] = []
@@ -348,6 +355,14 @@ class SimpleBacktester:
 
             peak_equity = max(peak_equity, equity)
             equity_series.append(equity)
+            if current_position != 0.0 and entry_price is not None:
+                price_move = (close_price - entry_price) / entry_price
+                unrealized_pct = price_move if current_position > 0.0 else -price_move
+                mtm_equity_series.append(equity * (1.0 + entry_size * unrealized_pct))
+                position_series.append(current_position * entry_size)
+            else:
+                mtm_equity_series.append(equity)
+                position_series.append(0.0)
             timestamps.append(timestamp)
 
         drawdown = 0.0
@@ -378,6 +393,8 @@ class SimpleBacktester:
             trade_sizes=trade_sizes,
             trade_records=trade_records,
             trade_costs=trade_costs,
+            mtm_equity_series=mtm_equity_series,
+            position_series=position_series,
             metrics=metrics,
         )
 
@@ -437,235 +454,6 @@ class SimpleBacktester:
             current_notional=current_notional,
             open_positions=open_positions,
         )
-
-
-def moving_average_crossover_strategy(short_window: int = 3, long_window: int = 6) -> StrategyFn:
-    """Create a simple moving-average crossover strategy for any OHLC-like series."""
-
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Generate the signal strategy output for the current market context."""
-        if len(history) < max(short_window, long_window):
-            return 0
-        closes = [_get_close(bar) for bar in history[-long_window:]]
-        short_ma = sum(closes[-short_window:]) / short_window
-        long_ma = sum(closes) / len(closes)
-        if short_ma > long_ma:
-            return 1
-        if short_ma < long_ma:
-            return -1
-        return 0
-
-    return strategy
-
-
-def momentum_breakout_strategy(lookback: int = 5, threshold: float = 0.01) -> StrategyFn:
-    """Create a simple momentum breakout strategy for any OHLC-like series."""
-
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Generate a long/short signal based on recent momentum."""
-        if len(history) < lookback + 1:
-            return 0
-
-        baseline_bar = history[-lookback - 1]
-        current_close = _get_close(current_bar)
-        baseline_close = _get_close(baseline_bar)
-        if baseline_close <= 0:
-            return 0
-
-        return_pct = (current_close - baseline_close) / baseline_close
-        if return_pct > threshold:
-            return 1
-        if return_pct < -threshold:
-            return -1
-        return 0
-
-    return strategy
-
-
-def signal_trend_strategy(lookback: int = 1, threshold: float = 0.001) -> StrategyFn:
-    """Create a simple signal-following strategy that reacts quickly to recent price moves."""
-
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Generate a long/short signal based on the recent price change."""
-        if len(history) < lookback + 1:
-            return 0
-
-        baseline_bar = history[-lookback - 1]
-        current_close = _get_close(current_bar)
-        baseline_close = _get_close(baseline_bar)
-        if baseline_close <= 0:
-            return 0
-
-        return_pct = (current_close - baseline_close) / baseline_close
-        if return_pct > threshold:
-            return 1
-        if return_pct < -threshold:
-            return -1
-        return 0
-
-    return strategy
-
-
-def volume_confirmed_momentum_strategy(
-    lookback: int = 5,
-    threshold: float = 0.01,
-    volume_window: int = 10,
-    volume_multiplier: float = 1.5,
-    short_threshold: float | None = None,
-    short_volume_multiplier: float | None = None,
-    allow_short: bool = True,
-) -> StrategyFn:
-    """Create a momentum strategy that only signals when the move is confirmed by above-average volume.
-
-    Args:
-        short_threshold: Price-move threshold required for a short signal. Defaults
-            to ``threshold`` (symmetric). Pass a larger value to require a bigger
-            confirmed drop before shorting than before going long.
-        short_volume_multiplier: Volume-spike multiplier required for a short
-            signal. Defaults to ``volume_multiplier`` (symmetric). Pass a larger
-            value to require heavier volume confirmation before shorting.
-        allow_short: When False, never emit a short signal at all (flat instead),
-            regardless of how the price/volume conditions resolve.
-    """
-    resolved_short_threshold = threshold if short_threshold is None else short_threshold
-    resolved_short_volume_multiplier = volume_multiplier if short_volume_multiplier is None else short_volume_multiplier
-
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Generate a long/short signal only when price momentum is confirmed by a volume spike."""
-        if len(history) < lookback + 1:
-            return 0
-
-        baseline_bar = history[-lookback - 1]
-        current_close = _get_close(current_bar)
-        baseline_close = _get_close(baseline_bar)
-        if baseline_close <= 0:
-            return 0
-
-        return_pct = (current_close - baseline_close) / baseline_close
-        is_bullish = return_pct > 0
-        active_threshold = threshold if is_bullish else resolved_short_threshold
-        if abs(return_pct) <= active_threshold:
-            return 0
-        if not is_bullish and not allow_short:
-            return 0
-
-        # Compare this bar's volume to the average of the *preceding* bars,
-        # not including this bar itself - including it would dilute the
-        # baseline with the very spike this signal is trying to detect.
-        prior_bars = history[-volume_window - 1 : -1]
-        if len(prior_bars) < volume_window:
-            return 0
-        avg_volume = sum(_get_volume(bar) for bar in prior_bars) / len(prior_bars)
-        current_volume = _get_volume(current_bar)
-        active_multiplier = volume_multiplier if is_bullish else resolved_short_volume_multiplier
-        if avg_volume <= 0.0 or current_volume < avg_volume * active_multiplier:
-            return 0
-
-        return 1 if is_bullish else -1
-
-    return strategy
-
-
-def volume_confirmed_momentum_biased_strategy(
-    lookback: int = 5,
-    threshold: float = 0.01,
-    volume_window: int = 10,
-    volume_multiplier: float = 1.5,
-    short_threshold_multiplier: float = 2.0,
-    short_volume_multiplier_factor: float = 1.5,
-) -> StrategyFn:
-    """Long-biased variant of volume_confirmed_momentum_strategy.
-
-    Longs use the plain thresholds; shorts require a bigger confirmed move
-    (``threshold * short_threshold_multiplier``) and heavier volume
-    confirmation (``volume_multiplier * short_volume_multiplier_factor``),
-    so the strategy leans long without being long-only.
-    """
-    return volume_confirmed_momentum_strategy(
-        lookback=lookback,
-        threshold=threshold,
-        volume_window=volume_window,
-        volume_multiplier=volume_multiplier,
-        short_threshold=threshold * short_threshold_multiplier,
-        short_volume_multiplier=volume_multiplier * short_volume_multiplier_factor,
-    )
-
-
-def band_reversion_strategy(window: int = 20, num_std: float = 2.0, allow_short: bool = True) -> StrategyFn:
-    """Create a mean-reversion strategy that trades against moves outside a rolling price band.
-
-    Computes a rolling mean and standard deviation over `window` bars
-    (a Bollinger-Band-style channel) and bets on reversion back toward the
-    mean: buy when price closes below the lower band, sell/short when it
-    closes above the upper band. This is deliberately the opposite bet to
-    the momentum-family strategies above - useful when a market is ranging
-    rather than trending.
-    """
-
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Generate a reversion signal when price closes outside the rolling band."""
-        if len(history) < window + 1:
-            return 0
-
-        prior_closes = [_get_close(bar) for bar in history[-window - 1 : -1]]
-        band_mean = sum(prior_closes) / len(prior_closes)
-        variance = sum((close - band_mean) ** 2 for close in prior_closes) / len(prior_closes)
-        band_std = variance**0.5
-        if band_std <= 0.0:
-            return 0
-
-        current_close = _get_close(current_bar)
-        lower_band = band_mean - num_std * band_std
-        upper_band = band_mean + num_std * band_std
-        if current_close < lower_band:
-            return 1
-        if current_close > upper_band and allow_short:
-            return -1
-        return 0
-
-    return strategy
-
-
-def make_long_only(strategy_fn: StrategyFn) -> StrategyFn:
-    """Wrap any strategy so short signals (-1) are suppressed to flat (0).
-
-    Lets any existing strategy be tested as a long-only variant without
-    duplicating its signal logic - e.g. to check whether a symmetric
-    strategy's shorts are actually adding value or just adding noise.
-    """
-
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Pass through the wrapped strategy's signal, flattening any short."""
-        signal = _normalize_signal(strategy_fn(history, index, current_bar))
-        return signal if signal > 0 else 0
-
-    return strategy
-
-
-def make_regime_gated(
-    strategy_fn: StrategyFn,
-    *,
-    required_regime: str = "trending",
-    regime_window: int = 20,
-    trending_threshold: float = 0.3,
-) -> StrategyFn:
-    """Wrap a strategy so it only signals while the market is in `required_regime`.
-
-    Uses `classify_regime` (efficiency-ratio based) on the same bar history
-    the strategy already receives, so momentum-family strategies can be
-    restricted to trending stretches (or a reversion strategy to ranging
-    ones) without a separate data feed.
-    """
-    from src.signals.regime import classify_regime
-
-    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
-        """Pass through the wrapped strategy's signal only in the required regime."""
-        regime = classify_regime(history, window=regime_window, trending_threshold=trending_threshold)
-        if regime != required_regime:
-            return 0
-        return strategy_fn(history, index, current_bar)
-
-    return strategy
 
 
 def _normalize_signal(raw_signal: float | int | str | None) -> float:
