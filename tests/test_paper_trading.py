@@ -259,6 +259,116 @@ def test_paper_trading_engine_sizes_buy_orders_to_available_cash() -> None:
     assert result.orders[0].size == 0.02
 
 
+def test_exchange_cycle_reconciles_async_fill_and_avoids_duplicate_entry() -> None:
+    """A real exchange order that fills asynchronously should be detected, logged, and not re-entered."""
+
+    class AsyncFillExecutionAdapter:
+        exchange_name = "kraken"
+        name = "kraken"
+        _base_currency = "EUR"
+
+        def __init__(self) -> None:
+            self._balances = {"EUR": 1000.0}
+            self._positions: dict[str, float] = {}
+            self._orders: list[SimpleNamespace] = []
+
+        def list_orders(self) -> list[SimpleNamespace]:
+            return list(self._orders)
+
+        def get_account_snapshot(self) -> dict[str, object]:
+            return {"balances": dict(self._balances), "positions": dict(self._positions), "account_reconciliation": {}}
+
+        def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
+            order = SimpleNamespace(
+                order_id=order_id,
+                side=side,
+                size=size,
+                symbol=symbol,
+                exchange=self.exchange_name,
+                status="SUBMITTED",
+                filled_size=0.0,
+                fill_price=None,
+                fee=0.0,
+                timestamp=timestamp,
+            )
+            self._orders.append(order)
+            return ExecutionReport(order_id=order_id, status="SUBMITTED", message="submitted to kraken")
+
+        def recover_execution_state(self, *, remote_snapshot: dict[str, object] | None = None, remote_orders: object | None = None) -> dict[str, object]:
+            # Simulate the exchange reporting a real fill on the next poll,
+            # exactly like a real Kraken limit order filling asynchronously
+            # after submit_order() already returned SUBMITTED.
+            for order in self._orders:
+                if order.status == "SUBMITTED":
+                    order.status = "FILLED"
+                    order.filled_size = order.size
+                    order.fill_price = 68000.0
+                    order.fee = 0.01
+                    self._balances["EUR"] -= order.size * 68000.0 + 0.01
+                    self._positions["BTC"] = self._positions.get("BTC", 0.0) + order.size
+            return {}
+
+    class FakeTradeLogger:
+        def __init__(self) -> None:
+            self.trades: list[dict[str, object]] = []
+
+        def log_event(self, **_: object) -> int:
+            return 1
+
+        def log_trade(self, **kwargs: object) -> tuple[int, None]:
+            self.trades.append(kwargs)
+            return 1, None
+
+        def log_equity_snapshot(self, **_: object) -> int:
+            return 1
+
+    logger = FakeTradeLogger()
+    adapter = AsyncFillExecutionAdapter()
+    engine = PaperTradingEngine(execution_adapter=adapter, exchange_name="kraken", default_order_size=1.0, trade_logger=logger)
+
+    bar1 = [
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+            open=68000.0,
+            high=68000.0,
+            low=68000.0,
+            close=68000.0,
+            volume=10.0,
+        )
+    ]
+    first = engine.run_exchange_cycle(bar1, [1.0])
+    assert first.trades == []  # submitted, not yet filled
+    assert len(adapter.list_orders()) == 1
+
+    bar2 = bar1 + [
+        OHLCVBar(
+            exchange="kraken",
+            symbol="BTC/EUR",
+            interval_seconds=60,
+            timestamp=datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+            open=68000.0,
+            high=68000.0,
+            low=68000.0,
+            close=68000.0,
+            volume=10.0,
+        )
+    ]
+    order_size = adapter.list_orders()[0].size
+    second = engine.run_exchange_cycle(bar2, [1.0, 1.0])
+
+    assert len(second.trades) == 1
+    assert second.trades[0].size == order_size
+    assert second.trades[0].price == 68000.0
+    assert second.portfolio_history[-1].position_size == order_size
+    # Still just the one real order - the fill was recognized, so the
+    # still-bullish signal did not trigger a second buy.
+    assert len(adapter.list_orders()) == 1
+    assert len(logger.trades) == 1
+
+
 def test_exchange_cycle_closes_existing_long_on_sell_signal() -> None:
     """Exchange-backed runtime cycles should close an existing long when the strategy flips sell."""
 

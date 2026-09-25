@@ -140,6 +140,13 @@ class PaperTradingEngine:
         # adapter each cycle rather than carried in local variables).
         self._exchange_current_day: Any | None = None
         self._exchange_day_start_equity: float | None = None
+        # Tracks, per order id, how much of that order's filled_size has
+        # already been logged as a trade via exchange reconciliation - a
+        # real exchange order fills asynchronously (submit_order returns
+        # SUBMITTED, not FILLED), so run_exchange_cycle must poll for fills
+        # that happened between cycles rather than assume flat/no-fill.
+        # Keyed by order id so a partial fill only logs its new delta.
+        self._reconciled_fill_size_by_order_id: dict[str, float] = {}
 
     def run(self, bars: Sequence[Any], signals: Sequence[float | int | str | None]) -> PaperTradingResult:
         """Process a stream of bars and signals into simulated orders and fills."""
@@ -528,7 +535,7 @@ class PaperTradingEngine:
         timestamp = _get_timestamp(bar)
         symbol = _get_symbol(bar)
         entry_decisions: list[dict[str, Any]] = []
-        trades: list[PaperTrade] = []
+        trades: list[PaperTrade] = list(self._reconcile_exchange_fills(timestamp=timestamp))
         cycle_orders: list[PaperOrder] = []
         adapter_orders = list(getattr(self.execution_adapter, "list_orders", lambda: [])() or [])
         open_orders = [
@@ -1042,6 +1049,83 @@ class PaperTradingEngine:
             fee=cost,
             cost=cost,
         )
+
+    def _reconcile_exchange_fills(self, *, timestamp: datetime) -> list[PaperTrade]:
+        """Poll the exchange adapter for real fills on previously-submitted orders and log any newly-observed fill.
+
+        A real exchange order submitted via submit_order() returns SUBMITTED,
+        not FILLED - the fill happens asynchronously on the exchange. Without
+        this, the adapter's local balances/positions and the trade log both
+        stay stale after a real fill, which lets the next cycle re-enter a
+        position it already holds. Short-circuits (no adapter call at all)
+        once nothing is pending, so a steady-state flat/no-open-orders cycle
+        does not keep polling the exchange for no reason.
+        """
+        if self.execution_adapter is None:
+            return []
+        list_orders = getattr(self.execution_adapter, "list_orders", None)
+        recover = getattr(self.execution_adapter, "recover_execution_state", None)
+        if not callable(list_orders) or not callable(recover):
+            return []
+
+        pending_orders = [order for order in list_orders() if getattr(order, "status", None) not in {"FILLED", "CANCELED", "REJECTED", "NOT_FOUND"}]
+        if not pending_orders:
+            return []
+
+        try:
+            recover()
+        except Exception as exc:
+            if self.trade_logger is not None:
+                self.trade_logger.log_event(
+                    timestamp=timestamp,
+                    level="ERROR",
+                    event_type="exchange_reconciliation_error",
+                    message="failed to reconcile exchange order state against real fills",
+                    source="paper_trading",
+                    metadata={"error": str(exc)},
+                )
+            return []
+
+        new_trades: list[PaperTrade] = []
+        for order in list_orders():
+            if getattr(order, "status", None) not in {"FILLED", "PARTIALLY_FILLED"}:
+                continue
+            total_filled = float(getattr(order, "filled_size", 0.0) or 0.0)
+            already_logged = self._reconciled_fill_size_by_order_id.get(order.order_id, 0.0)
+            new_fill_size = total_filled - already_logged
+            if new_fill_size <= 0.0:
+                continue
+            self._reconciled_fill_size_by_order_id[order.order_id] = total_filled
+
+            fill_price = float(getattr(order, "fill_price", None) or 0.0)
+            fee = float(getattr(order, "fee", 0.0) or 0.0)
+            new_trades.append(
+                PaperTrade(
+                    order_id=order.order_id,
+                    timestamp=timestamp,
+                    side=order.side,
+                    price=fill_price,
+                    size=new_fill_size,
+                    fee=fee,
+                    cost=fee,
+                )
+            )
+            if self.trade_logger is not None:
+                self.trade_logger.log_trade(
+                    timestamp=timestamp,
+                    source="paper_trading",
+                    exchange=getattr(order, "exchange", None) or self.exchange_name,
+                    pair=getattr(order, "symbol", None) or "unknown",
+                    side=order.side,
+                    price=fill_price,
+                    size=new_fill_size,
+                    fee=fee,
+                    role_maker_taker="taker",
+                    latency_ms=0,
+                    record_tax_event=self.enable_tax_logging,
+                    strategy_id=self.strategy_id,
+                )
+        return new_trades
 
     def _current_account_state(self, *, price: float, symbol: str | None) -> tuple[float, float, float | None, float, datetime | None]:
         account_snapshot = getattr(self.execution_adapter, "get_account_snapshot", lambda: {})() or {}
