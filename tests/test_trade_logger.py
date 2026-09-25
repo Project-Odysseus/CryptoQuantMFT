@@ -13,7 +13,7 @@ def test_trade_logger_persists_trade_and_equity_records(tmp_path: Path) -> None:
     logger = TradeLogger(database_path=tmp_path / "trades.db")
     timestamp = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
 
-    trade_id = logger.log_trade(
+    trade_id, tax_event_error = logger.log_trade(
         timestamp=timestamp,
         source="paper_trading",
         exchange="mock",
@@ -32,6 +32,7 @@ def test_trade_logger_persists_trade_and_equity_records(tmp_path: Path) -> None:
     )
 
     assert trade_id > 0
+    assert tax_event_error is None
     assert equity_id > 0
     assert len(logger.list_trades()) == 1
     assert len(logger.list_equity_snapshots()) == 1

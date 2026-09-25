@@ -156,8 +156,15 @@ class TradeLogger:
         role_maker_taker: str = "taker",
         latency_ms: int = 0,
         record_tax_event: bool = False,
-    ) -> int:
-        """Persist a single trade record."""
+    ) -> tuple[int, str | None]:
+        """Persist a single trade record.
+
+        Returns:
+            A ``(trade_id, tax_event_error)`` pair. ``tax_event_error`` is ``None``
+            when tax-ledger recording was skipped or succeeded, and holds the
+            error message when ``record_tax_event`` was requested but failed, so
+            callers can surface the failure instead of assuming success.
+        """
         with closing(sqlite3.connect(self.database_path)) as connection:
             cursor = connection.execute(
                 """
@@ -190,6 +197,7 @@ class TradeLogger:
             connection.commit()
         trade_id = int(cursor.lastrowid)
 
+        tax_event_error: str | None = None
         if record_tax_event:
             try:
                 self.record_trade_tax_events(
@@ -205,6 +213,7 @@ class TradeLogger:
                     role_maker_taker=role_maker_taker,
                 )
             except Exception as exc:
+                tax_event_error = str(exc)
                 self.log_event(
                     timestamp=timestamp,
                     level="ERROR",
@@ -213,7 +222,7 @@ class TradeLogger:
                     source=source,
                     metadata={"trade_id": trade_id, "pair": pair, "side": side, "error": str(exc)},
                 )
-        return trade_id
+        return trade_id, tax_event_error
 
     def log_event(self, *, timestamp: datetime, level: str, event_type: str, message: str, source: str, metadata: dict[str, Any] | None = None) -> int:
         """Persist a single operational event."""

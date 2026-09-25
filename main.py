@@ -1069,9 +1069,10 @@ def _run_kraken_order_submission(
     submission = adapter.submit_quote_order(symbol=symbol, quote_amount=quote_amount, side=side)
 
     persisted_trade_id: int | None = None
+    tax_event_error: str | None = None
     timestamp = datetime.fromisoformat(submission["timestamp"])
     if submission.get("status") in {"FILLED", "PARTIALLY_FILLED"} and submission.get("fill_price") and submission.get("filled_size"):
-        persisted_trade_id = trade_logger.log_trade(
+        persisted_trade_id, tax_event_error = trade_logger.log_trade(
             timestamp=timestamp,
             source="cli_manual_live_order",
             exchange="kraken",
@@ -1125,7 +1126,12 @@ def _run_kraken_order_submission(
     print(f"Fee: {float(submission.get('fee') or 0.0):.8f}")
     if persisted_trade_id is not None:
         print(f"Persisted trade id: {persisted_trade_id}")
-        print("Tax logging: recorded for this fill")
+        if tax_event_error is None:
+            print("Tax logging: recorded for this fill")
+        else:
+            print("Tax logging: FAILED — this fill has NO tax-ledger rows yet")
+            print(f"  reason: {tax_event_error}")
+            print("  fix: seed the required EUR fiat pool / asset lot, then backfill via TradeLogger.record_trade_tax_events")
     else:
         print("Tax logging: deferred until a filled trade is observed")
 
@@ -1155,9 +1161,10 @@ def _run_kraken_close_submission(
     submission = adapter.submit_close_position(symbol=symbol)
 
     persisted_trade_id: int | None = None
+    tax_event_error: str | None = None
     timestamp = datetime.fromisoformat(submission["timestamp"])
     if submission.get("status") in {"FILLED", "PARTIALLY_FILLED"} and submission.get("fill_price") and submission.get("filled_size"):
-        persisted_trade_id = trade_logger.log_trade(
+        persisted_trade_id, tax_event_error = trade_logger.log_trade(
             timestamp=timestamp,
             source="cli_manual_live_close",
             exchange="kraken",
@@ -1207,7 +1214,12 @@ def _run_kraken_close_submission(
     print(f"Fee: {float(submission.get('fee') or 0.0):.8f}")
     if persisted_trade_id is not None:
         print(f"Persisted trade id: {persisted_trade_id}")
-        print("Tax logging: recorded for this fill")
+        if tax_event_error is None:
+            print("Tax logging: recorded for this fill")
+        else:
+            print("Tax logging: FAILED — this fill has NO tax-ledger rows yet")
+            print(f"  reason: {tax_event_error}")
+            print("  fix: seed the required EUR fiat pool / asset lot, then backfill via TradeLogger.record_trade_tax_events")
     else:
         print("Tax logging: deferred until a filled trade is observed")
 

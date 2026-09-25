@@ -52,7 +52,7 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [x] add a guarded manual Kraken close-position command so the first live position can be exited without relying on the strategy runtime
     - [ ] confirm symbol mapping, balances, order IDs, and reconciliation shape against Kraken responses
       - [x] add a non-destructive closed-order history probe so real Kraken order payloads can be recovered and inspected without placing orders
-      - [ ] execute and inspect one tiny real Kraken round-trip so local state, persisted trades, and recovered exchange history can be compared end to end
+      - [x] execute and inspect one tiny real Kraken round-trip so local state, persisted trades, and recovered exchange history can be compared end to end (2026-09-18 BTC/EUR buy+sell; found and fixed a silent tax-ledger failure — see `todo_important.md`); exchange-history/order-ID cross-check still outstanding
       - [ ] re-run verification when the Kraken account has at least one historical or open order so real symbol/order-id mapping can be confirmed from populated exchange data
     - [ ] verify kill-switch and cancel paths against exchange-shaped state before any real order is allowed
       - [x] add a non-destructive kill-switch preview against recovered Kraken open-order state
@@ -100,8 +100,8 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [x] add a manual Kraken preview flow that checks notional sizing, minimum order rules, and `validate=true` acceptance before the first live order
     - [x] add a guarded manual Kraken submit flow that can place the first live order while reusing preview sizing and confirmation gates
     - [x] add a guarded manual Kraken close-position flow that can exit the first live order with the same style of confirmation and validation gates
-    - [ ] seed the real EUR starting balance/cost basis before the first live order
-    - [ ] verify the first real Kraken fill and first close together produce correct `REALIZED_PNL` / `TRADING_FEE` / `FIAT_CONVERSION` rows and annual summary output
+    - [x] seed the real EUR starting balance/cost basis before the first live order (done retroactively on 2026-09-25 after discovering it was skipped before the 2026-09-18 trade; fixed the CLI to surface this failure loudly going forward instead of relying on always seeding first)
+    - [x] verify the first real Kraken fill and first close together produce correct `REALIZED_PNL` / `TRADING_FEE` / `FIAT_CONVERSION` rows and annual summary output (backfilled and verified for the 2026-09-18 round-trip; see `todo_important.md`)
     - [ ] export the first real trading year ledger and spot-check it against exchange history
 
 - [ ] **Priority 3B: Manual Trading and Live-Control Closeout**
