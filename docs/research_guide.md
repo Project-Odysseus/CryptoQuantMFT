@@ -222,8 +222,8 @@ row naming those columns. `--lookback-days` trims it.
   single biggest improvement to confidence.
 - **Per-symbol, not portfolio.** Each symbol is traded alone with 100% of equity. Combining strategies and symbols
   is the portfolio stage.
-- **No stop-loss research yet.** After a forced exit the backtester re-enters on the next bar if the signal still
-  says "long", which defeats a stop. That needs fixing before stops can be evaluated.
+- **No stop-loss research yet.** Research runs have no risk overlay. The engine now keeps a stopped-out side flat
+  until the signal resets, so stops could be added to research runs as a next step.
 - **Running a researched timeframe.** The runtime can now trade the same bars the research used:
   `--bar-interval 4h` (or `1d`, ...) builds bars of that length regardless of the polling interval, the strategy
   only acts when a bar completes, and `--warmup-bars 200` loads recent history at startup so long windows work

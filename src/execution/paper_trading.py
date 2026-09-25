@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
-from src.risk.controls import CircuitBreaker, RiskManager
+from src.risk.controls import CircuitBreaker, RiskManager, gate_reentry
 from src.risk.kill_switch import KillSwitchController
 from src.storage.trade_logger import TradeLogger
 
@@ -137,6 +137,9 @@ class PaperTradingEngine:
         # Perpetual futures: book realized PnL, fees and funding from a margin adapter into the tax ledger.
         self.record_derivative_ledger = record_derivative_ledger
         self._derivative_ledger_seen: dict[str, float] | None = None
+        # Side ("long"/"short") a risk stop just closed. Re-entering it waits until the strategy's signal has
+        # left that side at least once, so a stop can't be undone on the next bar by an unchanged signal.
+        self._reentry_block: str | None = None
         self._order_counter = 0
         # Instance-level so the daily-loss reference survives across cycles
         # within one running process (exchange-cycle mode has no other place
@@ -175,8 +178,9 @@ class PaperTradingEngine:
         current_day: Any | None = None
         day_start_equity = self.initial_cash
 
+        reentry_block: str | None = None
         for index, bar in enumerate(bars):
-            signal = _normalize_signal(signals[index])
+            signal, reentry_block, _blocked = gate_reentry(_normalize_signal(signals[index]), reentry_block)
             price = _get_close(bar)
             timestamp = _get_timestamp(bar)
             current_equity = cash + (position_size * price if position_size else 0.0)
@@ -318,6 +322,7 @@ class PaperTradingEngine:
 
             if not active_orders and forced_exit_reason is not None:
                 exit_side = "sell" if position_size > 0.0 else "buy"
+                reentry_block = "long" if position_size > 0.0 else "short"
                 order = self._create_order(timestamp=timestamp, side=exit_side, size=abs(position_size), bar=bar)
                 order.last_reason = forced_exit_reason
                 active_orders.append(order)
@@ -534,7 +539,8 @@ class PaperTradingEngine:
             raise ValueError("exchange-backed cycles require an execution adapter")
 
         bar = bars[-1]
-        signal = _normalize_signal(signals[-1])
+        raw_signal = _normalize_signal(signals[-1])
+        signal, self._reentry_block, reentry_blocked = gate_reentry(raw_signal, self._reentry_block)
         price = _get_close(bar)
         timestamp = _get_timestamp(bar)
         symbol = _get_symbol(bar)
@@ -573,6 +579,21 @@ class PaperTradingEngine:
             if exit_decision.force_exit:
                 forced_exit_reason = exit_decision.reason
 
+        if reentry_blocked and position_size == 0.0 and not open_orders:
+            self._record_entry_decision(
+                decisions=entry_decisions,
+                signal=raw_signal,
+                side="buy" if raw_signal > 0.0 else "sell",
+                allowed=False,
+                reason="reentry_after_forced_exit",
+                price=price,
+                timestamp=timestamp,
+                order_size=0.0,
+                cash=cash,
+                position_size=position_size,
+                equity=current_equity,
+            )
+
         if open_orders:
             self._record_entry_decision(
                 decisions=entry_decisions,
@@ -589,6 +610,7 @@ class PaperTradingEngine:
             )
         elif forced_exit_reason is not None:
             exit_side = "sell" if position_size > 0.0 else "buy"
+            self._reentry_block = "long" if position_size > 0.0 else "short"
             exit_order = self._create_order(timestamp=timestamp, side=exit_side, size=abs(position_size), bar=bar)
             exit_order.last_reason = forced_exit_reason
             cycle_orders.append(exit_order)

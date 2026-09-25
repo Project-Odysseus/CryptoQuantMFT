@@ -9,7 +9,7 @@ from typing import Any
 
 from src.backtest.analytics import PerformanceMetrics, build_performance_metrics
 from src.backtest.costs import CostModel
-from src.risk.controls import RiskDecision, RiskManager
+from src.risk.controls import RiskDecision, RiskManager, gate_reentry
 
 
 StrategyFn = Callable[[Sequence[Any], int, Any], float | int | str | None]
@@ -106,12 +106,13 @@ class SimpleBacktester:
 
         cost_model = self.cost_model
         bars_held = 0
+        reentry_block: str | None = None
 
         for index in range(1, len(bars)):
             history = list(bars[: index + 1])
             current_bar = bars[index]
             signal_value = self.strategy(history, index, current_bar)
-            signal = _normalize_signal(signal_value)
+            signal, reentry_block, _blocked = gate_reentry(_normalize_signal(signal_value), reentry_block)
             close_price = _get_close(current_bar)
             timestamp = _get_timestamp(current_bar)
 
@@ -183,6 +184,7 @@ class SimpleBacktester:
                 entry_timestamp = None
             elif forced_exit_reason is not None:
                 exit_side = "sell" if current_position > 0.0 else "buy"
+                reentry_block = "long" if current_position > 0.0 else "short"
                 exit_price = self._apply_cost(close_price, side=exit_side, cost_model=cost_model)
                 if current_position > 0.0:
                     return_pct = (exit_price - entry_price) / entry_price

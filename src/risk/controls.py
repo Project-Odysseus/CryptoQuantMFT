@@ -546,3 +546,21 @@ def _get_timestamp(bar: Any) -> Any | None:
     if isinstance(bar, dict):
         return bar.get("timestamp")
     return None
+
+
+def gate_reentry(signal: float, blocked_side: str | None) -> tuple[float, str | None, bool]:
+    """Suppress re-entry into the side a risk stop just closed until the signal has left that side.
+
+    Returns (signal to act on, updated block, whether this signal was suppressed).
+    A long block clears on the first signal <= 0, a short block on the first
+    signal >= 0. An entry on the opposite side is never blocked.
+    """
+    if blocked_side == "long":
+        if signal <= 0.0:
+            return signal, None, False
+        return 0.0, blocked_side, True
+    if blocked_side == "short":
+        if signal >= 0.0:
+            return signal, None, False
+        return 0.0, blocked_side, True
+    return signal, None, False
