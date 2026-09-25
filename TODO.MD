@@ -154,8 +154,10 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] Fixed: exchange-cycle stops (drawdown/time/ATR) never fired on shorts because no entry price was tracked for them
   - [x] Verified real contract spec, fee schedule and funding history from Kraken Futures' public API (2026-09-25): `--futures-venue-check`, `src/data/kraken_futures.py`. Funding is ~0.009%/day for BTC/ETH, a third of the earlier assumption
   - [ ] Product availability for the account holder (Norway) is not in the public data: confirm with Kraken
-  - [ ] Real futures connector + execution adapter (auth, orders, positions, margin, funding feed), behind the same live safety gates
-  - [ ] Futures reconciliation, persisted account state, kill-switch cancel/flatten, exchange risk limits, tax treatment
+  - [x] Real Kraken Futures execution adapter (signed REST, IOC market orders with unique cliOrdId, reduce-only closes, fill reconciliation via /fills, position/margin sync) behind the live gates: futures credentials, verified contract, <=3x leverage, kraken_futures risk limits, kill-switch cancel-all (2026-09-26). Tested against recorded response shapes only; `--futures-verify-credentials` is the first real check
+  - [ ] Futures market-data feed (mark/index price) instead of the spot feed
+  - [ ] Persisted perp account state and a tax treatment for derivative P&L
+  - [ ] Kill-switch flatten (close the open position), not just cancel
 - [ ] **Priority 5: Resolve the Incomplete Futures Track** (the older dated-futures scaffolding below is a different product from the perpetuals above)
   - [ ] Preferred sequencing: explicitly defer futures behind the spot/Kraken runtime unless there is a short-term need to trade futures first
   - [ ] Decide whether futures support is part of the near-term critical path or should be explicitly deferred behind the spot/Kraken runtime

@@ -28,6 +28,7 @@ from src.utils.logger import logger
 
 LIVE_TRADING_CONFIRMATION = "ENABLE_LIVE_TRADING"
 PERP_EXCHANGE_NAME = "kraken_futures"
+LIVE_PERP_MAX_LEVERAGE = 3.0
 KRAKEN_MANUAL_ORDER_CONFIRMATION = "SUBMIT_KRAKEN_ORDER"
 
 
@@ -80,12 +81,12 @@ def build_runtime_orchestrator(
     pipeline = MarketDataPipeline(store=store, interval_seconds=market_data_interval_seconds)
     requested_exchange = _resolve_runtime_exchange(runtime_config.exchange)
     effective_exchange = requested_exchange
-    trading_symbol = runtime_config.trading_symbol or _resolve_trading_symbol(exchange=requested_exchange)
-    # Perpetual futures reuse the Kraken spot feed as the mark price and only run against the in-process margin
-    # sandbox. There is no real futures adapter yet, so every other mode is refused rather than silently downgraded.
     is_perp = (runtime_config.exchange or "").lower() == PERP_EXCHANGE_NAME
-    if is_perp and runtime_config.mode != "live_dry_run":
-        raise SystemExit(f"--execution-exchange {PERP_EXCHANGE_NAME} only runs with --runtime live_dry_run (no real futures adapter exists yet)")
+    trading_symbol = runtime_config.trading_symbol or ("BTC/USD" if is_perp else _resolve_trading_symbol(exchange=requested_exchange))
+    # Perpetuals need an exchange-backed cycle: live_dry_run uses the in-process margin sandbox, live the real
+    # Kraken Futures adapter. Paper mode has no margin account, so it is refused rather than silently mis-simulated.
+    if is_perp and runtime_config.mode not in {"live_dry_run", "live"}:
+        raise SystemExit(f"--execution-exchange {PERP_EXCHANGE_NAME} runs with --runtime live_dry_run or live, not {runtime_config.mode}")
 
     if runtime_config.use_mock_connector:
         pipeline.add_connector(MockExchangeConnector(symbol=trading_symbol))
@@ -140,9 +141,7 @@ def build_runtime_orchestrator(
         )
     )
     trade_logger = TradeLogger(database_path=settings.database_path)
-    perp_adapter = (
-        SandboxPerpExecutionAdapter(contract=assumed_perp_contract(trading_symbol), max_leverage=perp_max_leverage) if is_perp else None
-    )
+    perp_adapter = _build_perp_adapter(mode=runtime_config.mode, symbol=trading_symbol, max_leverage=perp_max_leverage) if is_perp else None
     execution_router = ExecutionRouter(mode=runtime_config.mode, exchange=effective_exchange, adapter=perp_adapter)
 
     # --runtime live starts a brand-new adapter with no local balance/position
@@ -179,8 +178,9 @@ def build_runtime_orchestrator(
         risk_manager=risk_manager,
         trade_logger=trade_logger,
         execution_adapter=execution_router.adapter,
-        exchange_name=effective_exchange,
-        enable_tax_logging=(runtime_config.mode == "live"),
+        exchange_name=PERP_EXCHANGE_NAME if is_perp else effective_exchange,
+        # The tax ledger models spot FIFO lots only; derivative P&L is not written into it.
+        enable_tax_logging=(runtime_config.mode == "live" and not is_perp),
         strategy_id=runtime_config.strategy_name,
         # PaperTradingEngine.run() (used by "paper") has always allowed
         # shorting unconditionally, regardless of this flag - it only gates
@@ -217,6 +217,38 @@ def build_runtime_orchestrator(
     return orchestrator, pipeline
 
 
+def _build_perp_adapter(*, mode: str, symbol: str, max_leverage: float) -> Any:
+    """The margin adapter for a perpetual run: sandbox for live_dry_run, the real Kraken Futures API for live.
+
+    Live fails closed: it needs futures API credentials and a contract spec
+    fetched from Kraken's public data. A dry run uses the real spec when it
+    can fetch it and the offline placeholder otherwise.
+    """
+    from src.data.kraken_futures import fetch_fee_schedules, fetch_instrument, venue_symbol_for
+    from src.execution.kraken_futures_adapter import KrakenFuturesExecutionAdapter
+    from src.execution.perps import perp_contract_from_instrument
+
+    def verified_contract():
+        instrument = fetch_instrument(venue_symbol_for(symbol))
+        return perp_contract_from_instrument(instrument, fetch_fee_schedules()[instrument["feeScheduleUid"]], symbol=symbol)
+
+    if mode == "live":
+        if not settings.kraken_futures_api_key or not settings.kraken_futures_secret:
+            raise SystemExit("refusing to start --runtime live with kraken_futures: KRAKEN_FUTURES_API_KEY / KRAKEN_FUTURES_SECRET are not set")
+        try:
+            contract = verified_contract()
+        except Exception as exc:
+            raise SystemExit(f"refusing to start --runtime live with kraken_futures: could not load the contract spec for {symbol} ({exc})")
+        return KrakenFuturesExecutionAdapter(contract=contract, api_key=settings.kraken_futures_api_key, api_secret=settings.kraken_futures_secret, max_leverage=max_leverage)
+
+    try:
+        contract = verified_contract()
+    except Exception as exc:
+        logger.warning("perp_contract_spec_unavailable symbol={} error={} using offline placeholder", symbol, exc)
+        contract = assumed_perp_contract(symbol)
+    return SandboxPerpExecutionAdapter(contract=contract, max_leverage=max_leverage)
+
+
 def _resolve_trading_symbol(*, exchange: str | None = None) -> str:
     normalized_exchange = (exchange or "kraken").lower()
     if normalized_exchange == "firi":
@@ -240,6 +272,7 @@ def _validate_live_runtime_request(
     enable_live_trading: bool,
     live_confirmation: str | None,
     kill_switch_controller: KillSwitchController | None = None,
+    perp_max_leverage: float = 2.0,
 ) -> None:
     if runtime_config.mode != "live":
         return
@@ -252,7 +285,10 @@ def _validate_live_runtime_request(
     if runtime_config.exchange is None:
         raise SystemExit("refusing to start --runtime live without an explicit --execution-exchange")
     if runtime_config.exchange.lower() == PERP_EXCHANGE_NAME:
-        raise SystemExit(f"refusing to start --runtime live with {PERP_EXCHANGE_NAME}: real perpetual-futures execution is not implemented")
+        if perp_max_leverage > LIVE_PERP_MAX_LEVERAGE:
+            raise SystemExit(f"refusing to start --runtime live with {PERP_EXCHANGE_NAME} above {LIVE_PERP_MAX_LEVERAGE:g}x leverage (requested {perp_max_leverage:g}x)")
+        if not settings.kraken_futures_api_key or not settings.kraken_futures_secret:
+            raise SystemExit(f"refusing to start --runtime live with {PERP_EXCHANGE_NAME}: KRAKEN_FUTURES_API_KEY / KRAKEN_FUTURES_SECRET are not set")
 
     exchange_name = _resolve_runtime_exchange(runtime_config.exchange)
     if exchange_name not in DEFAULT_EXCHANGE_RISK_LIMITS:
@@ -956,6 +992,19 @@ def _run_futures_venue_check(*, symbol: str) -> None:
     print("  note: whether this product is open to your account and jurisdiction is not in the public data; confirm with Kraken.")
 
 
+def _run_futures_verify_credentials(*, symbol: str) -> None:
+    """Authenticate against Kraken Futures with read-only calls and print margin, positions and open orders."""
+    if not settings.kraken_futures_api_key or not settings.kraken_futures_secret:
+        raise SystemExit("KRAKEN_FUTURES_API_KEY / KRAKEN_FUTURES_SECRET are not set in .env")
+    adapter = _build_perp_adapter(mode="live", symbol=symbol, max_leverage=1.0)
+    account = adapter.sync_account(force=True)
+    open_orders = adapter._private("GET", "openorders").get("openOrders", [])
+    print(f"Kraken Futures credentials OK for {adapter.contract.venue_symbol}")
+    print(f"  margin equity {adapter.margin_equity} {adapter.contract.collateral_currency}, available margin {adapter.available_margin}")
+    print(f"  position {account['remote_size']} {adapter.contract.base_asset} (entry {adapter._position_entry_price.get(adapter.position_symbol)}), unrealized funding {adapter.unrealized_funding}")
+    print(f"  open orders on the account: {len(open_orders)}")
+
+
 _ACCOUNT_SUMMARY_ACTION_EVENT_TYPES = {
     "kraken_manual_order_submission",
     "kraken_manual_close_submission",
@@ -1500,8 +1549,8 @@ def main() -> None:
     parser.add_argument("--runtime-iterations", type=int, default=3, help="Number of runtime cycles to execute")
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
     parser.add_argument("--risk-per-trade-pct", type=float, default=None, help="Override the fraction of equity risked per trade (default 0.10); needed for very small accounts to clear exchange minimum order sizes")
-    parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures runs perpetual futures in the in-process margin sandbox (live_dry_run only; no real futures orders exist yet)")
-    parser.add_argument("--perp-max-leverage", type=float, default=2.0, help="Leverage cap enforced by the perpetual-futures sandbox account (1 up to the contract cap of 5)")
+    parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures trades perpetual futures: the in-process margin sandbox under live_dry_run, real Kraken Futures orders under live")
+    parser.add_argument("--perp-max-leverage", type=float, default=2.0, help="Leverage cap this runtime enforces on a perpetual-futures account (default 2; live refuses more than 3)")
     parser.add_argument("--enable-live-trading", action="store_true", help=f"Required explicit opt-in before --runtime live is allowed. Pair with --live-confirmation {LIVE_TRADING_CONFIRMATION}")
     parser.add_argument("--live-confirmation", default=None, help=f"Exact confirmation token required with --runtime live: {LIVE_TRADING_CONFIRMATION}")
     parser.add_argument("--trading-symbol", default=None, help="Trading symbol for the runtime connector and execution context, e.g. BTC/EUR or BTC/NOK")
@@ -1519,6 +1568,7 @@ def main() -> None:
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
     parser.add_argument("--futures-venue-check", action="store_true", help="Non-destructive: fetch Kraken Futures public specs, fees, live mark price and funding history for --futures-symbol and print them (no credentials, no orders)")
+    parser.add_argument("--futures-verify-credentials", action="store_true", help="Non-destructive: call Kraken Futures private read-only endpoints (accounts, open positions, open orders) with KRAKEN_FUTURES_API_KEY/SECRET and print the result. Places no orders")
     parser.add_argument("--futures-symbol", default="BTC/USD", help="Symbol for --futures-venue-check, e.g. BTC/USD, ETH/USD or SOL/USD")
     parser.add_argument("--account-summary", action="store_true", help="Print a non-destructive Kraken account summary: balances, positions, open orders, exchange minimums, and recent live/manual actions")
     parser.add_argument("--account-summary-symbol", default=None, help="Symbol to use for --account-summary exchange-minimum checks, e.g. BTC/EUR")
@@ -1570,6 +1620,10 @@ def main() -> None:
         print("Kill switch activated")
         print(f"Reason: {state['reason']}")
         print(f"Orders cancelled: {len(state['orders_cancelled'])}")
+        return
+
+    if args.futures_verify_credentials:
+        _run_futures_verify_credentials(symbol=args.futures_symbol)
         return
 
     if args.futures_venue_check:
@@ -1699,6 +1753,7 @@ def main() -> None:
             use_mock_connector=args.use_mock_connector,
             enable_live_trading=args.enable_live_trading,
             live_confirmation=args.live_confirmation,
+            perp_max_leverage=args.perp_max_leverage,
         )
         orchestrator = asyncio.run(
             run_runtime_orchestrator(

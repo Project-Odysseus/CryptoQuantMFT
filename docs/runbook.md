@@ -137,8 +137,9 @@ python main.py \
   --report
 ```
 
-   Perpetual futures can be rehearsed the same way with `--execution-exchange kraken_futures` (simulation only,
-   `live_dry_run` only, market data from the Kraken spot feed); see `docs/perpetual_futures.md`.
+   Perpetual futures can be rehearsed the same way with `--execution-exchange kraken_futures` (the in-process margin
+   sandbox). Before any live perp run, check credentials read-only with `--futures-verify-credentials`; see
+   `docs/perpetual_futures.md` for the extra gates.
 
 8. Verify after startup:
    - runtime mode reports `live_dry_run`

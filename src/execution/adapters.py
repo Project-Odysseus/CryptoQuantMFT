@@ -1859,7 +1859,7 @@ class ExecutionRouter:
         normalized_exchange = (exchange or "").strip().lower()
         if normalized_exchange == "kraken_futures":
             if mode == "live":
-                raise ValueError("real perpetual-futures execution is not implemented; use --runtime live_dry_run")
+                raise ValueError("live perpetual futures need an explicit KrakenFuturesExecutionAdapter (built by main._build_perp_adapter); refusing to guess")
             from src.execution.perps import SandboxPerpExecutionAdapter
 
             return SandboxPerpExecutionAdapter()

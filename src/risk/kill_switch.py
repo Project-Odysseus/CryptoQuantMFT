@@ -33,6 +33,13 @@ class KillSwitchController:
 
         if execution_adapter is not None:
             self._state["orders_cancelled"] = self._cancel_open_orders(execution_adapter)
+            cancel_all = getattr(execution_adapter, "cancel_all_orders", None)
+            if callable(cancel_all):
+                # Exchange-side sweep as well, for orders this process no longer tracks (e.g. after a restart).
+                try:
+                    self._state["exchange_cancel_all"] = cancel_all()
+                except Exception as exc:
+                    self._state["exchange_cancel_all"] = {"error": str(exc)}
             self._state["account_snapshot"] = getattr(execution_adapter, "get_account_snapshot", lambda: None)()
             self._state["neutralized"] = True
 

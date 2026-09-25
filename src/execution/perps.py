@@ -179,57 +179,28 @@ def liquidation_price(size: float, entry_price: float, wallet: float, maintenanc
     return price if price > 0.0 else None
 
 
-class SandboxPerpExecutionAdapter(ExecutionAdapter):
-    """In-process perpetual-futures account: margin checks, funding and liquidation, no real orders.
+class MarginAccountAdapter(ExecutionAdapter):
+    """Shared accounting for a single-contract perpetual margin account (sandbox or real venue).
 
-    Orders fill immediately at the submitted price (like the spot sandbox).
-    Unlike the spot adapters, a fill moves no notional in or out of cash: the
-    wallet only changes by realized PnL, fees and funding, and the position
-    is backed by margin instead. `get_account_snapshot()` reports equity and
-    liquidation prices so the engine can size and stop positions correctly.
-
-    Use `on_market_update` once per cycle: it marks the position to the
-    latest price, accrues funding for the time elapsed and liquidates the
-    position if equity has fallen to maintenance margin.
+    A fill moves no notional in or out of cash: the wallet only changes by
+    realized PnL, fees and funding, and the position is backed by margin.
+    `margin_account = True` tells `PaperTradingEngine` to compute equity as
+    wallet plus unrealized PnL and to size entries from `buying_power()`.
     """
 
-    name = "sandbox_perp"
     margin_account = True
 
-    def __init__(
-        self,
-        *,
-        contract: PerpContract | None = None,
-        starting_collateral: float = 1000.0,
-        max_leverage: float = 2.0,
-        funding_pct_per_day: float = 0.03,
-        exchange_name: str = "kraken_futures",
-    ) -> None:
-        """Create a margin account holding `starting_collateral` in the contract's collateral currency.
-
-        Args:
-            max_leverage: The cap this account enforces on new exposure. It is
-                deliberately below the contract's own cap by default: a low
-                cap keeps the liquidation price far from the entry price.
-            funding_pct_per_day: Percent of notional per day longs pay and
-                shorts receive (negative reverses it). A placeholder until a
-                real funding feed exists.
-        """
+    def __init__(self, *, contract: PerpContract, max_leverage: float, exchange_name: str) -> None:
+        """Set up an empty account for `contract` that enforces `max_leverage` on new exposure."""
         super().__init__()
-        self.contract = contract or assumed_perp_contract()
-        if not 1.0 <= max_leverage <= self.contract.max_leverage:
-            raise ValueError(f"max_leverage must be between 1 and the contract cap of {self.contract.max_leverage}")
-        if starting_collateral < 0.0:
-            raise ValueError("starting_collateral cannot be negative")
+        if not 1.0 <= max_leverage <= contract.max_leverage:
+            raise ValueError(f"max_leverage must be between 1 and the contract cap of {contract.max_leverage}")
+        self.contract = contract
         self.exchange_name = exchange_name
         self.max_leverage = max_leverage
-        self.funding_pct_per_day = funding_pct_per_day
-        self._base_currency = self.contract.collateral_currency
-        self._balances = {self._base_currency: float(starting_collateral)}
-        self._remote_balances = dict(self._balances)
+        self._base_currency = contract.collateral_currency
+        self._balances = {self._base_currency: 0.0}
         self._mark_price: float | None = None
-        self._last_market_update: datetime | None = None
-        self._liquidation_count = 0
         self.funding_paid_total = 0.0
         self.realized_pnl_total = 0.0
         self.fees_paid_total = 0.0
@@ -257,7 +228,7 @@ class SandboxPerpExecutionAdapter(ExecutionAdapter):
         return self.wallet_balance() + unrealized_pnl(size, entry, mark)
 
     def used_initial_margin(self, mark_price: float | None = None) -> float:
-        """Initial margin locked by the open position."""
+        """Initial margin locked by the open position at this account's leverage cap."""
         mark = self._resolve_mark(mark_price)
         if mark is None:
             return 0.0
@@ -282,96 +253,9 @@ class SandboxPerpExecutionAdapter(ExecutionAdapter):
         step = self.contract.size_step
         return math.floor(size / step + 1e-9) * step
 
-    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
-        """Fill an order at `price` if it passes the contract, margin and leverage checks, else reject it."""
-        side = side.lower()
-        if side not in {"buy", "sell"}:
-            return self._reject(order_id, f"unknown side {side!r}")
-        if size <= 0.0 or price <= 0.0:
-            return self._reject(order_id, "size and price must be positive")
-        if symbol is not None and self._position_symbol(symbol) != self.position_symbol:
-            return self._reject(order_id, f"this adapter trades {self.contract.symbol} only, not {symbol}")
-
-        rounded = self.round_size(size)
-        if rounded < self.contract.min_size:
-            return self._reject(order_id, f"size {size} is below the contract minimum {self.contract.min_size}")
-
-        self._mark_price = price
-        current = self.position_size()
-        after = current + rounded if side == "buy" else current - rounded
-        fee = rounded * price * self.contract.taker_fee_rate
-        if abs(after) > abs(current) + 1e-12:
-            # Exposure grows (or flips): the resulting position must fit inside the leverage cap.
-            required = initial_margin(after, price, self.max_leverage)
-            if self.equity(price) - fee < required:
-                return self._reject(
-                    order_id,
-                    f"insufficient margin: need {required:.2f} {self._base_currency} for a {abs(after):.4f} position at {self.max_leverage:g}x, "
-                    f"equity after fee is {self.equity(price) - fee:.2f}",
-                )
-
-        order = ExecutionOrder(
-            order_id=order_id,
-            side=side,
-            size=rounded,
-            symbol=symbol,
-            price=price,
-            timestamp=timestamp,
-            status="FILLED",
-            fill_price=price,
-            filled_size=rounded,
-            fee=fee,
-            exchange=self.exchange_name,
-            message=f"filled in {self.exchange_name} sandbox",
-        )
-        self._orders[order_id] = order
-        self._apply_fill_to_account_state(order=order, filled_size=rounded, fill_price=price, fee=fee, previous_fill_size=0.0, previous_fee=0.0)
-        return ExecutionReport(order_id=order_id, status="FILLED", fill_price=price, filled_size=rounded, fee=fee, message=order.message)
-
-    def cancel_order(self, *, order_id: str) -> ExecutionReport:
-        """Orders fill instantly here, so there is never anything to cancel."""
-        order = self._orders.get(order_id)
-        if order is None:
-            return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
-        return ExecutionReport(order_id=order_id, status=order.status, message="order already final")
-
-    def get_order_status(self, *, order_id: str) -> ExecutionReport:
-        """Return the stored state of an order."""
-        order = self._orders.get(order_id)
-        if order is None:
-            return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
-        return ExecutionReport(order_id=order_id, status=order.status, fill_price=order.fill_price, filled_size=order.filled_size, fee=order.fee, message=order.message)
-
     def list_orders(self) -> list[ExecutionOrder]:
         """All orders this adapter has handled."""
         return list(self._orders.values())
-
-    def on_market_update(self, *, symbol: str | None, mark_price: float, timestamp: datetime) -> list[dict[str, Any]]:
-        """Mark to `mark_price`, accrue funding since the last update, and liquidate if equity hit maintenance margin.
-
-        Returns event dicts (``funding``, ``liquidation``) for the caller to log.
-        """
-        if mark_price <= 0.0 or (symbol is not None and self._position_symbol(symbol) != self.position_symbol):
-            return []
-        events: list[dict[str, Any]] = []
-        previous_update = self._last_market_update
-        self._mark_price = mark_price
-        self._last_market_update = timestamp
-
-        size = self.position_size()
-        if size != 0.0 and previous_update is not None and self.funding_pct_per_day != 0.0:
-            elapsed_days = (timestamp - previous_update).total_seconds() / 86400.0
-            if elapsed_days > 0.0:
-                payment = size * mark_price * self.funding_pct_per_day / 100.0 * elapsed_days
-                self._balances[self._base_currency] = self.wallet_balance() - payment
-                self.funding_paid_total += payment
-                events.append({"type": "funding", "payment": payment, "size": size, "mark_price": mark_price, "elapsed_days": elapsed_days})
-
-        if size != 0.0:
-            maintenance = maintenance_margin(size, mark_price, self.contract.maintenance_rate_at(abs(size) * mark_price))
-            if self.equity(mark_price) <= maintenance:
-                events.append(self._liquidate(mark_price=mark_price, timestamp=timestamp, maintenance=maintenance))
-        return events
 
     def get_account_snapshot(self) -> dict[str, Any]:
         """Balances and positions as the base adapter reports them, plus margin, equity and liquidation data."""
@@ -389,6 +273,35 @@ class SandboxPerpExecutionAdapter(ExecutionAdapter):
             }
         )
         return snapshot
+
+    def _validate_order(self, *, order_id: str, side: str, size: float, price: float, symbol: str | None) -> tuple[float, bool, ExecutionReport | None]:
+        """Apply contract and leverage rules. Returns (rounded size, reduces_only, rejection or None)."""
+        side = side.lower()
+        if side not in {"buy", "sell"}:
+            return 0.0, False, self._reject(order_id, f"unknown side {side!r}")
+        if size <= 0.0 or price <= 0.0:
+            return 0.0, False, self._reject(order_id, "size and price must be positive")
+        if symbol is not None and self._position_symbol(symbol) != self.position_symbol:
+            return 0.0, False, self._reject(order_id, f"this adapter trades {self.contract.symbol} only, not {symbol}")
+
+        rounded = self.round_size(size)
+        if rounded < self.contract.min_size:
+            return 0.0, False, self._reject(order_id, f"size {size} is below the contract minimum {self.contract.min_size}")
+
+        current = self.position_size()
+        after = current + rounded if side == "buy" else current - rounded
+        reduces_only = abs(after) < abs(current) - 1e-12 and (after == 0.0 or (after > 0.0) == (current > 0.0))
+        if abs(after) > abs(current) + 1e-12:
+            # Exposure grows (or flips): the resulting position must fit inside the leverage cap.
+            fee = rounded * price * self.contract.taker_fee_rate
+            required = initial_margin(after, price, self.max_leverage)
+            if self.equity(price) - fee < required:
+                return 0.0, False, self._reject(
+                    order_id,
+                    f"insufficient margin: need {required:.2f} {self._base_currency} for a {abs(after):.4f} position at {self.max_leverage:g}x, "
+                    f"equity after fee is {self.equity(price) - fee:.2f}",
+                )
+        return rounded, reduces_only, None
 
     def _apply_fill_to_account_state(
         self,
@@ -435,6 +348,117 @@ class SandboxPerpExecutionAdapter(ExecutionAdapter):
             self._position_opened_at.pop(symbol_key, None)
             self._position_entry_price.pop(symbol_key, None)
 
+    def _resolve_mark(self, mark_price: float | None) -> float | None:
+        return mark_price if mark_price is not None else self._mark_price
+
+    def _reject(self, order_id: str, message: str) -> ExecutionReport:
+        return ExecutionReport(order_id=order_id, status="REJECTED", message=message)
+
+
+class SandboxPerpExecutionAdapter(MarginAccountAdapter):
+    """In-process perpetual-futures account: margin checks, funding and liquidation, no real orders.
+
+    Orders fill immediately at the submitted price (like the spot sandbox).
+    Use `on_market_update` once per cycle: it marks the position to the
+    latest price, accrues funding for the time elapsed and liquidates the
+    position if equity has fallen to maintenance margin.
+    """
+
+    name = "sandbox_perp"
+
+    def __init__(
+        self,
+        *,
+        contract: PerpContract | None = None,
+        starting_collateral: float = 1000.0,
+        max_leverage: float = 2.0,
+        funding_pct_per_day: float = 0.01,
+        exchange_name: str = "kraken_futures",
+    ) -> None:
+        """Create a margin account holding `starting_collateral` in the contract's collateral currency.
+
+        Args:
+            max_leverage: The cap this account enforces on new exposure. Keep it
+                low: a low cap keeps the liquidation price far from the entry.
+            funding_pct_per_day: Percent of notional per day longs pay and
+                shorts receive (negative reverses it). 0.01 is close to the
+                measured one-year mean for BTC and ETH on Kraken Futures.
+        """
+        super().__init__(contract=contract or assumed_perp_contract(), max_leverage=max_leverage, exchange_name=exchange_name)
+        if starting_collateral < 0.0:
+            raise ValueError("starting_collateral cannot be negative")
+        self.funding_pct_per_day = funding_pct_per_day
+        self._balances = {self._base_currency: float(starting_collateral)}
+        self._remote_balances = dict(self._balances)
+        self._last_market_update: datetime | None = None
+        self._liquidation_count = 0
+
+    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
+        """Fill an order at `price` if it passes the contract, margin and leverage checks, else reject it."""
+        rounded, _reduces_only, rejection = self._validate_order(order_id=order_id, side=side, size=size, price=price, symbol=symbol)
+        if rejection is not None:
+            return rejection
+        self._mark_price = price
+        fee = rounded * price * self.contract.taker_fee_rate
+        order = ExecutionOrder(
+            order_id=order_id,
+            side=side.lower(),
+            size=rounded,
+            symbol=symbol,
+            price=price,
+            timestamp=timestamp,
+            status="FILLED",
+            fill_price=price,
+            filled_size=rounded,
+            fee=fee,
+            exchange=self.exchange_name,
+            message=f"filled in {self.exchange_name} sandbox",
+        )
+        self._orders[order_id] = order
+        self._apply_fill_to_account_state(order=order, filled_size=rounded, fill_price=price, fee=fee, previous_fill_size=0.0, previous_fee=0.0)
+        return ExecutionReport(order_id=order_id, status="FILLED", fill_price=price, filled_size=rounded, fee=fee, message=order.message)
+
+    def cancel_order(self, *, order_id: str) -> ExecutionReport:
+        """Orders fill instantly here, so there is never anything to cancel."""
+        order = self._orders.get(order_id)
+        if order is None:
+            return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
+        return ExecutionReport(order_id=order_id, status=order.status, message="order already final")
+
+    def get_order_status(self, *, order_id: str) -> ExecutionReport:
+        """Return the stored state of an order."""
+        order = self._orders.get(order_id)
+        if order is None:
+            return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
+        return ExecutionReport(order_id=order_id, status=order.status, fill_price=order.fill_price, filled_size=order.filled_size, fee=order.fee, message=order.message)
+
+    def on_market_update(self, *, symbol: str | None, mark_price: float, timestamp: datetime) -> list[dict[str, Any]]:
+        """Mark to `mark_price`, accrue funding since the last update, and liquidate if equity hit maintenance margin.
+
+        Returns event dicts (``funding``, ``liquidation``) for the caller to log.
+        """
+        if mark_price <= 0.0 or (symbol is not None and self._position_symbol(symbol) != self.position_symbol):
+            return []
+        events: list[dict[str, Any]] = []
+        previous_update = self._last_market_update
+        self._mark_price = mark_price
+        self._last_market_update = timestamp
+
+        size = self.position_size()
+        if size != 0.0 and previous_update is not None and self.funding_pct_per_day != 0.0:
+            elapsed_days = (timestamp - previous_update).total_seconds() / 86400.0
+            if elapsed_days > 0.0:
+                payment = size * mark_price * self.funding_pct_per_day / 100.0 * elapsed_days
+                self._balances[self._base_currency] = self.wallet_balance() - payment
+                self.funding_paid_total += payment
+                events.append({"type": "funding", "payment": payment, "size": size, "mark_price": mark_price, "elapsed_days": elapsed_days})
+
+        if size != 0.0:
+            maintenance = maintenance_margin(size, mark_price, self.contract.maintenance_rate_at(abs(size) * mark_price))
+            if self.equity(mark_price) <= maintenance:
+                events.append(self._liquidate(mark_price=mark_price, timestamp=timestamp, maintenance=maintenance))
+        return events
+
     def _liquidate(self, *, mark_price: float, timestamp: datetime, maintenance: float) -> dict[str, Any]:
         size = self.position_size()
         equity_before = self.equity(mark_price)
@@ -470,9 +494,3 @@ class SandboxPerpExecutionAdapter(ExecutionAdapter):
             "wallet_after": self.wallet_balance(),
             "bad_debt": bad_debt,
         }
-
-    def _resolve_mark(self, mark_price: float | None) -> float | None:
-        return mark_price if mark_price is not None else self._mark_price
-
-    def _reject(self, order_id: str, message: str) -> ExecutionReport:
-        return ExecutionReport(order_id=order_id, status="REJECTED", message=message)

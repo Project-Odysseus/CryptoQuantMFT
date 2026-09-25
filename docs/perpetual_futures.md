@@ -1,6 +1,7 @@
 # Perpetual futures (sandbox)
 
-Status: first slice, **simulation only**. Nothing here places a real futures order. The older dated-futures
+Status: sandbox plus a **real Kraken Futures adapter** behind the live safety gates. The real adapter has only been
+tested against recorded response shapes, never against the live API. The older dated-futures
 scaffolding (`src/execution/contracts/`, `src/execution/sizing/`, `docs/FUTURES_GUIDE.md`) is a different product
 (fixed contract sizes, expiries) and is untouched.
 
@@ -53,18 +54,44 @@ python main.py --runtime live_dry_run --execution-exchange kraken_futures --perp
 
 Strategies return the same -1/0/1 target position as everywhere else; 0 closes whatever is open.
 
+## Real orders (`--runtime live`)
+
+`src/execution/kraken_futures_adapter.py` (`KrakenFuturesExecutionAdapter`) trades one perpetual through the
+authenticated REST API, following Kraken's OpenAPI spec (https://docs.kraken.com/openapi/futures-rest.yaml):
+
+- Requests are signed per Kraken's scheme: SHA-256 of the URL-encoded parameters + nonce + endpoint path, then
+  HMAC-SHA-512 with the base64-decoded secret. The signature covers the exact encoded body that is sent.
+- Every order is an IOC market order (`orderType=mkt`, which Kraken caps at 1% from the market) with a unique
+  `cliOrdId`. Pure reductions are sent `reduceOnly=true`. Size rounding, the minimum size and this account's
+  leverage cap are checked locally first.
+- Fills are reconciled from `/fills` by `cliOrdId` (the order-status endpoint forgets orders 5 seconds after they
+  finish), so a lost HTTP response still gets booked once. Position, entry price, margin equity and available
+  margin are then re-read from `/openpositions` and `/accounts` (the `flex` multi-collateral wallet) and treated as
+  the truth. A position that changes without our order is logged as `position_liquidated` or
+  `position_changed_externally`.
+- Fills carry no fee in Kraken's API, so fees are estimated from the contract's taker rate.
+- The kill switch also calls `/cancelallorders` for the contract.
+
+Gates (all required, on top of the normal `--enable-live-trading --live-confirmation ENABLE_LIVE_TRADING`):
+`KRAKEN_FUTURES_API_KEY` and `KRAKEN_FUTURES_SECRET` in `.env` (a futures key, separate from the spot key), a
+contract spec fetched from Kraken's public API at startup (no placeholder), `--perp-max-leverage` at most 3, the
+`kraken_futures` exchange risk limits (same caps as spot Kraken), and a ready, inactive kill switch. Tax logging is
+off for perps. Startup equity is Kraken's `marginEquity` in USD.
+
+Before a first live run: `python main.py --futures-verify-credentials --futures-symbol BTC/USD` makes read-only calls
+(accounts, positions, open orders) and prints what it sees. It places no orders.
+
+The runtime symbol for perps is USD-quoted (`--trading-symbol BTC/USD`, the default when `kraken_futures` is used),
+matching the contract.
+
 ## Not built yet (roughly in order)
 
-1. **Real venue connectivity**: futures connector (mark and index price, funding rate feed) and execution adapter
-   (auth, order submit/cancel, positions, fills, margin balance). The API, symbols and separate wallet differ from
-   Kraken spot. Needs a verified contract spec and fee schedule first, and confirmation the product is available
-   to the account holder.
-2. **Reconciliation** of futures positions and margin against the exchange (`reconcile_account_state` is spot-shaped).
+1. **Availability**: whether Kraken Futures is open to the account holder in Norway is not in the public data.
+2. **Market data**: the runtime still takes prices from the Kraken spot feed, not the futures mark price.
 3. **Persistence**: the sandbox account state is in memory only (a restart resets it), and funding is not stored
    per payment beyond the event log.
 4. **Tax**: `enable_tax_logging` is off for perps. The FIFO spot ledger does not model derivatives, and the
    Norwegian treatment needs checking before real money.
-5. **Live safety gates** for a futures venue: exchange risk limits, kill-switch cancel/flatten for futures, startup
-   equity seeding from the margin balance, a leverage ceiling in `_validate_live_runtime_request`.
+5. **Flatten on kill switch**: the kill switch cancels orders but does not close an open position.
 6. **Strategy timeframes**: the runtime builds bars from ticks (1s default) and has no history warmup, so the
    4h/daily strategies that research favours cannot run meaningfully yet (see `todo_important.md`).

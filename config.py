@@ -41,6 +41,14 @@ class Settings(BaseSettings):
         default="",
         description="API secret for the Kraken exchange integration.",
     )
+    kraken_futures_api_key: str = Field(
+        default="",
+        description="API key for Kraken Futures (derivatives). Generated separately from the spot key.",
+    )
+    kraken_futures_secret: str = Field(
+        default="",
+        description="API secret for Kraken Futures (derivatives).",
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
         default="INFO",
         description="Application-wide log level for the runtime logger.",

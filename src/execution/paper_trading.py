@@ -1166,12 +1166,17 @@ class PaperTradingEngine:
         for event in on_market_update(symbol=symbol, mark_price=price, timestamp=timestamp):
             if self.trade_logger is None:
                 continue
-            liquidated = event.get("type") == "liquidation"
+            kind = str(event.get("type", "update"))
+            event_type, level, message = {
+                "liquidation": ("position_liquidated", "ERROR", "position liquidated by the margin account"),
+                "funding": ("funding_accrued", "INFO", "funding charged on the open position"),
+                "external_position_change": ("position_changed_externally", "WARNING", "exchange position changed without an order from this runtime"),
+            }.get(kind, (f"margin_account_{kind}", "INFO", f"margin account reported {kind}"))
             self.trade_logger.log_event(
                 timestamp=timestamp,
-                level="ERROR" if liquidated else "INFO",
-                event_type="position_liquidated" if liquidated else "funding_accrued",
-                message="position liquidated by the margin account" if liquidated else "funding charged on the open position",
+                level=level,
+                event_type=event_type,
+                message=message,
                 source="paper_trading",
                 metadata={key: value for key, value in event.items() if key != "type"},
             )

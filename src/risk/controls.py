@@ -22,6 +22,14 @@ DEFAULT_EXCHANGE_RISK_LIMITS: dict[str, dict[str, Any]] = {
         "max_open_positions": 1,
         "max_open_orders": 2,
     },
+    # Perpetuals: same conservative caps as spot Kraken while real futures trading is new.
+    "kraken_futures": {
+        "max_position_size": 0.5,
+        "max_notional_per_trade": 500.0,
+        "max_total_notional": 2500.0,
+        "max_open_positions": 1,
+        "max_open_orders": 2,
+    },
     "sandbox": {
         "max_position_size": 1.0,
         "max_notional_per_trade": 1000.0,

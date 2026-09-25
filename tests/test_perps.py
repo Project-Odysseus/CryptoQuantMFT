@@ -282,22 +282,26 @@ def test_router_builds_a_perp_sandbox_for_dry_runs_and_refuses_live() -> None:
     """There is no real futures adapter, so `live` must fail loudly instead of falling back to something else."""
     dry = ExecutionRouter(mode="live_dry_run", exchange="kraken_futures")
     assert isinstance(dry.adapter, SandboxPerpExecutionAdapter)
-    with pytest.raises(ValueError, match="not implemented"):
+    with pytest.raises(ValueError, match="explicit KrakenFuturesExecutionAdapter"):
         ExecutionRouter(mode="live", exchange="kraken_futures")
 
 
-def test_runtime_refuses_futures_outside_live_dry_run() -> None:
-    """The runtime entry point rejects paper and live with kraken_futures before building anything."""
+def test_runtime_refuses_futures_in_paper_mode() -> None:
+    """Paper mode has no margin account, so kraken_futures is rejected before anything is built."""
     from main import build_runtime_orchestrator
 
-    for mode in ("paper", "live"):
-        with pytest.raises(SystemExit, match="live_dry_run"):
-            build_runtime_orchestrator(mode=mode, exchange="kraken_futures", use_mock_connector=True)
+    with pytest.raises(SystemExit, match="live_dry_run or live"):
+        build_runtime_orchestrator(mode="paper", exchange="kraken_futures", use_mock_connector=True)
 
 
-def test_runtime_builds_a_perp_dry_run_with_a_margin_adapter() -> None:
+def test_runtime_builds_a_perp_dry_run_with_a_margin_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     """--execution-exchange kraken_futures in live_dry_run wires the margin sandbox and liquidation buffer."""
     from main import build_runtime_orchestrator
+
+    def offline(*args, **kwargs):
+        raise RuntimeError("offline in tests")
+
+    monkeypatch.setattr("src.data.kraken_futures.fetch_instrument", offline)
 
     orchestrator, _pipeline = build_runtime_orchestrator(mode="live_dry_run", exchange="kraken_futures", use_mock_connector=True, perp_max_leverage=3.0)
     adapter = orchestrator.execution_engine.execution_adapter
