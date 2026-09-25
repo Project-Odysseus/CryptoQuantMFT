@@ -548,17 +548,92 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         )
         self._base_currency = "EUR"
         self._balances.setdefault(self._base_currency, 0.0)
+        # Pair specs (min size/cost, precision) rarely change intraday, and
+        # submit_order() now fetches them on every call for order-parity
+        # checks, so cache per pair to avoid hammering Kraken's public API
+        # from a running strategy loop.
+        self._pair_metadata_cache: dict[str, dict[str, Any]] = {}
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
-        """Submit an order through the adapter and capture the execution result."""
+        """Submit an order through the adapter and capture the execution result.
+
+        Applies the same minimum-size, minimum-cost, precision, and balance
+        checks the manual preview/submit CLI flows use, so a strategy-driven
+        order cannot bypass Kraken's exchange rules just because it took a
+        different code path than the manual flow. Exchange-rule checks are
+        skipped (not rejected) if the metadata/balance itself can't be
+        fetched, matching this adapter's existing fail-gracefully behavior
+        for network/API issues; Kraken's own AddOrder response remains the
+        final backstop in that case.
+        """
         if size <= 0:
             return ExecutionReport(order_id=order_id, status="REJECTED", message="size must be positive")
+        if price <= 0:
+            return ExecutionReport(order_id=order_id, status="REJECTED", message="price must be positive")
+
+        normalized_symbol = symbol or "BTC/EUR"
+        try:
+            normalized_side = self._normalize_side(side)
+        except ValueError as exc:
+            return ExecutionReport(order_id=order_id, status="REJECTED", message=str(exc))
+
+        order_size = size
+        try:
+            pair_metadata = self.fetch_asset_pair_metadata(symbol=normalized_symbol)
+        except Exception:
+            pair_metadata = None
+
+        if pair_metadata is not None:
+            rounded_size = self._round_down(size, decimals=int(pair_metadata["lot_decimals"]))
+            minimum_size = float(pair_metadata["ordermin"])
+            minimum_cost = float(pair_metadata["costmin"])
+            estimated_cost = rounded_size * price
+            if rounded_size <= 0.0 or (minimum_size > 0.0 and rounded_size < minimum_size):
+                return ExecutionReport(
+                    order_id=order_id,
+                    status="REJECTED",
+                    message=f"order size {rounded_size:.10f} is below Kraken's minimum size {minimum_size} for {normalized_symbol}",
+                )
+            if minimum_cost > 0.0 and estimated_cost < minimum_cost:
+                return ExecutionReport(
+                    order_id=order_id,
+                    status="REJECTED",
+                    message=f"order notional {estimated_cost:.8f} is below Kraken's minimum cost {minimum_cost} for {normalized_symbol}",
+                )
+            order_size = rounded_size
+
+        if self.api_key and self.api_secret:
+            try:
+                balance_snapshot = self.fetch_balance_snapshot()
+            except Exception:
+                balance_snapshot = None
+
+            if balance_snapshot is not None:
+                if normalized_side == "buy":
+                    quote_asset = self._quote_asset(normalized_symbol)
+                    available = float(balance_snapshot.get("balances", {}).get(quote_asset, 0.0))
+                    estimated_cost = order_size * price
+                    if available < estimated_cost:
+                        return ExecutionReport(
+                            order_id=order_id,
+                            status="REJECTED",
+                            message=f"insufficient {quote_asset} balance ({available:.8f}) for estimated cost {estimated_cost:.8f}",
+                        )
+                else:
+                    base_asset = self._base_asset(normalized_symbol)
+                    available = float(balance_snapshot.get("positions", {}).get(base_asset, 0.0))
+                    if available < order_size:
+                        return ExecutionReport(
+                            order_id=order_id,
+                            status="REJECTED",
+                            message=f"insufficient {base_asset} position ({available:.10f}) for sell size {order_size:.10f}",
+                        )
 
         order = ExecutionOrder(
             order_id=order_id,
-            side=side,
-            size=size,
-            symbol=symbol,
+            side=normalized_side,
+            size=order_size,
+            symbol=normalized_symbol,
             price=price,
             timestamp=timestamp,
             status="SUBMITTED",
@@ -576,11 +651,11 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             payload = self._private_request(
                 endpoint="AddOrder",
                 params={
-                    "pair": self._normalize_symbol(symbol or "BTC/EUR"),
-                    "type": self._normalize_side(side),
+                    "pair": self._normalize_symbol(normalized_symbol),
+                    "type": normalized_side,
                     "ordertype": "limit",
                     "price": str(price),
-                    "volume": self._format_decimal(size),
+                    "volume": self._format_decimal(order_size),
                 },
             )
         except RuntimeError as exc:
@@ -715,9 +790,11 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             raise RuntimeError(self._format_api_errors(errors))
         return self._normalize_remote_orders_payload(payload)
 
-    def fetch_asset_pair_metadata(self, *, symbol: str) -> dict[str, Any]:
+    def fetch_asset_pair_metadata(self, *, symbol: str, use_cache: bool = True) -> dict[str, Any]:
         """Fetch Kraken pair metadata including minimum size and precision rules."""
         pair_code = self._normalize_symbol(symbol)
+        if use_cache and pair_code in self._pair_metadata_cache:
+            return self._pair_metadata_cache[pair_code]
         payload = self._request_json("GET", "https://api.kraken.com/0/public/AssetPairs", params={"pair": pair_code})
         errors = self._extract_api_errors(payload)
         if errors:
@@ -731,7 +808,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         raw_metadata = result.get(pair_key)
         if not isinstance(raw_metadata, dict):
             raise RuntimeError(f"Kraken asset-pair metadata was malformed for {symbol}")
-        return {
+        metadata = {
             "pair_code": str(pair_key),
             "symbol": symbol.upper(),
             "wsname": raw_metadata.get("wsname"),
@@ -744,6 +821,8 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             "lot_decimals": int(raw_metadata.get("lot_decimals", 0) or 0),
             "raw": raw_metadata,
         }
+        self._pair_metadata_cache[pair_code] = metadata
+        return metadata
 
     def fetch_ticker_snapshot(self, *, symbol: str) -> dict[str, Any]:
         """Fetch the latest Kraken ticker for the requested symbol."""

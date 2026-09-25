@@ -12,9 +12,43 @@ from src.execution.adapters import ExecutionRouter, FiriExecutionAdapter, Kraken
 from src.execution.reconciliation import SessionAccountStateTracker
 
 
-def test_kraken_adapter_tracks_local_order_state() -> None:
+def _permissive_pair_metadata_response(pair_code: str) -> dict[str, object]:
+    """Build an AssetPairs-shaped response with minimums low enough not to block test orders."""
+    return {
+        "error": [],
+        "result": {
+            pair_code: {
+                "wsname": pair_code,
+                "altname": pair_code,
+                "status": "online",
+                "ordermin": "0.00001",
+                "costmin": "0.01",
+                "tick_size": "0.1",
+                "pair_decimals": 1,
+                "lot_decimals": 8,
+            }
+        },
+    }
+
+
+def test_kraken_adapter_tracks_local_order_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test test kraken adapter tracks local order state."""
     adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+
+    def fake_request_json(self: KrakenExecutionAdapter, method: str, url: str, *, params=None, headers=None, data=None) -> dict[str, object]:
+        return _permissive_pair_metadata_response("XXBTZEUR")
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "10000.0"}}
+        if endpoint == "AddOrder":
+            return {"error": [], "result": {"txid": ["abc123"]}}
+        if endpoint == "QueryOrders":
+            return {"error": [], "result": {"abc123": {"status": "closed", "vol_exec": "0.25", "price": "100.0", "fee": "0.25"}}}
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
 
     report = adapter.submit_order(
         order_id="kraken-1",
@@ -202,6 +236,8 @@ def test_kraken_adapter_uses_private_api_for_submit_and_status(monkeypatch) -> N
             return {"error": [], "result": {"txid": ["abc123"], "descr": {"order": "buy 0.25 BTC @ 100"}}}
         if endpoint == "QueryOrders":
             return {"error": [], "result": {"abc123": {"status": "closed", "vol_exec": "0.25", "price": "100.0", "fee": "0.25"}}}
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "10000.0"}}
         raise AssertionError(f"unexpected endpoint: {endpoint}")
 
     monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
@@ -217,8 +253,9 @@ def test_kraken_adapter_uses_private_api_for_submit_and_status(monkeypatch) -> N
     status_report = adapter.get_order_status(order_id="kraken-2")
 
     assert report.status == "SUBMITTED"
-    assert calls[0][0] == "AddOrder"
-    assert calls[0][1]["pair"] == "XETHZEUR"
+    add_order_calls = [call for call in calls if call[0] == "AddOrder"]
+    assert add_order_calls
+    assert add_order_calls[0][1]["pair"] == "XETHZEUR"
     assert status_report.status == "FILLED"
     assert status_report.filled_size == 0.25
 
@@ -231,9 +268,15 @@ def test_kraken_adapter_recover_execution_state_normalizes_kraken_payloads(monke
         """Perform the fake private request operation."""
         if endpoint == "AddOrder":
             return {"error": [], "result": {"txid": ["abc123"], "descr": {"order": "buy 0.25 BTC @ 100"}}}
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "10000.0"}}
         raise AssertionError(f"unexpected endpoint: {endpoint}")
 
+    def fake_request_json(self: KrakenExecutionAdapter, method: str, url: str, *, params=None, headers=None, data=None) -> dict[str, object]:
+        return _permissive_pair_metadata_response("XXBTZEUR")
+
     monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
 
     report = adapter.submit_order(
         order_id="kraken-recovery",
@@ -273,9 +316,14 @@ def test_kraken_adapter_recover_execution_state_normalizes_kraken_payloads(monke
     assert adapter._orders["kraken-recovery"].status == "FILLED"
 
 
-def test_kraken_adapter_handles_missing_credentials_non_destructively() -> None:
+def test_kraken_adapter_handles_missing_credentials_non_destructively(monkeypatch: pytest.MonkeyPatch) -> None:
     """Submit, status, and cancel should stay local when Kraken credentials are missing."""
     adapter = KrakenExecutionAdapter(api_key="", api_secret="")
+
+    def fake_request_json(self: KrakenExecutionAdapter, method: str, url: str, *, params=None, headers=None, data=None) -> dict[str, object]:
+        return _permissive_pair_metadata_response("XXBTZEUR")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
 
     report = adapter.submit_order(
         order_id="kraken-local",
@@ -308,9 +356,15 @@ def test_kraken_adapter_uses_remote_order_id_for_cancel(monkeypatch) -> None:
             return {"error": [], "result": {"txid": ["abc123"]}}
         if endpoint == "CancelOrder":
             return {"error": [], "result": {"count": 1}}
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "10000.0"}}
         raise AssertionError(f"unexpected endpoint: {endpoint}")
 
+    def fake_request_json(self: KrakenExecutionAdapter, method: str, url: str, *, params=None, headers=None, data=None) -> dict[str, object]:
+        return _permissive_pair_metadata_response("XXBTZEUR")
+
     monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
 
     adapter.submit_order(
         order_id="kraken-cancel",
@@ -324,6 +378,202 @@ def test_kraken_adapter_uses_remote_order_id_for_cancel(monkeypatch) -> None:
 
     assert cancel_report.status == "CANCELED"
     assert calls[-1] == ("CancelOrder", {"txid": "abc123"})
+
+
+def test_kraken_adapter_submit_order_rejects_size_below_exchange_minimum(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A strategy-driven order below Kraken's minimum size should be rejected before AddOrder is called."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+    calls: list[str] = []
+
+    def fake_request_json(self: KrakenExecutionAdapter, method: str, url: str, *, params=None, headers=None, data=None) -> dict[str, object]:
+        return {
+            "error": [],
+            "result": {
+                "XXBTZEUR": {
+                    "wsname": "XBT/EUR",
+                    "altname": "XBTEUR",
+                    "status": "online",
+                    "ordermin": "0.00005",
+                    "costmin": "0.45",
+                    "tick_size": "0.1",
+                    "pair_decimals": 1,
+                    "lot_decimals": 8,
+                }
+            },
+        }
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append(endpoint)
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    report = adapter.submit_order(
+        order_id="kraken-too-small",
+        side="buy",
+        size=0.00001,
+        price=50000.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+
+    assert report.status == "REJECTED"
+    assert "minimum size" in (report.message or "").lower()
+    assert calls == []
+
+
+def test_kraken_adapter_submit_order_rejects_notional_below_exchange_minimum_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A strategy-driven order sized under Kraken's minimum notional should be rejected before AddOrder is called."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+    calls: list[str] = []
+
+    def fake_request_json(self: KrakenExecutionAdapter, method: str, url: str, *, params=None, headers=None, data=None) -> dict[str, object]:
+        return {
+            "error": [],
+            "result": {
+                "XXBTZEUR": {
+                    "wsname": "XBT/EUR",
+                    "altname": "XBTEUR",
+                    "status": "online",
+                    "ordermin": "0.00005",
+                    "costmin": "10.0",
+                    "tick_size": "0.1",
+                    "pair_decimals": 1,
+                    "lot_decimals": 8,
+                }
+            },
+        }
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append(endpoint)
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    # size (0.0001) is above ordermin (0.00005) but the notional (0.0001 * 100 = 0.01)
+    # is well under costmin (10.0).
+    report = adapter.submit_order(
+        order_id="kraken-too-cheap",
+        side="buy",
+        size=0.0001,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+
+    assert report.status == "REJECTED"
+    assert "minimum cost" in (report.message or "").lower()
+    assert calls == []
+
+
+def test_kraken_adapter_submit_order_rejects_insufficient_quote_balance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A strategy-driven buy order that exceeds the available EUR balance should be rejected before AddOrder is called."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+    add_order_calls: list[str] = []
+
+    def fake_request_json(self: KrakenExecutionAdapter, method: str, url: str, *, params=None, headers=None, data=None) -> dict[str, object]:
+        return _permissive_pair_metadata_response("XXBTZEUR")
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "10.0"}}
+        add_order_calls.append(endpoint)
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    report = adapter.submit_order(
+        order_id="kraken-underfunded",
+        side="buy",
+        size=1.0,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+
+    assert report.status == "REJECTED"
+    assert "insufficient" in (report.message or "").lower()
+    assert add_order_calls == []
+
+
+def test_kraken_adapter_submit_order_rejects_insufficient_base_position_for_sell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A strategy-driven sell order larger than the held position should be rejected before AddOrder is called."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+    add_order_calls: list[str] = []
+
+    def fake_request_json(self: KrakenExecutionAdapter, method: str, url: str, *, params=None, headers=None, data=None) -> dict[str, object]:
+        return _permissive_pair_metadata_response("XXBTZEUR")
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        if endpoint == "Balance":
+            return {"error": [], "result": {"XXBT": "0.01"}}
+        add_order_calls.append(endpoint)
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    report = adapter.submit_order(
+        order_id="kraken-oversold",
+        side="sell",
+        size=1.0,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+
+    assert report.status == "REJECTED"
+    assert "insufficient" in (report.message or "").lower()
+    assert add_order_calls == []
+
+
+def test_kraken_adapter_submit_order_rounds_size_to_exchange_precision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A valid order should be rounded down to Kraken's lot precision before submission."""
+    adapter = KrakenExecutionAdapter(api_key="kraken-key", api_secret="kraken-secret")
+    add_order_params: dict[str, object] = {}
+
+    def fake_request_json(self: KrakenExecutionAdapter, method: str, url: str, *, params=None, headers=None, data=None) -> dict[str, object]:
+        return {
+            "error": [],
+            "result": {
+                "XXBTZEUR": {
+                    "wsname": "XBT/EUR",
+                    "altname": "XBTEUR",
+                    "status": "online",
+                    "ordermin": "0.00005",
+                    "costmin": "0.45",
+                    "tick_size": "0.1",
+                    "pair_decimals": 1,
+                    "lot_decimals": 4,
+                }
+            },
+        }
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "10000.0"}}
+        if endpoint == "AddOrder":
+            add_order_params.update(params)
+            return {"error": [], "result": {"txid": ["abc123"]}}
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+
+    report = adapter.submit_order(
+        order_id="kraken-precision",
+        side="buy",
+        size=0.123456789,
+        price=100.0,
+        timestamp=datetime(2024, 1, 1, 12, 0, 0),
+        symbol="BTC/EUR",
+    )
+
+    assert report.status == "SUBMITTED"
+    assert add_order_params["volume"] == "0.1234"
 
 
 def test_kraken_adapter_verify_dry_run_exercises_private_endpoints_non_destructively(monkeypatch: pytest.MonkeyPatch) -> None:

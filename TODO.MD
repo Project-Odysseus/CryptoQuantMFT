@@ -142,8 +142,8 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [ ] orders/trades/equity snapshots persist
     - [ ] dashboard/report output remains readable
   - [ ] Make strategy-driven live execution match manual live controls:
-    - [ ] enforce exchange minimum order sizes and precision before strategy orders are submitted
-    - [ ] surface rejected-too-small / precision / balance failures explicitly in runtime health output
+    - [x] enforce exchange minimum order sizes and precision before strategy orders are submitted (2026-09-25: `KrakenExecutionAdapter.submit_order`, see `todo_important.md` — same checks as the manual preview/submit flows, unit-tested but not yet exercised against a real account)
+    - [x] surface rejected-too-small / precision / balance failures explicitly in runtime health output (the rejection message flows through `_route_exchange_order` → `order.last_reason` → an `order_lifecycle` operational event, which the existing runtime health dashboard already lists under "Recent operational events" — not a dedicated summary field, but a specific, visible reason string per rejection)
     - [ ] define close/exit behavior clearly when the live strategy flips from buy to sell
     - [ ] confirm live strategy orders remain long/flat only for Kraken spot until shorting support is explicitly designed
 
