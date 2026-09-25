@@ -269,28 +269,33 @@ def keltner_breakout_strategy(window: int = 20, atr_multiplier: float = 2.0, all
     return strategy
 
 
-def trend_tstat_strategy(window: int = 24, t_threshold: float = 4.0, allow_short: bool = True) -> StrategyFn:
-    """Statistical trend filter: enter when the log-price regression slope is strong relative to its noise.
+def trend_tstat_strategy(window: int = 24, strength_threshold: float = 1.5, allow_short: bool = True) -> StrategyFn:
+    """Statistical trend filter: enter when the log-price slope is strong relative to the noise around it.
 
-    The t-statistic of the slope rewards trends that are both steep *and*
-    clean; a choppy path to the same endpoint scores low, which a plain
-    N-bar return (momentum_breakout) or MA crossover can't tell apart.
-    Enters above `t_threshold` and holds until the slope's sign flips
-    (hysteresis, so it doesn't churn around the threshold). See
-    `linreg_tstat` for why thresholds are larger than textbook t-values.
+    Uses the regression-slope t-statistic divided by sqrt(window) as a
+    scale-free trend score. Raw slope t-stats on prices grow with the window
+    length (spurious-regression effect), so the division makes one
+    threshold mean the same thing at any window: on BTC/SOL 4h bars the
+    score's median is roughly 0.7-0.9 and its 90th percentile roughly
+    1.6-2.3. The t-stat rewards trends that are steep *and* clean; a choppy
+    path to the same endpoint scores low, which a plain N-bar return
+    (momentum_breakout) or MA crossover can't tell apart. Enters above
+    `strength_threshold` and holds until the slope's sign flips
+    (hysteresis, so it doesn't churn around the threshold).
     """
     warmup = window
+    scale = float(np.sqrt(window))
 
     def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
         """Hold in the direction of a strong, clean trend until the trend's slope changes sign."""
         if len(history) < warmup:
             return 0
-        tstat = linreg_tstat(np.log(series(history, "close")), window)
+        score = linreg_tstat(np.log(series(history, "close")), window) / scale
         return latch_position(
-            long_entry=tstat > t_threshold,
-            long_exit=tstat < 0.0,
-            short_entry=tstat < -t_threshold if allow_short else None,
-            short_exit=tstat > 0.0 if allow_short else None,
+            long_entry=score > strength_threshold,
+            long_exit=score < 0.0,
+            short_entry=score < -strength_threshold if allow_short else None,
+            short_exit=score > 0.0 if allow_short else None,
         )
 
     return strategy

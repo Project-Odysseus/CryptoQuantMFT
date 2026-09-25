@@ -111,9 +111,9 @@ def test_trend_tstat_follows_clean_trends_in_both_directions() -> None:
     noise = [0.3, -0.2, 0.1, -0.3, 0.2, -0.1, 0.25, -0.15, 0.05, -0.05, 0.1, -0.1]
     up = [100.0 + index + wiggle for index, wiggle in enumerate(noise)]
     down = [120.0 - index + wiggle for index, wiggle in enumerate(noise)]
-    assert _signal(trend_tstat_strategy(window=10, t_threshold=4.0), up) == 1
-    assert _signal(trend_tstat_strategy(window=10, t_threshold=4.0), down) == -1
-    assert _signal(trend_tstat_strategy(window=10, t_threshold=4.0, allow_short=False), down) == 0
+    assert _signal(trend_tstat_strategy(window=10, strength_threshold=1.0), up) == 1
+    assert _signal(trend_tstat_strategy(window=10, strength_threshold=1.0), down) == -1
+    assert _signal(trend_tstat_strategy(window=10, strength_threshold=1.0, allow_short=False), down) == 0
 
 
 def test_rsi_reversion_holds_until_rsi_recovers() -> None:
