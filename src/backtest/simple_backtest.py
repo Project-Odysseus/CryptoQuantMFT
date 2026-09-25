@@ -591,6 +591,83 @@ def volume_confirmed_momentum_biased_strategy(
     )
 
 
+def band_reversion_strategy(window: int = 20, num_std: float = 2.0, allow_short: bool = True) -> StrategyFn:
+    """Create a mean-reversion strategy that trades against moves outside a rolling price band.
+
+    Computes a rolling mean and standard deviation over `window` bars
+    (a Bollinger-Band-style channel) and bets on reversion back toward the
+    mean: buy when price closes below the lower band, sell/short when it
+    closes above the upper band. This is deliberately the opposite bet to
+    the momentum-family strategies above - useful when a market is ranging
+    rather than trending.
+    """
+
+    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
+        """Generate a reversion signal when price closes outside the rolling band."""
+        if len(history) < window + 1:
+            return 0
+
+        prior_closes = [_get_close(bar) for bar in history[-window - 1 : -1]]
+        band_mean = sum(prior_closes) / len(prior_closes)
+        variance = sum((close - band_mean) ** 2 for close in prior_closes) / len(prior_closes)
+        band_std = variance**0.5
+        if band_std <= 0.0:
+            return 0
+
+        current_close = _get_close(current_bar)
+        lower_band = band_mean - num_std * band_std
+        upper_band = band_mean + num_std * band_std
+        if current_close < lower_band:
+            return 1
+        if current_close > upper_band and allow_short:
+            return -1
+        return 0
+
+    return strategy
+
+
+def make_long_only(strategy_fn: StrategyFn) -> StrategyFn:
+    """Wrap any strategy so short signals (-1) are suppressed to flat (0).
+
+    Lets any existing strategy be tested as a long-only variant without
+    duplicating its signal logic - e.g. to check whether a symmetric
+    strategy's shorts are actually adding value or just adding noise.
+    """
+
+    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
+        """Pass through the wrapped strategy's signal, flattening any short."""
+        signal = _normalize_signal(strategy_fn(history, index, current_bar))
+        return signal if signal > 0 else 0
+
+    return strategy
+
+
+def make_regime_gated(
+    strategy_fn: StrategyFn,
+    *,
+    required_regime: str = "trending",
+    regime_window: int = 20,
+    trending_threshold: float = 0.3,
+) -> StrategyFn:
+    """Wrap a strategy so it only signals while the market is in `required_regime`.
+
+    Uses `classify_regime` (efficiency-ratio based) on the same bar history
+    the strategy already receives, so momentum-family strategies can be
+    restricted to trending stretches (or a reversion strategy to ranging
+    ones) without a separate data feed.
+    """
+    from src.signals.regime import classify_regime
+
+    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
+        """Pass through the wrapped strategy's signal only in the required regime."""
+        regime = classify_regime(history, window=regime_window, trending_threshold=trending_threshold)
+        if regime != required_regime:
+            return 0
+        return strategy_fn(history, index, current_bar)
+
+    return strategy
+
+
 def _normalize_signal(raw_signal: float | int | str | None) -> float:
     if raw_signal is None:
         return 0.0

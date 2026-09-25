@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
-from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, momentum_breakout_strategy, moving_average_crossover_strategy, signal_trend_strategy, volume_confirmed_momentum_strategy, volume_confirmed_momentum_biased_strategy
+from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, band_reversion_strategy, momentum_breakout_strategy, moving_average_crossover_strategy, signal_trend_strategy, volume_confirmed_momentum_strategy, volume_confirmed_momentum_biased_strategy
 from src.risk.controls import RiskControlConfig, RiskManager
 
 
@@ -52,6 +52,7 @@ class StrategyRegistry:
             "signal_trend": signal_trend_strategy,
             "volume_confirmed_momentum": volume_confirmed_momentum_strategy,
             "volume_confirmed_momentum_biased": volume_confirmed_momentum_biased_strategy,
+            "band_reversion": band_reversion_strategy,
         }
         # Whether each strategy can emit a short (-1) signal at all. This is
         # about the signal itself, not whether a given runtime mode is
@@ -65,6 +66,7 @@ class StrategyRegistry:
             "signal_trend": True,
             "volume_confirmed_momentum": True,
             "volume_confirmed_momentum_biased": True,
+            "band_reversion": True,
         }
 
     def register(self, name: str, strategy: Any, *, can_short: bool = True) -> None:

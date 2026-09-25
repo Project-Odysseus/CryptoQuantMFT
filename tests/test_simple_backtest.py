@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from src.backtest import SimpleBacktester, moving_average_crossover_strategy
 from src.backtest.costs import CostModel
-from src.backtest.simple_backtest import volume_confirmed_momentum_strategy, volume_confirmed_momentum_biased_strategy
+from src.backtest.simple_backtest import band_reversion_strategy, make_long_only, make_regime_gated, volume_confirmed_momentum_strategy, volume_confirmed_momentum_biased_strategy
 from src.risk.controls import RiskControlConfig, RiskManager
 from src.storage.bar_aggregator import OHLCVBar
 
@@ -317,3 +317,76 @@ def test_simple_backtester_uses_cost_model_for_trade_pnl() -> None:
     assert result.trade_costs
     assert result.final_equity < 100.0
     assert result.trade_records[0].cost > 0.0
+
+
+def test_band_reversion_strategy_buys_below_the_lower_band() -> None:
+    """A close well below the rolling band should signal a long (reversion) entry."""
+    history = [_bar(close=100.0 + (i % 2), volume=1.0, index=i) for i in range(20)]
+    history.append(_bar(close=80.0, volume=1.0, index=20))
+
+    strategy = band_reversion_strategy(window=20, num_std=2.0)
+    signal = strategy(history, len(history) - 1, history[-1])
+
+    assert signal == 1
+
+
+def test_band_reversion_strategy_shorts_above_the_upper_band() -> None:
+    """A close well above the rolling band should signal a short (reversion) entry."""
+    history = [_bar(close=100.0 + (i % 2), volume=1.0, index=i) for i in range(20)]
+    history.append(_bar(close=120.0, volume=1.0, index=20))
+
+    strategy = band_reversion_strategy(window=20, num_std=2.0)
+    signal = strategy(history, len(history) - 1, history[-1])
+
+    assert signal == -1
+
+
+def test_band_reversion_strategy_stays_flat_inside_the_band() -> None:
+    """A close near the rolling mean should not trigger a reversion trade."""
+    history = [_bar(close=100.0, volume=1.0, index=i) for i in range(20)]
+    history.append(_bar(close=100.1, volume=1.0, index=20))
+
+    strategy = band_reversion_strategy(window=20, num_std=2.0)
+    signal = strategy(history, len(history) - 1, history[-1])
+
+    assert signal == 0
+
+
+def test_band_reversion_strategy_respects_allow_short_false() -> None:
+    """When allow_short is False, an upper-band breach should stay flat instead of shorting."""
+    history = [_bar(close=100.0, volume=1.0, index=i) for i in range(20)]
+    history.append(_bar(close=120.0, volume=1.0, index=20))
+
+    strategy = band_reversion_strategy(window=20, num_std=2.0, allow_short=False)
+    signal = strategy(history, len(history) - 1, history[-1])
+
+    assert signal == 0
+
+
+def test_make_long_only_flattens_short_signals() -> None:
+    """The long-only wrapper should suppress -1 signals to 0 and pass through the rest."""
+
+    def always_short(history, index, current_bar) -> int:
+        return -1
+
+    def always_long(history, index, current_bar) -> int:
+        return 1
+
+    history = [_bar(close=100.0, volume=1.0, index=0)]
+    assert make_long_only(always_short)(history, 0, history[0]) == 0
+    assert make_long_only(always_long)(history, 0, history[0]) == 1
+
+
+def test_make_regime_gated_blocks_signal_outside_required_regime() -> None:
+    """A regime-gated strategy should only pass through signals in the required regime."""
+
+    def always_long(history, index, current_bar) -> int:
+        return 1
+
+    # Flat/oscillating closes -> low efficiency ratio -> classified "ranging".
+    choppy_history = [_bar(close=100.0 + (i % 2), volume=1.0, index=i) for i in range(25)]
+    gated_for_trending = make_regime_gated(always_long, required_regime="trending", regime_window=20)
+    assert gated_for_trending(choppy_history, len(choppy_history) - 1, choppy_history[-1]) == 0
+
+    gated_for_ranging = make_regime_gated(always_long, required_regime="ranging", regime_window=20)
+    assert gated_for_ranging(choppy_history, len(choppy_history) - 1, choppy_history[-1]) == 1
