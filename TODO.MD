@@ -152,7 +152,8 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] Engine support for margin accounts (margin equity, buying-power sizing, funding/liquidation events) and `RiskControlConfig.liquidation_buffer_pct`
   - [x] `--execution-exchange kraken_futures` (`live_dry_run` only) and `--perp-max-leverage`; `paper` and `live` refuse it
   - [x] Fixed: exchange-cycle stops (drawdown/time/ATR) never fired on shorts because no entry price was tracked for them
-  - [ ] Verify real contract spec, fee schedule and funding history for the target venue, and product availability for the account holder
+  - [x] Verified real contract spec, fee schedule and funding history from Kraken Futures' public API (2026-09-25): `--futures-venue-check`, `src/data/kraken_futures.py`. Funding is ~0.009%/day for BTC/ETH, a third of the earlier assumption
+  - [ ] Product availability for the account holder (Norway) is not in the public data: confirm with Kraken
   - [ ] Real futures connector + execution adapter (auth, orders, positions, margin, funding feed), behind the same live safety gates
   - [ ] Futures reconciliation, persisted account state, kill-switch cancel/flatten, exchange risk limits, tax treatment
 - [ ] **Priority 5: Resolve the Incomplete Futures Track** (the older dated-futures scaffolding below is a different product from the perpetuals above)

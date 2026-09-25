@@ -6,15 +6,27 @@ scaffolding (`src/execution/contracts/`, `src/execution/sizing/`, `docs/FUTURES_
 
 ## Why perpetuals
 
-Costs. Research at assumed perp fees (about 0.2% per round trip against about 1.0% on spot) turned the mean
-reversion strategies from clearly losing to positive and improved the trend strategies, and perps allow real
-shorting. See `docs/research_log.md`. The fee and funding figures used there and in the sandbox are assumptions.
+Costs. Research at Kraken Futures' published fees (0.05% taker, about 0.2% per round trip with slippage, against
+about 1.0% on spot) turned the mean reversion strategies from clearly losing to positive and improved the trend
+strategies, and perps allow real shorting. See `docs/research_log.md`.
+
+## Verified against the venue (public data, 2026-09-25)
+
+`python main.py --futures-venue-check --futures-symbol BTC/USD` reads Kraken Futures' public endpoints (no
+credentials, no orders) and prints the contract, fees, mark and index price and funding statistics. Findings:
+`PF_XBTUSD` is a USD-quoted linear flexible future, size step 0.0001 BTC, tick 1 USD, taker 0.05% / maker 0.02% at
+the entry tier, first-tier margin 1% initial (100x venue limit) and 0.5% maintenance in 8 size tiers, hourly
+funding averaging about 0.009%/day for BTC and ETH and about 0 for SOL (it changes sign often). Kraken lists no
+banned countries for the contract in its public data, but that is not the same as availability to your account:
+confirm with Kraken. The contract is USD-quoted, so a EUR account carries currency exposure.
+`src/data/kraken_futures.py` is the client and `perp_contract_from_instrument()` builds a verified `PerpContract`.
 
 ## What exists
 
 - `src/execution/perps.py`
-  - `PerpContract`: linear perpetual spec (size step, min size, max leverage, maintenance margin, fees). Numbers
-    from `assumed_perp_contract()` are placeholders (`verified=False`), not read from any exchange.
+  - `PerpContract`: linear perpetual spec (size step, min size, max leverage, tiered maintenance margin, fees).
+    `perp_contract_from_instrument()` builds a verified one from Kraken's public data; `assumed_perp_contract()`
+    is an offline placeholder (`verified=False`).
   - Margin math: `unrealized_pnl`, `initial_margin`, `maintenance_margin`, `liquidation_price`.
   - `SandboxPerpExecutionAdapter`: an in-process margin account. Orders fill at the submitted price. A fill locks
     margin instead of moving notional: the wallet changes only by realized PnL, fees and funding. It rejects

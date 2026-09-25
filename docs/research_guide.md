@@ -112,9 +112,11 @@ These choices are deliberate. They are what makes the numbers comparable and har
 - **Trading costs on every fill.** The default is Kraken's taker fee for small accounts (0.40%) plus 10 bps of
   slippage, about **1.0% per round trip**. That hurdle decides most results (see the research log).
   `--venue perp` swaps in assumed perpetual-futures costs (0.05% taker + 5 bps, about 0.2% per round trip) and
-  charges **funding** of 0.03% of notional per day on the open position (longs pay, shorts receive when positive).
+  charges **funding** of 0.01% of notional per day on the open position (longs pay, shorts receive when positive).
   Funding is applied to the mark-to-market equity, so it shows in return, Sharpe and drawdown but not in
-  `avg_trade` or `win_rate`. The perp figures are round numbers from memory, not read from an exchange.
+  `avg_trade` or `win_rate`. Fees are Kraken Futures' published entry tier and the funding default is close to
+  the measured one-year mean for BTC and ETH; slippage is an assumption. Funding is volatile (negative about a
+  third of the time, up to about +0.15%/day), so re-run with `--funding-pct-per-day 0.03` as a stress test.
 - **Full size, no risk overlay.** Every trade uses 100% of equity with no leverage, stops or volatility sizing, so the
   numbers measure the signal. Sizing and stops are a separate layer that comes after a signal has earned it.
 - **Mark-to-market equity.** Equity is valued at every bar's close, so drawdowns inside open trades count.

@@ -84,12 +84,15 @@ class CostSettings:
         return cls(fee_pct=0.25, slippage_bps=0.0) if maker else cls(fee_pct=0.40, slippage_bps=10.0)
 
     @classmethod
-    def perp(cls, *, maker: bool = False, funding_pct_per_day: float = 0.03) -> "CostSettings":
-        """Typical perpetual-futures costs: 0.05% taker + 5 bps slippage (or 0.02% maker), 0.03%/day funding.
+    def perp(cls, *, maker: bool = False, funding_pct_per_day: float = 0.01) -> "CostSettings":
+        """Kraken Futures perpetual costs: 0.05% taker or 0.02% maker (the base fee tier), plus funding.
 
-        These are assumed round numbers for a base fee tier, not values read
-        from an exchange. Verify against the venue's current fee schedule and
-        recent funding history before relying on them.
+        Fees are the venue's published entry tier (checked 2026-09-25 against
+        the public fee schedule). Funding defaults to 0.01%/day, close to the
+        measured one-year mean for BTC and ETH (about 0.009%/day); it swings
+        from negative to about +0.15%/day, so 0.03 is a reasonable stress
+        case and 0.10 is extreme. The 5 bps taker slippage is still an
+        assumption.
         """
         return cls(fee_pct=0.02, slippage_bps=0.0, funding_pct_per_day=funding_pct_per_day) if maker else cls(fee_pct=0.05, slippage_bps=5.0, funding_pct_per_day=funding_pct_per_day)
 

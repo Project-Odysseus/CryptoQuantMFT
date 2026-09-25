@@ -153,7 +153,7 @@ def test_cost_presets_match_the_documented_figures() -> None:
     assert CostSettings.spot().round_trip_pct == pytest.approx(1.0)
     assert CostSettings.spot(maker=True).round_trip_pct == pytest.approx(0.5)
     perp = CostSettings.perp()
-    assert (perp.fee_pct, perp.slippage_bps, perp.funding_pct_per_day) == (0.05, 5.0, 0.03)
+    assert (perp.fee_pct, perp.slippage_bps, perp.funding_pct_per_day) == (0.05, 5.0, 0.01)
     assert perp.round_trip_pct == pytest.approx(0.2)
     assert CostSettings.perp(maker=True).round_trip_pct == pytest.approx(0.04)
 

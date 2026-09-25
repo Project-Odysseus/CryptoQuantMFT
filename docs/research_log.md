@@ -5,11 +5,31 @@ Dated findings from strategy research, newest first. Methodology and column mean
 
 ---
 
+## 2026-09-25 (latest): Perp assumptions checked against Kraken Futures' public data
+
+Checked with `python main.py --futures-venue-check --futures-symbol BTC/USD` (public endpoints, no credentials):
+
+- **Fees confirmed:** `PF_XBTUSD` uses the schedule with 0.02% maker and 0.05% taker at the entry tier (0 USD of
+  30-day volume), exactly the assumption below. Slippage (5 bps) is still an assumption.
+- **Funding is about a third of what I assumed.** Hourly funding over the last year, in percent of notional per
+  day (positive = longs pay): BTC mean 0.0087, median 0.0084, p10 -0.014, p90 0.032, min -0.43, max 0.15; ETH mean
+  0.0086 (min -1.3); SOL mean -0.001 (min -3.0, max +0.65). 31-32% of hours are negative for BTC and ETH, 48% for
+  SOL, and BTC funding was negative Feb-Apr 2026. `CostSettings.perp()` now defaults to 0.01%/day. Treat 0.03 as a
+  stress case and 0.10 as extreme.
+- **Contract facts:** USD-quoted linear flexible futures; size steps 0.0001 BTC / 0.001 ETH / 0.01 SOL; first-tier
+  margin 1% initial (venue limit 100x) and 0.5% maintenance, with 8 tiers rising by position size.
+- **Rerun with measured funding** (`--venue perp`, median Sharpe across parameter combos, in-sample / holdout,
+  share of combos positive in-sample in brackets). 4h long-only: `keltner_breakout` 1.69 / 2.17 (100%),
+  `moving_average_crossover` 1.48 / 2.60 (100%), `donchian_breakout` 1.32 / 1.93 (100%), `band_reversion`
+  1.41 / 2.11 (92%), `rsi_reversion` 1.27 / 0.25 (100%). Daily long/short: `moving_average_crossover` 0.79 / 0.15
+  (100%), `keltner_breakout` 0.59 / 0.67 (92%), `donchian_breakout` 0.25 / 0.35 (100%). The conclusions are the
+  same as below and the improvement is a bit larger; 4h buy-and-hold (2.21 / 4.64) is still above every long-only row.
+
 ## 2026-09-25 (later): Same sweep under perpetual-futures costs
 
-**Assumptions (not verified against an exchange):** 0.05% taker + 5 bps slippage per fill (~0.2% round trip),
-0.02% maker, funding 0.03%/day (stress: 0.10%/day) charged on the position, positive = longs pay. Reproduce with
-`--venue perp` (add `--maker`, or `--funding-pct-per-day 0.10`). Median Sharpe across all parameter combos,
+**Assumptions used for this table:** 0.05% taker + 5 bps slippage per fill (~0.2% round trip), 0.02% maker, funding
+0.03%/day (stress: 0.10%/day) charged on the position, positive = longs pay. The fees were later confirmed and the
+funding found to be lower (see the entry above); reproduce with `--venue perp --funding-pct-per-day 0.03`. Median Sharpe across all parameter combos,
 in-sample / holdout:
 
 | 4h, long-only | Spot taker | Perp taker, no funding | Perp taker + 0.03%/day | Perp taker + 0.10%/day | Perp maker + 0.03%/day |

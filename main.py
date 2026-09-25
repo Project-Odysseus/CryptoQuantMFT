@@ -932,6 +932,30 @@ def record_tax_fiat_conversion(*, amount_eur: float, fx_rate: float | None, refe
         print(f"Reference: {reference}")
 
 
+def _run_futures_venue_check(*, symbol: str) -> None:
+    """Print Kraken Futures' public contract spec, fees, live prices and funding history for one perpetual."""
+    from src.data.kraken_futures import fetch_fee_schedules, fetch_funding_history, fetch_instrument, fetch_tickers, summarize_funding, venue_symbol_for
+    from src.execution.perps import perp_contract_from_instrument
+
+    venue_symbol = venue_symbol_for(symbol)
+    instrument = fetch_instrument(venue_symbol)
+    contract = perp_contract_from_instrument(instrument, fetch_fee_schedules()[instrument["feeScheduleUid"]], symbol=symbol)
+    ticker = fetch_tickers().get(venue_symbol, {})
+    print(f"Kraken Futures {venue_symbol} ({instrument.get('type')}, {contract.collateral_currency}-quoted, linear)")
+    print(f"  size step {contract.size_step:g} {contract.base_asset}, tick {contract.tick_size:g}, max position {instrument.get('maxPositionSize')}")
+    print(f"  fees (entry tier): taker {contract.taker_fee_rate:.4%}, maker {contract.maker_fee_rate:.4%}")
+    print(f"  margin (first tier): initial {1.0 / contract.max_leverage:.2%} (up to {contract.max_leverage:g}x), maintenance {contract.maintenance_margin_rate:.2%}; {len(contract.margin_tiers)} tiers by position size")
+    print(f"  countries banned: {instrument.get('countriesBanned') or 'none listed'}; platforms permitted: {', '.join(instrument.get('platformsPermitted', []))}")
+    if ticker:
+        print(f"  mark {ticker.get('markPrice')} index {ticker.get('indexPrice')} last {ticker.get('last')} bid/ask {ticker.get('bid')}/{ticker.get('ask')}")
+    summary = summarize_funding(fetch_funding_history(venue_symbol))
+    print(
+        f"  funding over {int(summary['hours'])}h (% of notional per day, positive = longs pay): mean {summary['mean_pct_per_day']:.4f}, median {summary['median_pct_per_day']:.4f}, "
+        f"p10 {summary['p10_pct_per_day']:.4f}, p90 {summary['p90_pct_per_day']:.4f}, negative {summary['share_negative']:.0%} of hours, min {summary['min_pct_per_day']:.3f}, max {summary['max_pct_per_day']:.3f}"
+    )
+    print("  note: whether this product is open to your account and jurisdiction is not in the public data; confirm with Kraken.")
+
+
 _ACCOUNT_SUMMARY_ACTION_EVENT_TYPES = {
     "kraken_manual_order_submission",
     "kraken_manual_close_submission",
@@ -1494,6 +1518,8 @@ def main() -> None:
     parser.add_argument("--since", default=None, help="Filter --post-run-analysis to data on or after this date (YYYY-MM-DD)")
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
+    parser.add_argument("--futures-venue-check", action="store_true", help="Non-destructive: fetch Kraken Futures public specs, fees, live mark price and funding history for --futures-symbol and print them (no credentials, no orders)")
+    parser.add_argument("--futures-symbol", default="BTC/USD", help="Symbol for --futures-venue-check, e.g. BTC/USD, ETH/USD or SOL/USD")
     parser.add_argument("--account-summary", action="store_true", help="Print a non-destructive Kraken account summary: balances, positions, open orders, exchange minimums, and recent live/manual actions")
     parser.add_argument("--account-summary-symbol", default=None, help="Symbol to use for --account-summary exchange-minimum checks, e.g. BTC/EUR")
     parser.add_argument("--account-summary-limit", type=int, default=10, help="Number of recent trades/actions to show with --account-summary")
@@ -1544,6 +1570,10 @@ def main() -> None:
         print("Kill switch activated")
         print(f"Reason: {state['reason']}")
         print(f"Orders cancelled: {len(state['orders_cancelled'])}")
+        return
+
+    if args.futures_venue_check:
+        _run_futures_venue_check(symbol=args.futures_symbol)
         return
 
     if args.account_summary:

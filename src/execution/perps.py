@@ -46,7 +46,9 @@ class PerpContract:
             before the position is liquidated.
         taker_fee_rate: Fee per fill as a fraction of notional.
         maker_fee_rate: Maker fee as a fraction of notional (informational).
-        verified: True only once the values were checked against the venue.
+        verified: True only when built from the venue's own instrument and fee data.
+        tick_size: Minimum price increment (0.0 when unknown).
+        margin_tiers: Venue margin schedule by position notional, if known.
     """
 
     symbol: str
@@ -60,6 +62,17 @@ class PerpContract:
     taker_fee_rate: float
     maker_fee_rate: float
     verified: bool = False
+    tick_size: float = 0.0
+    # (position notional threshold, initial margin rate, maintenance margin rate), ascending by threshold.
+    margin_tiers: tuple[tuple[float, float, float], ...] = ()
+
+    def maintenance_rate_at(self, notional: float) -> float:
+        """Maintenance margin rate that applies to a position of `notional` (tiered venues charge more on bigger positions)."""
+        rate = self.maintenance_margin_rate
+        for threshold, _initial, maintenance in self.margin_tiers:
+            if notional >= threshold:
+                rate = maintenance
+        return rate
 
     def __post_init__(self) -> None:
         """Reject specs whose numbers cannot describe a real contract."""
@@ -95,6 +108,44 @@ def assumed_perp_contract(symbol: str = "BTC/EUR", *, collateral_currency: str |
         maintenance_margin_rate=0.01,
         taker_fee_rate=0.0005,
         maker_fee_rate=0.0002,
+    )
+
+
+def perp_contract_from_instrument(instrument: dict[str, Any], fee_schedule: dict[str, Any], *, symbol: str | None = None) -> PerpContract:
+    """Build a verified `PerpContract` from a Kraken Futures instrument and its fee schedule (public data).
+
+    The size step comes from `contractValueTradePrecision`, margin rates from
+    the retail margin levels (falling back to the standard ones), and fees
+    from the schedule's entry tier (the 30-day-volume-zero tier, which is
+    what a small account pays). `max_leverage` is the venue's limit implied
+    by the first tier's initial margin; the leverage a given account may
+    actually use is set on the account, not in the public data.
+    """
+    levels = instrument.get("retailMarginLevels") or instrument.get("marginLevels") or []
+    if not levels:
+        raise ValueError(f"instrument {instrument.get('symbol')} has no margin levels")
+    tiers = tuple(
+        (float(level["numNonContractUnits"]), float(level["initialMargin"]), float(level["maintenanceMargin"]))
+        for level in sorted(levels, key=lambda level: float(level["numNonContractUnits"]))
+    )
+    precision = int(instrument.get("contractValueTradePrecision", 4))
+    step = 10.0 ** (-precision)
+    entry_tier = sorted(fee_schedule["tiers"], key=lambda tier: float(tier["usdVolume"]))[0]
+    base, quote = str(instrument["base"]).upper(), str(instrument["quote"]).upper()
+    return PerpContract(
+        symbol=symbol or f"{base}/{quote}",
+        venue_symbol=str(instrument["symbol"]),
+        base_asset=base,
+        collateral_currency=quote,
+        size_step=step,
+        min_size=step,
+        max_leverage=1.0 / tiers[0][1],
+        maintenance_margin_rate=tiers[0][2],
+        taker_fee_rate=float(entry_tier["takerFee"]) / 100.0,
+        maker_fee_rate=float(entry_tier["makerFee"]) / 100.0,
+        verified=True,
+        tick_size=float(instrument.get("tickSize", 0.0)),
+        margin_tiers=tiers,
     )
 
 
@@ -222,7 +273,9 @@ class SandboxPerpExecutionAdapter(ExecutionAdapter):
         entry = self._position_entry_price.get(self.position_symbol)
         if entry is None:
             return None
-        return liquidation_price(self.position_size(), entry, self.wallet_balance(), self.contract.maintenance_margin_rate)
+        mark = self._resolve_mark(None) or entry
+        rate = self.contract.maintenance_rate_at(abs(self.position_size()) * mark)
+        return liquidation_price(self.position_size(), entry, self.wallet_balance(), rate)
 
     def round_size(self, size: float) -> float:
         """Round `size` down to the contract's size step."""
@@ -315,7 +368,7 @@ class SandboxPerpExecutionAdapter(ExecutionAdapter):
                 events.append({"type": "funding", "payment": payment, "size": size, "mark_price": mark_price, "elapsed_days": elapsed_days})
 
         if size != 0.0:
-            maintenance = maintenance_margin(size, mark_price, self.contract.maintenance_margin_rate)
+            maintenance = maintenance_margin(size, mark_price, self.contract.maintenance_rate_at(abs(size) * mark_price))
             if self.equity(mark_price) <= maintenance:
                 events.append(self._liquidate(mark_price=mark_price, timestamp=timestamp, maintenance=maintenance))
         return events
