@@ -341,18 +341,29 @@ class TradeLogger:
             for timestamp, source, equity, cash, position_size in rows
         ]
 
-    def list_events(self, limit: int | None = None) -> list[dict[str, Any]]:
-        """Return persisted operational events in reverse chronological order."""
+    def list_events(self, limit: int | None = None, *, event_types: Sequence[str] | None = None) -> list[dict[str, Any]]:
+        """Return persisted operational events in reverse chronological order.
+
+        Args:
+            event_types: When given, restricts results to these event types via
+                a SQL WHERE clause, so a small set of noteworthy event types
+                (e.g. manual/live order actions) can be found even when they are
+                far outnumbered by high-frequency operational noise
+                (health snapshots, cycle-completed events, etc) in between.
+        """
+        query = "SELECT timestamp, level, event_type, message, source, metadata FROM operational_events"
+        params: list[Any] = []
+        if event_types:
+            placeholders = ", ".join("?" for _ in event_types)
+            query += f" WHERE event_type IN ({placeholders})"
+            params.extend(event_types)
+        query += " ORDER BY id DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
         with closing(sqlite3.connect(self.database_path)) as connection:
-            if limit is None:
-                rows = connection.execute(
-                    "SELECT timestamp, level, event_type, message, source, metadata FROM operational_events ORDER BY id DESC"
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT timestamp, level, event_type, message, source, metadata FROM operational_events ORDER BY id DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+            rows = connection.execute(query, params).fetchall()
         return [
             {
                 "timestamp": timestamp,

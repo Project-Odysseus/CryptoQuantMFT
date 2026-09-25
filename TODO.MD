@@ -109,19 +109,19 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] add guarded manual buy submission with explicit live confirmations
   - [x] add preview-only manual close-position flow for Kraken spot holdings
   - [x] add guarded manual close submission with explicit live confirmations
-  - [ ] add a concise holdings/account-state CLI surface for balances, open orders, positions, and recent manual/live actions
+  - [x] add a concise holdings/account-state CLI surface for balances, open orders, positions, and recent manual/live actions (2026-09-25: `--account-summary`, see `todo_important.md`)
   - [ ] validate partial-fill and open-order behavior with real Kraken order states instead of immediate-fill assumptions
   - [ ] complete one tiny real Kraken round-trip and compare:
-    - [ ] manual preview output vs actual submitted size
-    - [ ] remote Kraken order ids vs locally persisted order ids
-    - [ ] post-trade balances and positions vs reconciliation snapshot
-    - [ ] trade logger rows vs Kraken history
-    - [ ] tax-ledger rows vs actual fill and fee data
+    - [x] manual preview output vs actual submitted size (true by construction — `submit_quote_order`/`submit_close_position` submit the exact `rounded_size` their own preview computed)
+    - [ ] remote Kraken order ids vs locally persisted order ids — not actually cross-checked against Kraken's own reported history yet
+    - [x] post-trade balances and positions vs reconciliation snapshot
+    - [ ] trade logger rows vs Kraken history — not actually cross-checked against `fetch_closed_orders()` yet
+    - [x] tax-ledger rows vs actual fill and fee data (backfilled and verified 2026-09-25, see `todo_important.md`)
 
 - [ ] **Priority 3C: Immediate next live-system milestones**
-  - [ ] prove one real Kraken round-trip end to end before any broader live rollout
-  - [ ] add a single-command holdings / portfolio / open-orders operator summary
-  - [ ] apply manual-order safety and exchange-rule enforcement consistently to strategy-driven live orders
+  - [x] prove one real Kraken round-trip end to end before any broader live rollout (2026-09-18, see `todo_important.md`; the exchange-history cross-check above is still open)
+  - [x] add a single-command holdings / portfolio / open-orders operator summary (2026-09-25: `--account-summary`)
+  - [x] apply manual-order safety and exchange-rule enforcement consistently to strategy-driven live orders (2026-09-25: Kraken order-size/precision/balance parity, see `todo_important.md`)
   - [ ] harden real-order lifecycle handling for open orders, partial fills, delayed fills, and cancel/replace decisions
   - [ ] keep the first live rollout limited to long/flat spot trading until these checks pass
 

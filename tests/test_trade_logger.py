@@ -177,6 +177,21 @@ def test_trade_logger_round_trips_structured_event_metadata(tmp_path: Path) -> N
     assert events[0]["metadata"]["latest_signal"] == 1.0
 
 
+def test_trade_logger_list_events_filters_by_event_type(tmp_path: Path) -> None:
+    """list_events should find a rare event type even when it is buried under high-frequency noise."""
+    logger = TradeLogger(database_path=tmp_path / "trades.db")
+    timestamp = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+    logger.log_event(timestamp=timestamp, level="WARNING", event_type="kraken_manual_order_submission", message="manual order", source="main")
+    for _ in range(50):
+        logger.log_event(timestamp=timestamp, level="INFO", event_type="runtime_cycle_completed", message="cycle", source="runtime")
+
+    events = logger.list_events(limit=10, event_types=["kraken_manual_order_submission", "kill_switch_activated"])
+
+    assert len(events) == 1
+    assert events[0]["event_type"] == "kraken_manual_order_submission"
+
+
 def test_trade_logger_builds_tax_ledger_for_eur_trades_and_fiat_pool(tmp_path: Path) -> None:
     """EUR-denominated trades should create tax-ledger entries with FIFO basis tracking."""
     logger = TradeLogger(database_path=tmp_path / "trades.db")

@@ -872,6 +872,139 @@ def record_tax_fiat_conversion(*, amount_eur: float, fx_rate: float | None, refe
         print(f"Reference: {reference}")
 
 
+_ACCOUNT_SUMMARY_ACTION_EVENT_TYPES = {
+    "kraken_manual_order_submission",
+    "kraken_manual_close_submission",
+    "kraken_order_preview",
+    "kraken_close_preview",
+    "kraken_dry_run_verification",
+    "kill_switch_activated",
+}
+
+
+def _run_account_summary(*, trade_logger: TradeLogger, symbol: str, recent_limit: int) -> dict[str, Any]:
+    """Print a concise, non-destructive account-summary view for balances, positions, open orders, and recent actions."""
+    adapter = KrakenExecutionAdapter()
+    has_credentials = bool(adapter.api_key and adapter.api_secret)
+
+    balance_snapshot: dict[str, Any] | None = None
+    balance_error: str | None = None
+    open_orders: list[dict[str, Any]] | None = None
+    open_orders_error: str | None = None
+    if has_credentials:
+        try:
+            balance_snapshot = adapter.fetch_balance_snapshot()
+        except Exception as exc:
+            balance_error = str(exc)
+        try:
+            open_orders = adapter.fetch_open_orders()
+        except Exception as exc:
+            open_orders_error = str(exc)
+
+    pair_metadata: dict[str, Any] | None = None
+    pair_metadata_error: str | None = None
+    ticker: dict[str, Any] | None = None
+    ticker_error: str | None = None
+    try:
+        pair_metadata = adapter.fetch_asset_pair_metadata(symbol=symbol)
+    except Exception as exc:
+        pair_metadata_error = str(exc)
+    try:
+        ticker = adapter.fetch_ticker_snapshot(symbol=symbol)
+    except Exception as exc:
+        ticker_error = str(exc)
+
+    print("Kraken account summary")
+    print("-----------------------")
+    print(f"Symbol: {symbol}")
+    if not has_credentials:
+        print("Credentials: not configured (showing exchange rules and locally persisted history only)")
+    else:
+        print("Credentials: configured")
+
+    print()
+    print("Balances:")
+    if balance_error:
+        print(f"  unavailable: {balance_error}")
+    elif balance_snapshot is not None:
+        balances = balance_snapshot.get("balances", {}) or {}
+        if not balances:
+            print("  (none reported)")
+        for currency, amount in balances.items():
+            print(f"  {currency}: {float(amount):.8f}")
+    else:
+        print("  n/a (no credentials configured)")
+
+    print()
+    print("Positions:")
+    if balance_error:
+        print(f"  unavailable: {balance_error}")
+    elif balance_snapshot is not None:
+        positions = balance_snapshot.get("positions", {}) or {}
+        if not positions:
+            print("  (flat / no open positions)")
+        for asset, size in positions.items():
+            print(f"  {asset}: {float(size):.10f}")
+    else:
+        print("  n/a (no credentials configured)")
+
+    print()
+    print("Open orders:")
+    if open_orders_error:
+        print(f"  unavailable: {open_orders_error}")
+    elif open_orders is not None:
+        if not open_orders:
+            print("  (none)")
+        for order in open_orders:
+            print(
+                f"  {order.get('order_id', 'unknown')} | {order.get('side', 'unknown')} "
+                f"{order.get('size', 0.0)} @ {order.get('price', 'n/a')} | status={order.get('status', 'unknown')}"
+            )
+    else:
+        print("  n/a (no credentials configured)")
+
+    print()
+    print(f"Exchange minimums for {symbol} (from Kraken, live):")
+    if pair_metadata_error:
+        print(f"  unavailable: {pair_metadata_error}")
+    else:
+        ordermin = float(pair_metadata["ordermin"])
+        costmin = float(pair_metadata["costmin"])
+        base_asset = adapter._base_asset(symbol)
+        print(f"  minimum order size: {ordermin:.10f} {base_asset}")
+        print(f"  minimum order notional: {costmin:.8f} {adapter._quote_asset(symbol)}")
+        if ticker_error:
+            print(f"  current price: unavailable ({ticker_error})")
+        else:
+            ask_price = float(ticker["ask"])
+            implied_min_notional = max(costmin, ordermin * ask_price)
+            print(f"  current ask price: {ask_price:.2f}")
+            print(f"  smallest order Kraken will accept right now: ~{implied_min_notional:.4f} {adapter._quote_asset(symbol)}")
+
+    print()
+    print(f"Recent trades (last {recent_limit}):")
+    for trade in trade_logger.list_trades(limit=recent_limit):
+        strategy_tag = f" [{trade['strategy_id']}]" if trade.get("strategy_id") else ""
+        print(f"  {trade['timestamp']} | {trade['side']} {trade['pair']} @ {trade['price']:.4f} size={trade['size']:.8f} fee={trade['fee']:.6f}{strategy_tag}")
+
+    print()
+    print(f"Recent live/manual actions (last {recent_limit}):")
+    recent_actions = trade_logger.list_events(limit=recent_limit, event_types=sorted(_ACCOUNT_SUMMARY_ACTION_EVENT_TYPES))
+    if not recent_actions:
+        print("  (none recorded)")
+    for event in recent_actions:
+        print(f"  {event['timestamp']} | [{event['level']}] {event['event_type']}: {event['message']}")
+
+    return {
+        "symbol": symbol,
+        "has_credentials": has_credentials,
+        "balance_snapshot": balance_snapshot,
+        "open_orders": open_orders,
+        "pair_metadata": pair_metadata,
+        "ticker": ticker,
+    }
+
+
 def _run_kraken_dry_run_verification(
     *,
     trade_logger: TradeLogger,
@@ -1299,6 +1432,9 @@ def main() -> None:
     parser.add_argument("--since", default=None, help="Filter --post-run-analysis to data on or after this date (YYYY-MM-DD)")
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
+    parser.add_argument("--account-summary", action="store_true", help="Print a non-destructive Kraken account summary: balances, positions, open orders, exchange minimums, and recent live/manual actions")
+    parser.add_argument("--account-summary-symbol", default=None, help="Symbol to use for --account-summary exchange-minimum checks, e.g. BTC/EUR")
+    parser.add_argument("--account-summary-limit", type=int, default=10, help="Number of recent trades/actions to show with --account-summary")
     parser.add_argument("--kraken-verify-dry-run", action="store_true", help="Run a non-destructive Kraken private-endpoint verification for live_dry_run readiness")
     parser.add_argument("--kraken-verify-symbol", default=None, help="Symbol to use for Kraken validate-only order verification, e.g. BTC/EUR")
     parser.add_argument("--kraken-verify-size", type=float, default=0.0002, help="Order size used for Kraken validate-only verification")
@@ -1346,6 +1482,14 @@ def main() -> None:
         print("Kill switch activated")
         print(f"Reason: {state['reason']}")
         print(f"Orders cancelled: {len(state['orders_cancelled'])}")
+        return
+
+    if args.account_summary:
+        _run_account_summary(
+            trade_logger=logger_store,
+            symbol=args.account_summary_symbol or runtime_config.trading_symbol or "BTC/EUR",
+            recent_limit=args.account_summary_limit,
+        )
         return
 
     if args.kraken_verify_dry_run:
