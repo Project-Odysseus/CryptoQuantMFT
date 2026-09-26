@@ -93,6 +93,39 @@ python main.py \
 
 This submits a **real Kraken market sell** for the full currently held base-asset size after validate-only checks pass.
 
+## Live portfolio trading (Kraken Futures perps)
+
+Live uses the same config and engine as paper, but with a real Kraken Futures account behind it
+(`KrakenFuturesCrossMarginAdapter`, `src/execution/kraken_futures_cross.py`). Nothing starts unless every gate
+passes: `--enable-live-trading`, `--live-confirmation ENABLE_LIVE_TRADING`, no mock data, Kraken Futures keys in
+`.env`, a ready and inactive kill switch, Kraken Futures perps only with `max_leverage` at most 3x, and
+`[risk] max_gross_notional` set (the most money the book may hold in positions; the risk overlay enforces it).
+
+**Promotion checklist**
+1. Paper-run the exact config for at least 2-4 weeks. Check the dashboard, the alerts, a restart, and the kill
+   switch.
+2. Create API keys with read and trade permissions, no withdrawal permission, and an IP allow-list for the
+   machine that runs it. Put them in `.env` and run `python main.py --futures-verify-credentials`.
+3. Choose the size with `scripts/research/risk_budget.py` and set `scale`. Set `max_gross_notional` well below the
+   capital to start (e.g. 20-30% of it). Fund the Kraken Futures multi-collateral wallet, and log for tax how the
+   collateral was bought.
+4. Start it:
+   ```bash
+   python main.py --runtime live --portfolio config/portfolio.live.toml --enable-live-trading \
+       --live-confirmation ENABLE_LIVE_TRADING --runtime-iterations 0 --runtime-interval 60
+   ```
+   The first live start sets the book to the account (its positions and collateral) and prints them. Live state is
+   kept in `data/portfolio/<name>-live/`, apart from paper.
+5. Watch for these Telegram alerts: `external_position_change` or `liquidation` (the book then allows only
+   reductions until you run it once with `--portfolio-adopt-exchange` after checking), `equity_drift` (book and
+   exchange equity differ by more than 0.5%), and `tax_record_failed`.
+
+**How live orders work:** immediate-or-cancel market orders, reduce-only for closes and reductions. Client order ids
+are derived from the checkpointed cycle, so after a crash between sending and hearing back, the restarted engine
+finds the fill on Kraken by client id instead of sending again. Kraken's positions and margin are the source of
+truth, and the book is reconciled every cycle. Fees are estimated from the contract's taker rate, and funding from
+Kraken's published hourly rates; the equity-drift check catches what those estimates miss.
+
 ## Choosing capital and size (portfolio)
 
 ```bash
@@ -139,8 +172,8 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
   `--runtime-interval` seconds. Decisions happen only when a new grid bar completes (the shortest sleeve interval,
   e.g. 4h). Other cycles only mark the book.
 - **Execution:** `paper` and `live_dry_run` both trade against sandbox accounts shaped like the venues: one
-  cross-margin account per perp venue, with fees, slippage, funding and liquidation. `--runtime live` is refused for
-  portfolios until phase 6.
+  cross-margin account per perp venue, with fees, slippage, funding and liquidation. For `--runtime live`, see
+  "Live portfolio trading" below.
 - **State:** `data/portfolio/<name>/engine.json` (book, sleeves, allocator) and `paper_<venue>.json` (the sandbox
   account). Delete the folder to start fresh. `--use-mock-connector` uses synthetic candles in a fresh temp folder, so
   it never touches the real paper state.

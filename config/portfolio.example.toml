@@ -23,6 +23,7 @@ max_drawdown = 0.40              # from the equity peak: flatten everything and 
 # drawdown_derisk_floor = 0.5    # ...to this size just before max_drawdown. Off here: it lowered Sharpe in research
 daily_loss_limit = 0.06          # past this loss within a UTC day, positions may only shrink until the next day
 stale_after_bars = 2
+# max_gross_notional = 3000      # the most money the book may hold in positions (base currency); required for --runtime live
 
 [instruments."kraken_futures:BTC/USD"]
 kind = "perp"

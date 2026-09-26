@@ -1658,14 +1658,17 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
     from src.portfolio.runtime import PortfolioRuntime
     from src.utils.telegram import TelegramNotifier
 
-    if args.runtime == "live":
-        print("Live portfolio trading is not available yet (docs/portfolio_plan.md, phase 6). Use --runtime paper or live_dry_run.")
-        return 2
     try:
         config = load_portfolio_config(args.portfolio)
     except PortfolioConfigError as exc:
         print(f"Portfolio config is not valid.\n{exc}")
         return 1
+    live = args.runtime == "live"
+    if live:
+        refusal = _portfolio_live_refusal(args, config)
+        if refusal:
+            print(f"Refusing to start the live portfolio: {refusal}")
+            return 2
     foreign = sorted({VENUE_CURRENCY.get(spec.venue, config.base_currency) for spec in config.instruments.values()} - {config.base_currency})
     if foreign:
         print(f"This portfolio has venues in {foreign} and base {config.base_currency}; the runtime has no live FX feed yet. Use one currency per portfolio for now.")
@@ -1679,12 +1682,22 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
     elif mock:
         state_dir = Path(tempfile.mkdtemp(prefix="portfolio-mock-"))  # mock candles must never touch the real paper state
     else:
-        state_dir = Path("data/portfolio") / config.name
+        state_dir = Path("data/portfolio") / (f"{config.name}-live" if live else config.name)  # live never shares state with paper
     trade_logger = TradeLogger(database_path=settings.database_path)
     notifier = TelegramNotifier()
     book = PortfolioBook.from_config(config)
-    engine = PortfolioEngine(config, adapters=build_paper_adapters(config, book, state_dir=state_dir), book=book, trade_logger=trade_logger,
-                             notifier=notifier, mode=args.runtime, state_path=state_dir / "engine.json")
+    if live:
+        config, adapter = build_live_portfolio_adapter(config)
+        adapters = {"kraken_futures": adapter}
+    else:
+        adapters = build_paper_adapters(config, book, state_dir=state_dir)
+    engine = PortfolioEngine(config, adapters=adapters, book=book, trade_logger=trade_logger, notifier=notifier, mode=args.runtime,
+                             state_path=state_dir / "engine.json", record_tax=live)
+    if live and (not engine.restored or args.portfolio_adopt_exchange):
+        changes = engine.adopt_exchange_state(now=datetime.now(timezone.utc), reason="first live start" if not engine.restored else "--portfolio-adopt-exchange")
+        print(f"LIVE: book set to the Kraken Futures account: equity {float(engine.book.equity()):,.2f} {config.base_currency}, positions {changes['kraken_futures']['after'] or 'none'}")
+        if changes["kraken_futures"]["foreign_positions"]:
+            print(f"LIVE: the account also holds positions this portfolio doesn't trade: {changes['kraken_futures']['foreign_positions']}")
     if args.portfolio_reset_peak:
         old_peak = engine.reset_peak(now=datetime.now(timezone.utc))
         print(f"Equity peak reset from {old_peak:,.2f} to {float(engine.book.peak_equity):,.2f}")
@@ -1701,6 +1714,61 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
     if args.dashboard:
         print_portfolio_dashboard(args.portfolio)
     return 0
+
+
+def _portfolio_live_refusal(args: argparse.Namespace, config: Any) -> str | None:
+    """Why a live portfolio must not start (None when every gate passes). The same gates as single-strategy live, plus a money cap."""
+    if not args.enable_live_trading:
+        return "pass --enable-live-trading"
+    if args.live_confirmation != LIVE_TRADING_CONFIRMATION:
+        return f"pass --live-confirmation {LIVE_TRADING_CONFIRMATION}"
+    if args.use_mock_connector:
+        return "live trading can't use mock market data"
+    if not settings.kraken_futures_api_key or not settings.kraken_futures_secret:
+        return "KRAKEN_FUTURES_API_KEY / KRAKEN_FUTURES_SECRET are not set"
+    wrong = sorted(instrument for instrument, spec in config.instruments.items() if spec.venue != PERP_EXCHANGE_NAME or spec.kind != "perp")
+    if wrong:
+        return f"live portfolios trade Kraken Futures perps only for now; not {wrong}"
+    levered = sorted(instrument for instrument, spec in config.instruments.items() if spec.max_leverage > LIVE_PERP_MAX_LEVERAGE)
+    if levered:
+        return f"max_leverage above the live ceiling of {LIVE_PERP_MAX_LEVERAGE:g}x on {levered}"
+    if config.risk.max_gross_notional is None:
+        return "set [risk] max_gross_notional (the most money the book may hold in positions, in the base currency)"
+    controller = KillSwitchController(state_file=PORTFOLIO_KILL_SWITCH_FILE)
+    readiness = controller.ensure_ready()
+    if not readiness["ready"] or readiness["active"]:
+        return f"the kill switch is not ready or is active ({PORTFOLIO_KILL_SWITCH_FILE})"
+    return None
+
+
+def build_live_portfolio_adapter(config: Any, *, transport: Any = None, fetch_contract: Any = None) -> tuple[Any, Any]:
+    """The live Kraken Futures account for a portfolio, with every contract's rules read from Kraken.
+
+    Returns the config with each instrument's lot step, minimum size and taker
+    fee replaced by Kraken's (so the planner rounds the way the exchange does),
+    and the multi-contract adapter. `fetch_contract(symbol)` and `transport`
+    are for tests.
+    """
+    from dataclasses import replace
+
+    from src.execution.kraken_futures_cross import KrakenFuturesCrossMarginAdapter
+
+    def verified(symbol: str) -> Any:
+        from src.data.kraken_futures import fetch_fee_schedules, fetch_instrument, venue_symbol_for
+        from src.execution.perps import perp_contract_from_instrument
+
+        instrument = fetch_instrument(venue_symbol_for(symbol))
+        return perp_contract_from_instrument(instrument, fetch_fee_schedules()[instrument["feeScheduleUid"]], symbol=symbol)
+
+    contracts, instruments = [], dict(config.instruments)
+    for instrument_id, spec in config.instruments.items():
+        contract = (fetch_contract or verified)(spec.symbol)
+        contracts.append(contract)
+        instruments[instrument_id] = replace(spec, lot_step=contract.size_step, min_order_size=contract.min_size, fee_pct=contract.taker_fee_rate * 100.0)
+    leverage = min(LIVE_PERP_MAX_LEVERAGE, max(spec.max_leverage for spec in config.instruments.values()))
+    adapter = KrakenFuturesCrossMarginAdapter(contracts=contracts, api_key=settings.kraken_futures_api_key, api_secret=settings.kraken_futures_secret,
+                                              max_leverage=leverage, transport=transport)
+    return replace(config, instruments=instruments), adapter
 
 
 def print_portfolio_dashboard(config_path: str) -> int:
@@ -1826,6 +1894,7 @@ def main() -> None:
     parser.add_argument("--telegram-test", action="store_true", help="Send one sample trade message (marked TEST) to the Telegram chat in .env, to check delivery, then exit")
     parser.add_argument("--portfolio", metavar="PATH", default=None, help="Run a portfolio config (several sleeves and instruments) with --runtime paper or live_dry_run; with --dashboard alone, show its latest snapshot. --runtime-iterations 0 runs until Ctrl-C")
     parser.add_argument("--portfolio-state-dir", default=None, help="Where the portfolio checkpoint and paper exchange state live (default data/portfolio/<name>; a fresh temp dir with --use-mock-connector)")
+    parser.add_argument("--portfolio-adopt-exchange", action="store_true", help="Live portfolio: set the book to the exchange's positions and collateral before running (after a manual trade or liquidation left it unreconciled); logged")
     parser.add_argument("--portfolio-reset-peak", action="store_true", help="Restart the portfolio's drawdown count from current equity before running (re-arms it after the max-drawdown kill); logged")
     parser.add_argument("--portfolio-check", metavar="PATH", default=None, help="Validate a portfolio TOML (sleeves, instruments, allocation, risk limits) and print the resolved plan, then exit. Touches no network or database")
     parser.add_argument("--target-annual-vol", type=float, default=None, help="Shorthand for --sizing vol_target --sizing-params '{\"target_annual_vol\": X}' (0.5 = 50%% a year; EWMA forecast, 10-day half-life)")

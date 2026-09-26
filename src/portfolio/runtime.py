@@ -35,7 +35,7 @@ from src.utils.logger import logger
 
 CYCLE_ERROR_LIMIT = 5  # consecutive failed cycles before the runtime stops itself
 SNAPSHOT_EVERY = timedelta(hours=1)
-LIMIT_RULES = {"instrument_cap", "venue_cap", "net_cap", "gross_cap", "drawdown_derisk", "max_drawdown_halt", "daily_loss_halt", "stale_instrument"}
+LIMIT_RULES = {"instrument_cap", "venue_cap", "net_cap", "gross_cap", "notional_cap", "drawdown_derisk", "max_drawdown_halt", "daily_loss_halt", "stale_instrument"}
 
 
 class PortfolioRuntime:

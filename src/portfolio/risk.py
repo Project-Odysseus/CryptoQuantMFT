@@ -7,7 +7,8 @@ and enforces, in order:
 2. instruments that can't be shorted (spot) are clamped at 0;
 3. the per-instrument cap;
 4. per-venue caps (a venue's instruments scaled down together);
-5. the net cap, then the gross cap (everything scaled down together);
+5. the net cap, then the gross cap, then the money cap `max_gross_notional`
+   (everything scaled down together);
 6. drawdown de-risking (off unless `drawdown_derisk_start` is set): all
    targets scaled down linearly once the drawdown from the equity peak passes
    `drawdown_derisk_start`, reaching `drawdown_derisk_floor` at `max_drawdown`;
@@ -47,6 +48,7 @@ class PortfolioRiskConfig:
     drawdown_derisk_start: float | None = None
     drawdown_derisk_floor: float = 0.5
     stale_after_bars: int = 2
+    max_gross_notional: float | None = None  # total position value cap in money (base currency); required for live trading
 
     def __post_init__(self) -> None:
         """Reject limits that can't work together."""
@@ -64,6 +66,8 @@ class PortfolioRiskConfig:
                 raise ValueError(f"risk.max_venue_exposure.{venue} must be above 0")
         if self.stale_after_bars < 1:
             raise ValueError("risk.stale_after_bars must be at least 1")
+        if self.max_gross_notional is not None and not self.max_gross_notional > 0:
+            raise ValueError("risk.max_gross_notional must be above 0 (money, in the base currency)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +151,8 @@ def apply_portfolio_risk(
         scale_group("venue_cap", [i for i in out if venues.get(i) == venue], float(limit))
     scale_group("net_cap", list(out), config.max_net_exposure, net=True)
     scale_group("gross_cap", list(out), config.max_gross_exposure)
+    if config.max_gross_notional is not None and equity > 0:
+        scale_group("notional_cap", list(out), config.max_gross_notional / equity)
 
     multiplier = drawdown_multiplier(equity, peak_equity, config)
     if multiplier == 0.0:

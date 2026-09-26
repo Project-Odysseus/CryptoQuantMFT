@@ -170,6 +170,8 @@ Plan and status: `docs/portfolio_plan.md`.
 - `src/portfolio/backtest.py` plus `scripts/research/portfolio_backtest.py`: the same core over history.
 - `src/portfolio/feed.py`: completed exchange candles per (instrument, interval) over REST, loaded concurrently in
   threads, with each instrument failing on its own. `MockCandleFeed` supplies synthetic candles for smoke runs.
+- `src/execution/kraken_futures_cross.py`: `KrakenFuturesCrossMarginAdapter`, real orders on several Kraken Futures
+  perps in one account (live portfolios). It shares the signed-request client with the single-contract adapter.
 - `src/portfolio/runtime.py`: `PortfolioRuntime`, the loop. It fetches, finds stale instruments, runs a cycle,
   alerts once per problem, writes snapshots to SQLite (`portfolio_snapshots`), checks the kill switch and handles
   SIGTERM.

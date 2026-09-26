@@ -70,6 +70,50 @@ def _default_transport(method: str, url: str, headers: dict[str, str], body: byt
         return json.loads(response.read().decode("utf-8"))
 
 
+class KrakenFuturesPrivateClient:
+    """Signed calls to Kraken Futures' private REST API (shared by the single- and multi-contract adapters)."""
+
+    def __init__(self, *, api_key: str, api_secret: str, transport: Transport | None = None) -> None:
+        """`transport` replaces the HTTP call in tests."""
+        if not api_key or not api_secret:
+            raise ValueError("Kraken Futures API key and secret are required")
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.transport = transport or _default_transport
+        self._last_nonce = 0
+
+    def nonce(self) -> str:
+        """A strictly increasing millisecond nonce, as Kraken requires."""
+        nonce = max(int(time.time() * 1000), self._last_nonce + 1)
+        self._last_nonce = nonce
+        return str(nonce)
+
+    def call(self, method: str, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Call an authenticated endpoint and return its JSON, raising on anything but `result == success`."""
+        post_data = urllib.parse.urlencode({key: value for key, value in (params or {}).items() if value is not None})
+        nonce = self.nonce()
+        headers = {
+            "APIKey": self.api_key,
+            "Nonce": nonce,
+            "Authent": sign_request(post_data=post_data, nonce=nonce, endpoint_path=f"/api/v3/{endpoint}", api_secret=self.api_secret),
+            "Accept": "application/json",
+            "User-Agent": "CryptoQuantMFT/0.1",
+        }
+        url = f"{API_BASE}/api/v3/{endpoint}"
+        body: bytes | None = None
+        if method == "GET":
+            if post_data:
+                url = f"{url}?{post_data}"
+        else:
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+            body = post_data.encode("utf-8")
+        payload = self.transport(method, url, headers, body)
+        if not isinstance(payload, dict) or payload.get("result") != "success":
+            error = payload.get("error") if isinstance(payload, dict) else payload
+            raise RuntimeError(f"Kraken Futures {endpoint} failed: {error}")
+        return payload
+
+
 class KrakenFuturesExecutionAdapter(MarginAccountAdapter):
     """Trades one Kraken Futures perpetual through the authenticated REST API."""
 
@@ -99,48 +143,19 @@ class KrakenFuturesExecutionAdapter(MarginAccountAdapter):
         if not api_key or not api_secret:
             raise ValueError("Kraken Futures API key and secret are required")
         super().__init__(contract=contract, max_leverage=max_leverage, exchange_name="kraken_futures")
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self._transport = transport or _default_transport
+        self._client = KrakenFuturesPrivateClient(api_key=api_key, api_secret=api_secret, transport=transport)
         self._min_sync_seconds = min_sync_seconds
         self._last_sync_monotonic: float | None = None
         self._session_prefix = uuid.uuid4().hex[:12]
-        self._last_nonce = 0
         self.margin_equity: float | None = None
         self.available_margin: float | None = None
         self.unrealized_funding: float = 0.0
 
     # ---- HTTP -------------------------------------------------------------
 
-    def _nonce(self) -> str:
-        nonce = max(int(time.time() * 1000), self._last_nonce + 1)
-        self._last_nonce = nonce
-        return str(nonce)
-
     def _private(self, method: str, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Call an authenticated endpoint and return its JSON, raising on anything but `result == success`."""
-        post_data = urllib.parse.urlencode({key: value for key, value in (params or {}).items() if value is not None})
-        nonce = self._nonce()
-        headers = {
-            "APIKey": self.api_key,
-            "Nonce": nonce,
-            "Authent": sign_request(post_data=post_data, nonce=nonce, endpoint_path=f"/api/v3/{endpoint}", api_secret=self.api_secret),
-            "Accept": "application/json",
-            "User-Agent": "CryptoQuantMFT/0.1",
-        }
-        url = f"{API_BASE}/api/v3/{endpoint}"
-        body: bytes | None = None
-        if method == "GET":
-            if post_data:
-                url = f"{url}?{post_data}"
-        else:
-            headers["Content-Type"] = "application/x-www-form-urlencoded"
-            body = post_data.encode("utf-8")
-        payload = self._transport(method, url, headers, body)
-        if not isinstance(payload, dict) or payload.get("result") != "success":
-            error = payload.get("error") if isinstance(payload, dict) else payload
-            raise RuntimeError(f"Kraken Futures {endpoint} failed: {error}")
-        return payload
+        """Call an authenticated endpoint (see `KrakenFuturesPrivateClient.call`)."""
+        return self._client.call(method, endpoint, params)
 
     # ---- orders -----------------------------------------------------------
 

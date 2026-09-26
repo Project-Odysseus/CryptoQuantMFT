@@ -158,3 +158,12 @@ def test_the_research_hook_counts_the_first_bar_of_a_day_toward_that_days_loss(f
     result = simulate_portfolio(prices, weights, costs=FREE, adjust_targets=hook)
     held = 0.5 * 0.85 / 0.925  # the drifted half position, not topped up
     assert result.gross_exposure.iloc[-1] == pytest.approx(held)
+
+
+def test_the_money_cap_limits_total_position_value() -> None:
+    config = PortfolioRiskConfig(max_gross_exposure=10.0, max_net_exposure=10.0, max_instrument_weight=10.0, max_gross_notional=6_000.0)
+    out, actions = _apply({BTC: 0.6, ETH: -0.4}, config, equity=10_000.0, peak_equity=10_000.0)
+    assert out == pytest.approx({BTC: 0.36, ETH: -0.24}) and {rule for rule, _ in actions} == {"notional_cap"}
+    assert _apply({BTC: 0.3, ETH: -0.2}, config, equity=10_000.0, peak_equity=10_000.0)[1] == []
+    with pytest.raises(ValueError, match="max_gross_notional"):
+        PortfolioRiskConfig(max_gross_notional=0.0)

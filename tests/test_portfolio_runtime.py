@@ -209,7 +209,7 @@ def test_the_cli_refuses_live_and_runs_a_mock_portfolio(tmp_path, monkeypatch, c
     monkeypatch.setattr(sys, "argv", ["main.py", "--runtime", "live", "--portfolio", "config/portfolio.example.toml"])
     with pytest.raises(SystemExit) as exited:
         main.main()
-    assert exited.value.code == 2 and "not available yet" in capsys.readouterr().out
+    assert exited.value.code == 2 and "pass --enable-live-trading" in capsys.readouterr().out
 
     monkeypatch.setattr(sys, "argv", ["main.py", "--runtime", "paper", "--portfolio", "config/portfolio.example.toml", "--use-mock-connector",
                                       "--portfolio-state-dir", str(tmp_path / "state"), "--runtime-iterations", "12", "--runtime-interval", "0", "--dashboard"])
@@ -250,3 +250,50 @@ def test_live_spot_fills_go_through_the_fifo_tax_ledger(tmp_path) -> None:
     assert sells, "the test needs a closed round trip"
     types = {event["transaction_type"] for event in logger.list_tax_events()}
     assert {"FIAT_CONVERSION", "REALIZED_PNL"} <= types and engine.pending_tax == []
+
+
+def test_every_live_portfolio_gate_must_pass(tmp_path, monkeypatch) -> None:
+    import argparse
+    from dataclasses import replace as replace_config
+
+    import main
+    from config import settings
+    from src.portfolio.risk import PortfolioRiskConfig
+
+    monkeypatch.setattr(main, "PORTFOLIO_KILL_SWITCH_FILE", tmp_path / "kill.json")
+    monkeypatch.setattr(settings, "kraken_futures_api_key", "key")
+    monkeypatch.setattr(settings, "kraken_futures_secret", "c2VjcmV0")
+    config = _config()
+    capped = replace_config(config, risk=replace_config(config.risk, max_gross_notional=5_000.0))
+    args = argparse.Namespace(enable_live_trading=True, live_confirmation="ENABLE_LIVE_TRADING", use_mock_connector=False)
+    assert main._portfolio_live_refusal(args, capped) is None
+    assert "max_gross_notional" in main._portfolio_live_refusal(args, config)
+    assert "--enable-live-trading" in main._portfolio_live_refusal(argparse.Namespace(**{**vars(args), "enable_live_trading": False}), capped)
+    assert "--live-confirmation" in main._portfolio_live_refusal(argparse.Namespace(**{**vars(args), "live_confirmation": "yes"}), capped)
+    assert "mock" in main._portfolio_live_refusal(argparse.Namespace(**{**vars(args), "use_mock_connector": True}), capped)
+    levered = replace_config(capped, instruments={key: replace_config(spec, max_leverage=5.0) for key, spec in capped.instruments.items()})
+    assert "live ceiling" in main._portfolio_live_refusal(args, levered)
+    (tmp_path / "kill.json").write_text(json.dumps({"active": True, "reason": "x", "orders_cancelled": []}))
+    assert "kill switch" in main._portfolio_live_refusal(args, capped)
+    monkeypatch.setattr(settings, "kraken_futures_secret", "")
+    assert "KRAKEN_FUTURES" in main._portfolio_live_refusal(args, capped)
+
+
+def test_the_live_adapter_uses_krakens_contract_rules(monkeypatch) -> None:
+    import main
+    from config import settings
+    from src.execution.perps import perp_contract_from_instrument
+
+    monkeypatch.setattr(settings, "kraken_futures_api_key", "key")
+    monkeypatch.setattr(settings, "kraken_futures_secret", "c2VjcmV0")
+
+    def fetch_contract(symbol: str):
+        base = symbol.split("/")[0]
+        instrument = {"symbol": f"PF_{'XBT' if base == 'BTC' else base}USD", "tickSize": 0.1, "contractValueTradePrecision": 3 if base == "BTC" else 2,
+                      "feeScheduleUid": "f", "base": base, "quote": "USD", "retailMarginLevels": [{"numNonContractUnits": 0.0, "initialMargin": 0.02, "maintenanceMargin": 0.01}]}
+        return perp_contract_from_instrument(instrument, {"tiers": [{"makerFee": 0.02, "takerFee": 0.05, "usdVolume": 0.0}]}, symbol=symbol)
+
+    config, adapter = main.build_live_portfolio_adapter(_config(), fetch_contract=fetch_contract, transport=lambda *a: {"result": "success"})
+    assert config.instruments[BTC].lot_step == pytest.approx(0.001) and config.instruments[ETH].min_order_size == pytest.approx(0.01)
+    assert config.instruments[BTC].taker_fee_pct == pytest.approx(0.05)
+    assert set(adapter.contracts) == {"BTC/USD", "ETH/USD"} and adapter.max_leverage == pytest.approx(3.0)

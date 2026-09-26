@@ -295,7 +295,9 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] Phase 2: pure core. Config and `--portfolio-check`, sleeve runner, netting, portfolio risk overlay, order planner, parity test (2026-09-26)
   - [x] Phase 3: stateful book, paper execution through sandbox adapters, checkpoint and restart (2026-09-26)
   - [x] Phase 4: runtime `--portfolio`, multi-instrument data, reporting, alerts (2026-09-26; REST candles, not WebSocket: see portfolio plan 4.1)
-  - [ ] Phase 5-6: `live_dry_run` soak, then live readiness (user go-ahead)
+  - [ ] Phase 5: a paper/dry-run soak of several weeks on an always-on machine
+  - [ ] Phase 6: live readiness. The live path is built and tested against a fake Kraken (2026-09-26: multi-contract adapter, async fills, restart-safe client ids, reconciliation block, adopt-exchange, funding, tax, gates, money cap). Left: a first real run at minimum size; account-log funding if the drift alert fires; minimum sizes for small books
+  - [ ] Single-contract live adapter: like the portfolio adapter, don't mark an IOC order cancelled until `/fills` has had time to catch up (it currently concludes on the first check, which can lose a real fill)
 - [ ] **Run 24/7 without the MacBook** (raised 2026-09-26). Recommended: a small EU cloud server (for example Hetzner CX22, 2 vCPU / 4 GB, about 5 EUR a month) running the runtime as a service that restarts itself. Daily and 4h strategies need no low latency. A Raspberry Pi or mini PC at home works too, but depends on home power and internet. Keeping the Mac awake (`caffeinate`, a launchd agent) is fine for a paper soak, not for live. Code needed first:
   - [x] Run-forever mode for the portfolio runtime (2026-09-26): `--portfolio ... --runtime-iterations 0` runs until SIGINT/SIGTERM, which finish the cycle and checkpoint. The single-strategy `run_loop` still needs a finite count
   - [ ] Bounded memory and CPU: `RuntimeOrchestrator.history` keeps every cycle, and paper `run()` replays the whole bar history each cycle; cap both (the portfolio engine is already incremental)

@@ -294,5 +294,6 @@ def describe(config: PortfolioConfig) -> str:
     derisk = (f"de-risk from {risk.drawdown_derisk_start:.0%} drawdown to {risk.drawdown_derisk_floor:.0%} size at {risk.max_drawdown:.0%}, then flatten"
               if risk.drawdown_derisk_start is not None else f"flatten at {risk.max_drawdown:.0%} drawdown")
     daily = f"daily loss limit {risk.daily_loss_limit:.0%}" if risk.daily_loss_limit is not None else "no daily loss limit"
+    daily += f"; positions at most {risk.max_gross_notional:,.0f} {config.base_currency} in total" if risk.max_gross_notional else ""
     lines.append(f"Risk: gross <= {risk.max_gross_exposure:g}x, net <= {risk.max_net_exposure:g}x, per instrument <= {risk.max_instrument_weight:g}x{venues}; {derisk}; {daily}")
     return "\n".join(lines)
