@@ -23,8 +23,10 @@ mirror them in `TODO.MD`.
 - [x] **Risk exits: trailing ATR stop.** The ATR stop was a fixed distance from the entry. Added 2026-09-26:
   `atr_trailing = true` trails it behind the best close since entry (reason `atr_trailing_stop`), for the runtime
   and for portfolio sleeves
-- [ ] **Risk exits: placeholder defaults.** The 5% daily loss, 60-bar time stop, 3x ATR and 5% drawdown stop in
-  `build_runtime_orchestrator` were never tested against a backtest
+- [x] **Risk exits: placeholder defaults.** The 5% daily loss, 60-bar time stop, 3x ATR and 5% drawdown stop in
+  `build_runtime_orchestrator` were never tested against a backtest. Tested 2026-09-26
+  (`scripts/research/stop_study.py`, research log): the time stop is off, the ATR stop trails, the position stop is
+  10%, and the hard stop is set to 10% (it had inherited 2%, which would have shut the runtime down routinely)
 - [x] **Paper `run()` can open a short from flat** (the sell used to be cancelled; fixed 2026-09-26 with a
   regression test)
 - [ ] **Futures: trigger the kill switch once against a real open position at minimum size** (mirrors `TODO.MD`

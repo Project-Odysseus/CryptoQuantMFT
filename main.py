@@ -140,19 +140,24 @@ def build_runtime_orchestrator(
             max_notional_per_trade=10000.0,
             max_total_notional=25000.0,
             paper_mode=(runtime_config.mode == "paper"),
-            # Position-level exits and a rolling daily-loss circuit breaker,
-            # distinct from the all-time peak drawdown above: a slow all-time
-            # drawdown that never breaches hard_stop_drawdown_pct can still be
-            # caught if a single day is bad enough on its own, and a stuck
-            # position can't ride a signal that never reverses.
+            # Account breakers and position exits, set by scripts/research/stop_study.py (research log, 2026-09-26).
+            # Both breakers shut the runtime down, so at the default 10% position size they are for when something
+            # has gone wrong, not for normal losses: the old inherited 2% hard stop would have shut down a runtime
+            # started on 21-31% of historical days within a year; 10% never fired, nor did a 5% daily loss.
+            # Sizing up means raising both (at full size a 5% daily loss fires 3-8 times a year).
+            hard_stop_drawdown_pct=0.10,
             daily_loss_limit_pct=0.05,
-            time_stop_bars=60,
+            # No time stop: a trend trade's exit is the signal, and a 60-bar time stop cut 0.3-0.9 of in-sample
+            # Sharpe from every BTC trend sleeve tested.
+            time_stop_bars=None,
+            # A 3x ATR stop that trails the best close since entry: on BTC 4h MA 8/96 it lifted Sharpe from 1.55 to
+            # 1.84 in-sample and from 0.76 to 1.10 in the holdout; the fixed-from-entry version almost never fired.
             atr_stop_multiplier=3.0,
             atr_window=14,
-            # A plain percentage stop against entry, on top of the ATR stop
-            # above: cuts a position (long or short) once it's down this much
-            # from entry, regardless of ATR-implied distance.
-            position_drawdown_stop_pct=0.05,
+            atr_trailing=True,
+            # A plain catastrophe cap against entry (long or short) under the trailing stop; 5% and 10% tested
+            # the same within noise, and the wider one whipsaws less on daily bars.
+            position_drawdown_stop_pct=0.10,
             # Perps only: cut a position when price is within 10% of its liquidation price.
             liquidation_buffer_pct=0.10 if is_perp else None,
         )

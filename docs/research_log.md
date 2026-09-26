@@ -6,6 +6,56 @@ accident.
 
 ---
 
+## 2026-09-26: Risk exits and account breakers for the single-strategy runtime
+
+**Question:** the runtime's defaults (a 60-bar time stop, a 3x ATR stop from entry, a 5% position stop, a 5% daily
+loss limit, and an inherited 2% hard stop) had never been tested. Do they help, and how often would the breakers
+shut the runtime down? Every exit variant on each sleeve of `config/portfolio.btc_live.toml` (BTC perp: MA 4/48 1d
+long-only, Keltner 40/2 1d long/short, MA 8/96 4h long-only), 2020-2026, holdout from 2024-10-01. Reproduce with
+`python scripts/research/stop_study.py config/portfolio.btc_live.toml`.
+
+| Variant | MA 1d Sharpe (IS / HO) | Keltner 1d | MA 4h | Book |
+| --- | --- | --- | --- | --- |
+| No stops | 1.58 / 0.87 | 1.08 / 0.82 | 1.55 / 0.76 | 1.50 / 1.28 |
+| Old runtime defaults (5% + 60 bars + 3 ATR fixed) | 1.48 / 0.81 | 1.00 / 0.92 | 0.71 / 0.85 | 1.27 / 1.32 |
+| 60-bar time stop alone | 1.20 / 0.83 | 0.86 / 0.90 | 0.63 / 0.83 | 1.09 / 1.30 |
+| 3 ATR fixed from entry | 1.58 / 0.87 | 1.06 / 0.82 | 1.58 / 0.77 | 1.49 / 1.28 |
+| 3 ATR trailing | 1.68 / 0.80 | 1.06 / 0.84 | 1.84 / 1.10 | 1.61 / 1.21 |
+| 3 ATR trailing + 10% stop (new defaults) | 1.68 / 0.80 | 1.10 / 0.84 | 1.84 / 1.10 | 1.63 / 1.22 |
+| 3 ATR trailing + 5% stop | 1.77 / 0.77 | 1.25 / 0.85 | 1.83 / 1.10 | 1.74 / 1.19 |
+
+Account breakers, each sleeve sized like the runtime (a position worth 10% of equity) with the old exits:
+
+| Sleeve | Max drawdown | Days losing > 5% | 2% hard stop: starts shut down within a year | 5% | 10% |
+| --- | --- | --- | --- | --- | --- |
+| MA 1d | 6.5% | 0 | 21% | 3% | 0% |
+| Keltner 1d | 5.7% | 0 | 31% | 2% | 0% |
+| MA 4h | 5.7% | 0 | 29% | 0% | 0% |
+
+At full size (100% of equity) the max drawdowns are 46-50%, a 5% daily loss happens 20-49 times in six years, and
+even a 20% hard stop shuts down 21-36% of starts within a year.
+
+**Findings**
+1. **The time stop was the damage.** It cut 0.4-0.9 of in-sample Sharpe from every trend sleeve (the 4h MA fell
+   from 1.55 to 0.63), because trend profits come from the few trades held longest. The holdout moved a little the
+   other way, but not enough to justify it. Removed from the defaults.
+2. **A fixed ATR stop from entry almost never fires**; trailing it behind the best close does. On the 4h MA, the
+   runtime's documented setup, it lifted Sharpe from 1.55 to 1.84 in-sample and 0.76 to 1.10 in the holdout,
+   and cut the holdout drawdown from 23% to 17%. On the daily sleeves it is neutral within noise. Made the default.
+3. **5% vs 10% position stop under the trailing stop is noise.** 5% wins in-sample and loses a little in the
+   holdout. The default is 10%, as a catastrophe cap.
+4. **The inherited 2% hard stop would have shut the runtime down routinely**: a normal strategy drawdown at 10% size
+   (up to ~6.5%) crosses 2% below the start for 21-31% of start days within a year. The runtime now sets 10%
+   explicitly, which never fired historically at 10% size, so a shutdown means something is wrong. A 5% daily loss
+   never happened at 10% size; it stays as a disaster breaker.
+5. **Both breakers assume the default 10% size.** At larger sizes they fire on normal volatility; raise them with
+   the size (runbook). The portfolio runtime has its own limits in the TOML and is unaffected.
+
+Caveat: 10 variants on three correlated BTC sleeves; only the time-stop result is large and consistent. Changed
+in `build_runtime_orchestrator` (main.py).
+
+---
+
 ## 2026-09-26: First fit to a live Deribit BTC option chain
 
 **Question:** how well do the pricing models fit the market, in implied-vol points? One snapshot (992 BTC options,

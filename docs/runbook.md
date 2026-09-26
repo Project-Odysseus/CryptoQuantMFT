@@ -256,7 +256,10 @@ python main.py --runtime live_dry_run --execution-exchange kraken \
 - `--warmup-bars` loads that many completed candles at startup (Kraken spot OHLC, max 720; futures mark candles
   for `kraken_futures`). The dashboard shows the current signal immediately, but the first trade waits for the
   next bar close, so a restart never acts on a bar that closed hours earlier.
-- The time stop counts bars, so `time_stop_bars=60` on 4h bars is 10 days.
+- The runtime's defaults (research log, 2026-09-26): no time stop, a 3x ATR stop trailing the best close, a 10%
+  position stop, a 5% daily loss limit and a 10% hard stop below the starting equity. Both breakers shut the
+  runtime down and are set for the default 10% position size; raise them if you size up. A time stop, if you
+  set one, counts bars, so `time_stop_bars=60` on 4h bars is 10 days.
 - The ATR stop sits a fixed `atr_stop_multiplier` x ATR from the entry. With `atr_trailing = true` (a sleeve's
   `stops`, or `RiskControlConfig`) it trails the best close since entry instead, and the exit reads
   `atr_trailing_stop`.
