@@ -5,7 +5,84 @@ Dated findings from strategy research, newest first. Methodology and column mean
 
 ---
 
-## 2026-09-26 (latest): Realistic limit-order fills remove the intraday maker edge
+## 2026-09-26 (latest): Positioning data (funding, open interest, trader ratios, implied vol), BTC and ETH
+
+**Question:** does derivatives positioning predict BTC/ETH returns over hours to days, net of costs? **Short answer:
+crowding does, modestly and contrarian, at 1-3 days. It is not a standalone strategy yet, but it is the first
+information in this project that survives taker costs at these horizons.** Reproduce with
+`python scripts/research/positioning_study.py`; data and alignment are described in `research_guide.md`.
+
+**Data:** hourly Kraken perp bars (2020-2026) with funding (Binance, Bybit, Deribit), open interest (Binance, Bybit),
+Binance top-trader and all-account long/short ratios, taker buy share, and Deribit DVOL. Each bar only sees values
+published by its close. The Binance ratios start in late 2021 and have months-long gaps in 2022. No exchange publishes
+liquidation history, so liquidations were not tested.
+
+**Single features** (rank correlation with the forward return, years with the same sign in brackets):
+
+| Feature | BTC 24h | BTC 72h | ETH 24h | ETH 72h |
+| --- | --- | --- | --- | --- |
+| Funding vs its 30-day average (z) | -0.034 (6/7) | -0.030 (5/7) | -0.054 (7/7) | -0.064 (6/7) |
+| Funding change over 1 day | -0.035 (5/7) | -0.023 (6/7) | -0.031 (7/7) | -0.027 (6/7) |
+| Binance open-interest change over 1 day | -0.031 (6/6) | -0.011 (3/6) | -0.037 (5/6) | -0.024 (5/6) |
+| All-account long/short ratio | -0.030 (4/6) | -0.064 (5/6) | -0.015 (3/6) | -0.039 (4/6) |
+| Top-trader long/short ratio | -0.023 (5/6) | -0.048 (6/6) | -0.014 (5/6) | -0.032 (5/6) |
+| DVOL change over 1 day | +0.041 (4/6) | +0.081 (6/6) | +0.032 (4/6) | +0.050 (5/6) |
+| Volume vs its 30-day average (z) | +0.019 (6/7) | +0.024 (5/7) | +0.025 (5/7) | +0.024 (6/7) |
+| Last 4h return (vol-scaled), for comparison | -0.018 (6/7) | +0.005 (3/7) | -0.015 (5/7) | +0.006 (3/7) |
+
+- **Crowding is contrarian and consistent across both coins.** Rising funding, rising open interest and a crowd
+  leaning long all come before lower returns over the next 1-3 days. Unlike the price features, these ICs grow from
+  4h to 24-72h, which is the horizon where a 20 bps round trip matters less.
+- **Rising implied vol comes before higher returns** (DVOL change, the strongest single feature at 72h). That fits
+  fear being paid for: implied vol jumps into sell-offs that then rebound. It has only 6 years of history.
+- The raw funding level and Deribit funding switch sign between BTC and ETH. Bybit open interest and the "OI up with
+  price up" interaction add little. The taker buy share also points in opposite directions on the two coins at 1-3
+  days, so the composite below doesn't use it.
+
+**Walk-forward ridge over all 21 features** (24h horizon, refit monthly, out-of-sample from 2022-12-14): IC +0.022
+(BTC) and +0.004 (ETH), negative in 2026 on both. The deciles aren't monotone. After taker costs, BTC long-only is
+positive from a 25 bps threshold (Sharpe 0.5-0.8), but ETH only at 100 bps (1.2 long-only, 0.9 long/short, about 0.5
+trades a week). That is one of 8 threshold/side cells on ETH, so treat it as luck until it holds up elsewhere. The
+first fits trained on 2022 alone, where the ratio gaps drop most rows.
+
+**Unfitted crowding composite:** minus the average 30-day z-score of funding, the 1-day OI change, and the all-account
+and top-trader long/short ratios. It has no fitted weights and its signs come from the crowding hypothesis. It was
+traded over the same out-of-sample period, entering above a threshold and exiting when the sign flips:
+
+| | IC 24h | IC 72h | 72h IC by year (2023/24/25/26) | Top decile, next 24h | Bottom decile |
+| --- | --- | --- | --- | --- | --- |
+| BTC | +0.029 | +0.047 | 0.12 / 0.00 / 0.07 / 0.01 | +25 bps (t 2.6) | -27 bps (t -1.5) |
+| ETH | +0.047 | +0.071 | 0.16 / 0.13 / -0.02 / 0.02 | +46 bps (t 2.5) | -18 bps (t -1.6) |
+
+| Sharpe, taker at close (maker, requote) | z 0.5 | z 1.0 | z 1.5 | Buy and hold |
+| --- | --- | --- | --- | --- |
+| BTC long/short | 0.32 (0.62) | 0.33 (0.44) | 0.31 (0.37) | |
+| BTC long-only | 1.01 (1.20) | 0.90 (0.99) | 0.97 (1.04) | 1.12, max drawdown 54% |
+| ETH long/short | 0.32 (0.51) | 0.39 (0.47) | 0.64 (0.68) | |
+| ETH long-only | 0.52 (0.65) | 0.59 (0.64) | 0.89 (0.92) | 0.61, max drawdown 69% |
+
+- **It beats the fitted model.** With four features and no weights, it has a higher out-of-sample IC than the ridge
+  on both coins and makes money after taker costs in all 12 cases. The ridge was mostly fitting noise.
+- **The long/short version is the clean test, and it is weak.** Sharpe 0.3-0.6 after taker costs, 3-16% a year,
+  with 35-85% drawdowns. Most of the edge sits in the extreme deciles and in one or two years per coin (2023 on
+  both).
+- **The long-only version is mainly beta with lower exposure.** On BTC it roughly matches buy-and-hold's Sharpe while
+  in the market 7-33% of the time, with a 10-34% drawdown instead of 54%. On ETH it beats holding (Sharpe 0.9 vs 0.6
+  at z 1.5), but that rests on about 20 trades.
+- **Caveats.** The four inputs and the sign were chosen from the crowding hypothesis, but after the full-sample
+  feature ICs had been seen, and those include the test period. Three thresholds and two coins were tested.
+
+**What this points to next.** Use crowding as an input rather than as its own strategy:
+1. As a filter on the daily trend rules, e.g. skip or delay entries while longs are crowded.
+2. As a ranking signal in the cross-sectional strategy (roadmap item 4), where funding and OI differences between
+   coins are larger than one coin's differences over time.
+3. As the timing input for funding carry (item 5).
+
+Record liquidations live (item 3) if cascades are to be tested.
+
+---
+
+## 2026-09-26 (later still): Realistic limit-order fills remove the intraday maker edge
 
 `src/research/execution.py` now simulates resting post-only limit orders: an order at the signal close fills only
 if a later bar trades through it by `through_bps` (1 bp by default), all-or-nothing at the limit price; unfilled

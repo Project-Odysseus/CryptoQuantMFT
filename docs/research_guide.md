@@ -214,6 +214,35 @@ bucket_table(feature, forward, 16, buckets=10)                    # mean forward
 - `scripts/research/intraday_study.py` runs the whole study (feature ICs, seasonality, combined forecast at three
   cost levels) and saves the tables.
 
+### Positioning data: funding, open interest, trader ratios, taker flow, implied vol
+
+`src/data/positioning.py` downloads public history from Binance, Bybit and Deribit. It needs no API keys and caches
+parquet files in `data/historical_cache/positioning/`, topping them up on the next call.
+
+```python
+from src.data.positioning import SOURCES, load_series, load_positioning
+
+sorted(SOURCES)                                   # binance_funding, binance_klines, binance_metrics, bybit_funding, ...
+load_series("binance_funding", "BTC")             # one source, raw timestamps (UTC, when the value was published)
+closes = frame.index + pd.Timedelta(hours=1)      # bar close times of 1h bars stamped at the open
+positioning = load_positioning("BTC", closes)     # every source, aligned so each bar sees only what was published by its close
+```
+
+| Column | From | Notes |
+| --- | --- | --- |
+| `binance_funding`, `bybit_funding`, `deribit_funding` | 2019-2020 | Fraction per 8h (Deribit is published hourly as the 8h-equivalent rate) |
+| `binance_open_interest`, `binance_open_interest_usd`, `bybit_open_interest` | 2021-11 / 2020-07 | Binance every 5 minutes from its daily metrics files, Bybit hourly |
+| `binance_top_trader_long_short`, `binance_account_long_short`, `binance_taker_long_short` | 2021-11 | Top-trader positions, all accounts, taker buy/sell volume. Top-trader and taker ratios have months-long gaps in 2022 |
+| `binance_volume`, `binance_taker_buy_volume`, `binance_trades` | 2019-09 | Hourly perp klines (the taker-buy share is aggressive flow) |
+| `dvol` | 2021-03 | Deribit's 30-day implied volatility index |
+
+- Liquidation history isn't published by any of these exchanges; it has to be recorded live. OKX only serves a few
+  months of history, so it isn't included.
+- Alignment uses the publish time, not the period the value describes. Hourly klines are stamped at their open, so
+  `load_positioning` shifts them by an hour. A new source must do the same, or it leaks the future into features.
+- `scripts/research/positioning_study.py` runs the study (feature ICs at 4/24/72h, deciles, a walk-forward ridge,
+  and an unfitted crowding composite, traded with taker and resting limit-order fills).
+
 ## A research loop that works
 
 1. Write the hypothesis in one sentence (why would this make money, and who is on the other side?).
