@@ -383,6 +383,11 @@ Python and need no network, so they are good hotspot work.
 
 **3.2 Paper execution through sandbox adapters**
 - Files: `src/portfolio/engine.py`; reuse `SandboxExecutionAdapter` and `SandboxPerpExecutionAdapter`.
+- Finding (2026-09-26): `SandboxPerpExecutionAdapter` (a `MarginAccountAdapter`) holds **one** contract, with one
+  position and one wallet, so "one adapter per venue" can't hold BTC and ETH perps together. The options are
+  (a) one sandbox perp adapter per instrument (isolated margin, with collateral split per instrument), or (b) extend
+  the margin adapter to several contracts sharing one wallet (cross margin, which is how Kraken Futures'
+  multi-collateral account works). Needs a decision before 3.2.
 - Tasks: one adapter per venue; submit planned orders with `symbol=`; apply fills to the book; reconcile the book
   against each adapter per instrument; log orders, fills and decisions with `strategy_id=<sleeve_id>`. For netted
   orders, use the dominant sleeve's id or `portfolio`, and record the attribution in the event metadata.
@@ -542,7 +547,7 @@ Python and need no network, so they are good hotspot work.
 - [x] 2.5 Portfolio risk overlay (2026-09-26): `src/portfolio/risk.py` (`apply_portfolio_risk`, `drawdown_multiplier`, `array_overlay` for research), tests in `tests/test_portfolio_risk.py`. The config also rejects a non-positive daily-loss limit, venue cap or `stale_after_bars`.
 - [x] 2.6 Order planner (2026-09-26): `src/portfolio/orders.py` (`plan_orders`, `OrderPlan`, `PlannedOrder`), tests in `tests/test_portfolio_orders.py`. The band matches `simulate_portfolio`'s. Held instruments without a target are closed. Every skip has a reason (`within_band`, `below_min_size`, `below_lot_step`, `no_price`, `no_short`).
 - [x] 2.7 Parity test (2026-09-26): `test_the_runtime_path_bar_by_bar_matches_the_research_backtest`. It steps each sleeve as its bars complete, steps the allocator per 4h grid bar and nets, with a JSON checkpoint every bar. The result equals `run_book`'s targets under all three allocation methods. Delaying a decision by one bar fails it. The risk overlay is the same pure function in both paths (`array_overlay` wraps `apply_portfolio_risk`); its inputs (equity, current weights) come from the book in Phase 3.
-- [ ] 3.1 Portfolio book
+- [x] 3.1 Portfolio book (2026-09-26): `src/portfolio/book.py` (`PortfolioBook`), tests in `tests/test_portfolio_book.py`. It covers spot and linear-perp accounting in `Decimal`, cash per venue in the venue's currency, FX to base, funding, the peak and UTC day start for the risk rules, virtual sleeve positions with the residual reported, and an exact JSON round trip.
 - [ ] 3.2 Paper execution through sandbox adapters
 - [ ] 3.3 Checkpoint and restart
 - [ ] 4.1 Multi-instrument market data
