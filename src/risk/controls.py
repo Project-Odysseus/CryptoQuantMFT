@@ -94,6 +94,12 @@ class RiskControlConfig:
     # are only meaningful for live fills.  Paper trading does not have real
     # execution risk so these checks just prevent signals from filling.
     paper_mode: bool = False
+    # Opt-in volatility-target sizing (docs/research_log.md, 2026-09-26): each entry gets a share of equity equal to
+    # this annualised volatility divided by an EWMA forecast of the market's, capped by max_position_size and the
+    # exchange's per-trade notional. The position is not resized while open. None keeps the older sizing
+    # (risk_per_trade_pct / std of the last volatility_window bars, which the engine reads as asset units).
+    target_annual_volatility: float | None = None
+    volatility_halflife_days: float = 10.0
 
 
 @dataclass(slots=True)
@@ -103,6 +109,9 @@ class RiskDecision:
     allow_entry: bool
     position_size: float
     reason: str | None = None
+    # Set by volatility-target sizing: the position as a share of equity (the engine converts it to units).
+    equity_fraction: float | None = None
+    annual_volatility_forecast: float | None = None
 
 
 @dataclass(slots=True)
@@ -248,6 +257,18 @@ class RiskManager:
         if not self.config.paper_mode and volatility_pct > self.config.max_volatility_pct:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="volatility_limit")
 
+        if self.config.target_annual_volatility is not None:
+            return self._volatility_target_decision(
+                bars=bars,
+                equity=equity,
+                exchange_name=exchange_name,
+                signal_side=signal_side,
+                inventory_skew=inventory_skew,
+                current_notional=current_notional,
+                current_exchange_notional=current_exchange_notional,
+                exchange_position_size=exchange_position_size,
+            )
+
         if volatility_pct <= 0.0:
             position_size = self._resolve_position_limit(exchange_name=exchange_name)
             position_size = self._apply_inventory_penalty(
@@ -282,6 +303,39 @@ class RiskManager:
             exchange_position_size=exchange_position_size,
         )
         return RiskDecision(allow_entry=True, position_size=max(0.0, min(self._resolve_position_limit(exchange_name=exchange_name), position_size)))
+
+    def _volatility_target_decision(
+        self,
+        *,
+        bars: Sequence[Any],
+        equity: float,
+        exchange_name: str | None,
+        signal_side: str | None,
+        inventory_skew: float,
+        current_notional: float,
+        current_exchange_notional: float,
+        exchange_position_size: float,
+    ) -> RiskDecision:
+        """Size an entry so its forecast volatility matches the target, as a share of equity."""
+        forecast = ewma_annual_volatility(bars, halflife_days=self.config.volatility_halflife_days)
+        if forecast is None or forecast <= 0.0:
+            return RiskDecision(allow_entry=False, position_size=0.0, reason="volatility_forecast_unavailable")
+        fraction = min(self._resolve_position_limit(exchange_name=exchange_name), float(self.config.target_annual_volatility) / forecast)
+        max_trade_notional = float(self._exchange_caps(exchange_name).get("max_notional_per_trade", self.config.max_notional_per_trade))
+        if max_trade_notional > 0.0 and equity > 0.0:
+            fraction = min(fraction, max_trade_notional / equity)
+        fraction = self._apply_inventory_penalty(position_size=fraction, signal_side=signal_side, inventory_skew=inventory_skew)
+        fraction = self._apply_position_caps(
+            position_size=fraction,
+            current_notional=current_notional,
+            equity=equity,
+            exchange_name=exchange_name,
+            current_exchange_notional=current_exchange_notional,
+            exchange_position_size=exchange_position_size,
+        )
+        if fraction <= 0.0:
+            return RiskDecision(allow_entry=False, position_size=0.0, reason="position_caps", annual_volatility_forecast=forecast)
+        return RiskDecision(allow_entry=True, position_size=fraction, equity_fraction=fraction, annual_volatility_forecast=forecast)
 
     def evaluate_exit(
         self,
@@ -546,6 +600,32 @@ def _get_timestamp(bar: Any) -> Any | None:
     if isinstance(bar, dict):
         return bar.get("timestamp")
     return None
+
+
+def ewma_annual_volatility(bars: Sequence[Any], *, halflife_days: float, min_returns: int = 20) -> float | None:
+    """Annualised EWMA volatility of the bars' log returns, or None without enough history.
+
+    The half-life is in days, so the forecast means the same on 1m, 4h or 1d
+    bars; the bar length is read from the timestamps. Same estimator as
+    `src.research.volatility.ewma_vol` (zero-mean, weights halving every
+    half-life), truncated after eight half-lives.
+    """
+    stamps = [_get_timestamp(bar) for bar in bars[-50:]]
+    gaps = [(later - earlier).total_seconds() for earlier, later in zip(stamps, stamps[1:]) if earlier is not None and later is not None]
+    gaps = [gap for gap in gaps if gap > 0.0]
+    if not gaps:
+        return None
+    bar_seconds = float(np.median(gaps))
+    halflife_bars = max(1.0, halflife_days * 86_400.0 / bar_seconds)
+    window = list(bars[-(int(8 * halflife_bars) + 2) :])
+    closes = np.array([_get_close(bar) for bar in window], dtype=float)
+    valid = (closes[1:] > 0.0) & (closes[:-1] > 0.0)
+    returns = np.log(closes[1:][valid] / closes[:-1][valid])
+    if len(returns) < min_returns:
+        return None
+    weights = 0.5 ** (np.arange(len(returns))[::-1] / halflife_bars)
+    variance = float(np.sum(weights * returns**2) / np.sum(weights))
+    return float(np.sqrt(variance * 365.0 * 86_400.0 / bar_seconds))
 
 
 def gate_reentry(signal: float, blocked_side: str | None) -> tuple[float, str | None, bool]:

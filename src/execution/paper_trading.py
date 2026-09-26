@@ -416,6 +416,7 @@ class PaperTradingEngine:
                             equity=current_equity,
                             requested_size=self.default_order_size,
                             risk_position_size=risk_decision.position_size,
+                            equity_fraction=getattr(risk_decision, "equity_fraction", None),
                         )
                         if order_size > 0.0:
                             order = self._create_order(timestamp=timestamp, side="buy", size=order_size, bar=bar)
@@ -471,6 +472,7 @@ class PaperTradingEngine:
                             equity=current_equity,
                             requested_size=self.default_order_size,
                             risk_position_size=risk_decision.position_size,
+                            equity_fraction=getattr(risk_decision, "equity_fraction", None),
                         )
                         if order_size > 0.0:
                             order = self._create_order(timestamp=timestamp, side="sell", size=order_size, bar=bar)
@@ -675,6 +677,7 @@ class PaperTradingEngine:
                     equity=current_equity,
                     requested_size=self.default_order_size,
                     risk_position_size=risk_decision.position_size,
+                    equity_fraction=getattr(risk_decision, "equity_fraction", None),
                 )
                 if order_size > 0.0:
                     entry_order = self._create_order(timestamp=timestamp, side="buy", size=order_size, bar=bar)
@@ -735,6 +738,7 @@ class PaperTradingEngine:
                     equity=current_equity,
                     requested_size=self.default_order_size,
                     risk_position_size=risk_decision.position_size,
+                    equity_fraction=getattr(risk_decision, "equity_fraction", None),
                 )
                 if order_size > 0.0:
                     entry_order = self._create_order(timestamp=timestamp, side="sell", size=order_size, bar=bar)
@@ -874,6 +878,9 @@ class PaperTradingEngine:
             details["risk_position_size"] = risk_decision.position_size
         if hasattr(risk_decision, "reason"):
             details["risk_reason"] = risk_decision.reason
+        if getattr(risk_decision, "annual_volatility_forecast", None) is not None:
+            details["annual_volatility_forecast"] = risk_decision.annual_volatility_forecast
+            details["equity_fraction"] = risk_decision.equity_fraction
         return details
 
     def _log_order_event(self, *, order: PaperOrder, timestamp: datetime, event_type: str, message: str, reason: str | None = None, **metadata: Any) -> None:
@@ -1394,12 +1401,24 @@ class PaperTradingEngine:
             daily_reference_equity=daily_reference_equity,
         )
 
-    def _resolve_order_size(self, *, price: float, cash: float, equity: float, requested_size: float, risk_position_size: float) -> float:
+    def _resolve_order_size(
+        self,
+        *,
+        price: float,
+        cash: float,
+        equity: float,
+        requested_size: float,
+        risk_position_size: float,
+        equity_fraction: float | None = None,
+    ) -> float:
         if price <= 0.0:
             return 0.0
         max_affordable_size = cash / price
         if max_affordable_size <= 0.0:
             return 0.0
+        if equity_fraction is not None:
+            # Volatility-target sizing gives a share of equity; it replaces the unit-based caps below.
+            return max(0.0, min(equity_fraction * equity / price, max_affordable_size))
 
         max_risk_fraction = 0.0
         if self.risk_manager is not None and getattr(self.risk_manager, "config", None) is not None:

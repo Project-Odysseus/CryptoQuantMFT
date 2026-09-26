@@ -106,6 +106,9 @@ flowchart TD
 - `src/risk/controls.py`
   - `RiskManager` and `RiskControlConfig` gate entries and size decisions.
   - They limit overtrading and make the runtime safer by enforcing drawdown, volatility, spread/slippage, and position caps.
+  - With `target_annual_volatility` set (`--target-annual-vol`), entries are sized as a share of equity from an EWMA
+    volatility forecast (`ewma_annual_volatility`), returned as `RiskDecision.equity_fraction`. The engine converts
+    it to units in `PaperTradingEngine._resolve_order_size`.
 
 ### Execution layer
 

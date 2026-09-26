@@ -130,6 +130,25 @@ python main.py --runtime live_dry_run --execution-exchange kraken \
   next bar close, so a restart never acts on a bar that closed hours earlier.
 - The time stop counts bars, so `time_stop_bars=60` on 4h bars is 10 days.
 
+### Position size
+
+- **Default:** each entry is `--risk-per-trade-pct` of equity (10% unless set). This is a fixed fraction: the
+  volatility term in the older sizing never binds for BTC or ETH (see `todo_important.md`).
+- **`--target-annual-vol 0.5`:** sizes each entry so its forecast volatility is 50% a year. The share of equity is
+  0.5 divided by an EWMA forecast with a 10-day half-life, so calm markets get bigger positions and turbulent ones
+  smaller.
+  - The share is capped by the exchange's `max_position_size` (0.5 of equity on `kraken` and `kraken_futures`, 0.35
+    on `firi`, 1.0 on `sandbox`), its per-trade notional limit (500 on `kraken` and `kraken_futures`, 400 on
+    `firi`) and buying power. These caps live in `DEFAULT_EXCHANGE_RISK_LIMITS` (`src/risk/controls.py`).
+  - The position is sized once at entry and not resized while open. Research found resizing open positions hurt;
+    see `research_log.md`.
+  - It needs at least 20 bars of history, so pair it with `--warmup-bars`. Until then, entries are refused with
+    reason `volatility_forecast_unavailable`.
+  - The forecast and chosen share are recorded in each entry decision's risk details (`annual_volatility_forecast`,
+    `equity_fraction`).
+  - It helped moving-average crossover and long/short Keltner in research, but not breakout long-only rules
+    (Keltner long-only, Donchian).
+
 ## Recording order-flow data
 
 `--record-market-data` records public data that can't be downloaded later. It needs no credentials and places no

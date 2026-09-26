@@ -119,6 +119,27 @@ This file breaks **Priority 3: Close the Live-Execution Gap Safely** into concre
 
 - [x] **Allowed entries sized to zero (fixed 2026-09-26).** `RiskManager.evaluate` multiplied the position size by a "Kelly" factor estimated from the market's last 20 bar returns, not from the strategy's trades. It returned 0 whenever recent bars fell more than they rose (42% of sampled points on BTC 4h), ignored trade direction, and so turned allowed entries into zero-size orders with no reason recorded (`entries_were_allowed_but_no_fill_was_recorded`). It is now opt-in (`RiskControlConfig.kelly_sizing`, default False); sizing is `risk_per_trade_pct / volatility`, capped by the position and notional limits and the engine's per-trade risk cap. This changes position sizes in paper, dry-run, live and `run_backtest`-based backtests (not the research toolkit, which uses no risk manager). A trade-outcome-based Kelly would be the proper replacement if sizing by edge is wanted later.
 
+- [ ] **Entry sizing mixes units (found 2026-09-26 while adding volatility-target sizing)**
+  - The volatility term in the default sizing has no effect.
+    - `RiskManager.evaluate` returns `risk_per_trade_pct / volatility` capped by `max_position_size`, and its own
+      caps treat that number as a share of equity (`available_capacity / equity`).
+    - `PaperTradingEngine._resolve_order_size` reads it as asset units. It takes the minimum of that,
+      `default_order_size` (1 unit), `cash / price` and `risk_per_trade_pct × equity / price`.
+    - For BTC and ETH the last cap always binds. So every entry is a fixed `risk_per_trade_pct` of equity: 10% by
+      default, and 35% in the live sessions below, which is why `--risk-per-trade-pct 0.35` was what cleared
+      Kraken's minimum.
+  - For a coin cheap enough that the share read as units is less than 10% of equity in notional (e.g. DOGE), it
+    would bind and give nonsense sizes.
+  - `max_position_size` and the exchange caps are also compared with positions in units in one place and in shares
+    in another.
+  - [x] Opt-in `--target-annual-vol` (2026-09-26, `RiskControlConfig.target_annual_volatility`). It sizes each entry
+    explicitly as a share of equity: target / EWMA forecast (10-day half-life), capped by `max_position_size`, the
+    exchange's `max_notional_per_trade` and buying power. The engine converts the share to units at the entry
+    price. Entries are refused with `volatility_forecast_unavailable` until there are 20 bars of history (use
+    `--warmup-bars`). Research basis: `docs/research_log.md`, 2026-09-26 volatility entry.
+  - [ ] Decide whether `--target-annual-vol` becomes the default and the unit-based path is removed. That would
+    change the paper baseline's sizes, so it needs the user's go-ahead.
+
 - [x] **First real `--runtime live` sessions (2026-09-25) — found and fixed 3 real bugs, none catastrophic**
   - Ran `moving_average_crossover` live on Kraken BTC/EUR with `--risk-per-trade-pct 0.35` (needed to clear Kraken's minimum order size on a ~14 EUR account) across 4 short guarded sessions. Every bug below was caught because it was actually run live, not because it was anticipated — this is the expected/intended value of live-testing before scaling size.
   - **Bug 1 — equity initialized wrong.** Already fixed and committed before the first run this session (`d1e46c3`): `initial_cash` was hardcoded 1000.0 regardless of mode, comparing a real ~14 EUR balance against a fake 1000 EUR peak and blocking every entry with `drawdown_limit`. No real order was placed on that first attempt.

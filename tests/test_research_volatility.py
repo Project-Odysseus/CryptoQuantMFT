@@ -87,3 +87,50 @@ def test_vol_scaled_positions_size_at_entry_cap_leverage_and_rebalance_outside_t
 
     entry_only = vol_scaled_positions(targets, forecast, target_vol=0.5, max_leverage=2.0, entry_only=True)
     assert list(entry_only) == [0.0, 1.0, 1.0, 1.0, 1.0, -0.5, 0.0, 1.0]
+
+
+def _bars(close: np.ndarray, hours: int) -> list:
+    from src.storage.bar_aggregator import OHLCVBar
+
+    return [
+        OHLCVBar(exchange="mock", symbol="BTC/USD", interval_seconds=hours * 3600, timestamp=START + timedelta(hours=hours * i), open=c, high=c, low=c, close=c, volume=1.0)
+        for i, c in enumerate(close)
+    ]
+
+
+def test_runtime_ewma_forecast_matches_the_research_estimator() -> None:
+    from src.risk.controls import ewma_annual_volatility
+
+    rng = np.random.default_rng(11)
+    close = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, 800)))
+    runtime = ewma_annual_volatility(_bars(close, 4), halflife_days=10)
+    research = ewma_vol(log_returns(close), 10 * 6, 365.0 * 6)[-1]
+    assert runtime == pytest.approx(research, rel=0.01)  # same estimator; the runtime truncates after 8 half-lives
+    assert ewma_annual_volatility(_bars(close[:10], 4), halflife_days=10) is None  # too little history
+
+
+def test_volatility_target_sizes_entries_as_a_share_of_equity() -> None:
+    from src.execution.paper_trading import PaperTradingEngine
+    from src.risk.controls import RiskControlConfig, RiskManager, ewma_annual_volatility
+
+    rng = np.random.default_rng(5)
+    close = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.02, 300)))  # daily vol ~2%, ~38% a year
+    bars = _bars(close, 24)
+    config = RiskControlConfig(max_drawdown_pct=1.0, max_volatility_pct=1.0, target_annual_volatility=0.2, max_position_size=1.0, max_notional_per_trade=0.0, max_total_notional=0.0, paper_mode=True)
+    manager = RiskManager(config)
+
+    decision = manager.evaluate(bars=bars, equity=10_000.0, peak_equity=10_000.0)
+    forecast = ewma_annual_volatility(bars, halflife_days=10)
+    assert decision.allow_entry and decision.equity_fraction == pytest.approx(0.2 / forecast)
+    assert decision.annual_volatility_forecast == pytest.approx(forecast)
+
+    capped = RiskManager(RiskControlConfig(**{**{f: getattr(config, f) for f in config.__slots__}, "max_notional_per_trade": 1_000.0}))
+    assert capped.evaluate(bars=bars, equity=10_000.0, peak_equity=10_000.0).equity_fraction == pytest.approx(0.1)  # per-trade notional cap
+    assert RiskManager(config).evaluate(bars=bars[:5], equity=10_000.0, peak_equity=10_000.0).reason == "volatility_forecast_unavailable"
+
+    # The engine turns the share of equity into units at the entry bar's price (not 10% of equity, not 1 unit).
+    signals = [0.0] * 299 + [1.0]
+    result = PaperTradingEngine(initial_cash=10_000.0, default_order_size=1.0, risk_manager=manager).run(bars, signals)
+    (order,) = result.orders
+    expected_fraction = 0.2 / ewma_annual_volatility(bars, halflife_days=10)
+    assert order.size * close[-1] == pytest.approx(expected_fraction * 10_000.0, rel=1e-6)
