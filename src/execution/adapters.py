@@ -756,6 +756,14 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         order.message = "order canceled"
         return ExecutionReport(order_id=order_id, status="CANCELED", message="order canceled")
 
+    def cancel_all_orders(self) -> dict[str, Any]:
+        """Cancel every open order on the Kraken spot account (the kill switch's sweep); returns Kraken's count."""
+        payload = self._private_request(endpoint="CancelAll", params={})
+        errors = self._extract_api_errors(payload)
+        if errors:
+            raise RuntimeError(self._format_api_errors(errors))
+        return dict(payload.get("result") or {})
+
     def get_order_status(self, *, order_id: str) -> ExecutionReport:
         """Return the latest status for the requested order."""
         order = self._orders.get(order_id)

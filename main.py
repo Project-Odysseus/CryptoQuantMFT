@@ -1787,6 +1787,86 @@ def futures_live_test(args: argparse.Namespace, *, transport: Any = None, fetch_
     return 0
 
 
+def kill_switch(args: argparse.Namespace, *, spot_adapter: Any = None, futures_client: Any = None, notifier: Any = None, sleep: Any = None) -> int:
+    """Activate the kill switch and make the Kraken accounts safe directly (see src/execution/emergency.py).
+
+    The state file is written first, so every runtime that reads it stops. Then
+    each venue with keys in `.env` is swept on its own, so a failure on one
+    doesn't stop the other. Returns 1 if anything is still open afterwards.
+    """
+    from src.execution.emergency import flatten_kraken_futures, recover_spot_open_orders
+    from src.execution.kraken_futures_adapter import KrakenFuturesPrivateClient
+    from src.utils.telegram import TelegramNotifier
+
+    trade_logger = TradeLogger(database_path=settings.database_path)
+    controller = KillSwitchController(state_file=PORTFOLIO_KILL_SWITCH_FILE, trade_logger=trade_logger)
+    problems: list[str] = []
+    lines: list[str] = []
+
+    spot = spot_adapter if spot_adapter is not None else (KrakenExecutionAdapter() if settings.kraken_api_key and settings.kraken_secret else None)
+    if spot is not None:
+        try:
+            lines.append(f"Kraken spot: {recover_spot_open_orders(spot)} open order(s) found")
+        except Exception as exc:  # noqa: BLE001 - still activate and sweep with CancelAll
+            problems.append(f"Kraken spot: could not read open orders ({exc})")
+    state = controller.activate(args.kill_switch_reason, execution_adapter=spot)
+    if spot is not None:
+        cancelled = [order for order in state["orders_cancelled"] if order.get("status") == "CANCELED"]
+        lines.append(f"Kraken spot: cancelled {len(cancelled)} of {len(state['orders_cancelled'])}; CancelAll: {state.get('exchange_cancel_all')}")
+        try:
+            left = spot.fetch_open_orders()
+            lines.append(f"Kraken spot: {len(left)} open order(s) left")
+            if left:
+                problems.append(f"Kraken spot: {len(left)} order(s) still open: {[order.get('remote_order_id') for order in left]}")
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"Kraken spot: could not re-check open orders ({exc})")
+    else:
+        lines.append("Kraken spot: no keys in .env, skipped")
+
+    futures = futures_client
+    if futures is None and settings.kraken_futures_api_key and settings.kraken_futures_secret:
+        futures = KrakenFuturesPrivateClient(api_key=settings.kraken_futures_api_key, api_secret=settings.kraken_futures_secret)
+    if futures is not None:
+        try:
+            result = flatten_kraken_futures(futures, trade_logger=trade_logger, **({"sleep": sleep} if sleep else {}))
+            for close in result["closes"]:
+                lines.append(f"Kraken Futures: {close['side']} {close['size']} {close['venue_symbol']} reduce-only ({close['send_status']}), filled {close['filled']}"
+                             + (f" at {close['fill_price']:,.1f}, P&L {close['realized_pnl']:+.4f} USD" if close["filled"] else ""))
+            lines.append(f"Kraken Futures: {len(result['closes'])} position(s) closed, {len(result['remaining_positions'])} left, {result['open_orders_left']} open order(s) left")
+            if result["remaining_positions"] or result["open_orders_left"]:
+                problems.append(f"Kraken Futures: still open: {result['remaining_positions']}, {result['open_orders_left']} order(s)")
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"Kraken Futures: sweep failed ({exc})")
+    else:
+        lines.append("Kraken Futures: no keys in .env, skipped")
+
+    trade_logger.log_event(timestamp=datetime.now(timezone.utc), level="ERROR" if problems else "WARNING", event_type="kill_switch_sweep",
+                           message="kill switch swept the exchanges" + (" with problems" if problems else ""), source="main",
+                           metadata={"reason": args.kill_switch_reason, "results": lines, "problems": problems})
+    (notifier or TelegramNotifier()).send_alert(event_type="kill_switch", message=f"Kill switch activated ({args.kill_switch_reason}). "
+                                                + ("CHECK THE ACCOUNTS: " + "; ".join(problems) if problems else "Every open order cancelled and every perp closed."),
+                                                metadata={f"line {index + 1}": line for index, line in enumerate(lines)})
+    print(f"Kill switch ACTIVE (reason: {state['reason']}); every runtime reading {PORTFOLIO_KILL_SWITCH_FILE} stops.")
+    for line in lines:
+        print(f"  {line}")
+    for problem in problems:
+        print(f"  PROBLEM: {problem}")
+    print("Re-arm with --kill-switch-reset once the accounts are checked.")
+    return 1 if problems else 0
+
+
+def kill_switch_reset() -> int:
+    """Re-arm the kill switch after an activation; the runtimes' own live gates still apply."""
+    trade_logger = TradeLogger(database_path=settings.database_path)
+    controller = KillSwitchController(state_file=PORTFOLIO_KILL_SWITCH_FILE, trade_logger=trade_logger)
+    previous = controller.get_state()
+    controller.reset()
+    trade_logger.log_event(timestamp=datetime.now(timezone.utc), level="WARNING", event_type="kill_switch_reset", message="kill switch re-armed",
+                           source="main", metadata={"previous_reason": previous.get("reason"), "previous_triggered_at": previous.get("triggered_at")})
+    print(f"Kill switch reset (was {'active: ' + str(previous.get('reason')) if previous.get('active') else 'inactive'}).")
+    return 0
+
+
 def _portfolio_live_refusal(args: argparse.Namespace, config: Any) -> str | None:
     """Why a live portfolio must not start (None when every gate passes). The same gates as single-strategy live, plus a money cap."""
     if not args.enable_live_trading:
@@ -1986,8 +2066,9 @@ def main() -> None:
     parser.add_argument("--post-run-analysis", action="store_true", help="Print a post-session trade analysis: round-trip PnL, blocked/cancelled breakdown, equity stats")
     parser.add_argument("--since-today", action="store_true", help="Filter --post-run-analysis to today's data only")
     parser.add_argument("--since", default=None, help="Filter --post-run-analysis to data on or after this date (YYYY-MM-DD)")
-    parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
+    parser.add_argument("--kill-switch", action="store_true", help="REAL ORDERS: activate the kill switch (every runtime stops), cancel every open order on Kraken spot and Kraken Futures, and close every Kraken Futures position reduce-only. Spot coins are kept")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
+    parser.add_argument("--kill-switch-reset", action="store_true", help="Re-arm the kill switch after an activation (logged); live trading still needs its own flags")
     parser.add_argument("--option-chain-snapshot", nargs="*", metavar="CURRENCY", default=None, help="Fetch and store one Deribit option chain snapshot per currency (default BTC ETH), then exit. Public data, no keys")
     parser.add_argument("--record-option-chains", nargs="*", metavar="CURRENCY", default=None, help="Record Deribit option chains (default BTC ETH) every --option-chain-interval seconds until Ctrl-C, into data/options/deribit/")
     parser.add_argument("--option-chain-interval", type=float, default=3600.0, help="Seconds between option chain snapshots (default 3600)")
@@ -2062,12 +2143,10 @@ def main() -> None:
     logger_store = TradeLogger(database_path=settings.database_path)
 
     if args.kill_switch:
-        controller = KillSwitchController(trade_logger=TradeLogger(database_path=settings.database_path))
-        state = controller.activate(args.kill_switch_reason)
-        print("Kill switch activated")
-        print(f"Reason: {state['reason']}")
-        print(f"Orders cancelled: {len(state['orders_cancelled'])}")
-        return
+        raise SystemExit(kill_switch(args))
+
+    if args.kill_switch_reset:
+        raise SystemExit(kill_switch_reset())
 
     if args.futures_live_test:
         raise SystemExit(futures_live_test(args))

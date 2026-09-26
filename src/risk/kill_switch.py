@@ -30,6 +30,8 @@ class KillSwitchController:
             "account_snapshot": None,
             "neutralized": False,
         }
+        # Written before any exchange call, so every runtime reading the file stops even if a call below fails
+        self._persist_state()
 
         if execution_adapter is not None:
             self._state["orders_cancelled"] = self._cancel_open_orders(execution_adapter)
@@ -58,8 +60,21 @@ class KillSwitchController:
         return self.get_state()
 
     def is_active(self) -> bool:
-        """Return whether the control is currently active."""
+        """Whether the kill switch is active, re-read from the state file so `--kill-switch` from another process counts."""
+        self._refresh()
         return bool(self._state.get("active"))
+
+    def _refresh(self) -> None:
+        """Pick up an activation or reset written by another process; keep the last state if the file can't be read."""
+        if not self.state_file.exists():
+            return
+        try:
+            with self.state_file.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            return
+        if isinstance(payload, dict):
+            self._state.update({key: payload[key] for key in ("active", "reason", "triggered_at", "orders_cancelled", "account_snapshot", "neutralized") if key in payload})
 
     def get_state(self) -> dict[str, Any]:
         """Return the state value."""
@@ -117,8 +132,12 @@ class KillSwitchController:
             status = getattr(order, "status", None)
             if status in {"FILLED", "CANCELED", "REJECTED", "NOT_FOUND"}:
                 continue
-            report = execution_adapter.cancel_order(order_id=order_id)
-            cancelled.append({"order_id": order_id, "status": getattr(report, "status", None)})
+            try:
+                report = execution_adapter.cancel_order(order_id=order_id)
+            except Exception as exc:  # noqa: BLE001 - one failed cancel must not stop the others
+                cancelled.append({"order_id": order_id, "status": "ERROR", "error": str(exc)})
+                continue
+            cancelled.append({"order_id": order_id, "status": getattr(report, "status", None), "message": getattr(report, "message", None)})
         return cancelled
 
     def _load_state(self) -> dict[str, Any]:
@@ -143,5 +162,8 @@ class KillSwitchController:
         return {"active": False, "reason": None, "triggered_at": None, "orders_cancelled": [], "account_snapshot": None, "neutralized": False}
 
     def _persist_state(self) -> None:
-        with self.state_file.open("w", encoding="utf-8") as handle:
+        # Write a temporary file and rename it, so a runtime reading the state never sees half a file
+        temporary = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
             json.dump(self._state, handle, indent=2, default=str)
+        temporary.replace(self.state_file)

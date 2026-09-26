@@ -50,7 +50,8 @@ python main.py --tax-report --tax-year 2026 --tax-export-path exports/tax_2026.c
 ```
 
 **Real orders:** `--runtime live`, `--futures-live-test`, the `--kraken-submit-*` / `--kraken-close-*` flows and
-`--kill-switch` act on the real account. Live needs `--enable-live-trading --live-confirmation
+`--kill-switch` act on the real account. `--kill-switch` works without a runtime running: it cancels every open
+Kraken order and closes every Kraken Futures position (spot coins are kept); `--kill-switch-reset` re-arms it. Live needs `--enable-live-trading --live-confirmation
 ENABLE_LIVE_TRADING`, a named `--execution-exchange`, a ready kill switch and, for the portfolio,
 `[risk] max_gross_notional`. See [`docs/runbook.md`](docs/runbook.md) before using any of them.
 

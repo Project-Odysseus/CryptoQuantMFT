@@ -140,6 +140,14 @@ flowchart TD
   - It uses the execution adapter when present, otherwise it behaves as a pure paper engine.
   - It also updates portfolio state and writes trades/equity snapshots.
 
+- `src/execution/emergency.py` and `src/risk/kill_switch.py`
+  - `KillSwitchController` keeps the state file (`data/kill_switch_state.json`, written atomically and re-read on
+    every check, so an activation from another terminal reaches running runtimes).
+  - `python main.py --kill-switch` (`kill_switch()` in `main.py`) doesn't need a runtime: it writes the state, cancels
+    every Kraken spot order (recovered from Kraken, then `CancelAll`), and `flatten_kraken_futures` cancels every
+    futures order and closes every position reduce-only, recording the closes in the trade log and tax ledger.
+    `--kill-switch-reset` re-arms it.
+
 - `src/execution/reconciliation.py`
   - `SessionAccountStateTracker` and `ReconciliationEntry` track:
     - balances,

@@ -210,8 +210,14 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
   sent once when a problem starts and once when it clears, for: stale or failing market data per instrument, a risk
   limit acting, rejected orders, reconciliation mismatches, a sleeve disabled after 3 failing cycles, and failed
   cycles (the runtime stops itself after 5 in a row).
-- **Kill switch:** `python main.py --kill-switch` from any terminal. At its next cycle the portfolio closes every
-  position with reduce-only orders and stops.
+- **Kill switch:** `python main.py --kill-switch` from any terminal. It works with or without a runtime running:
+  it marks the switch active (every runtime stops; a running portfolio also closes its positions at its next cycle),
+  cancels every open order on Kraken spot and Kraken Futures, and closes every Kraken Futures position with
+  reduce-only market orders (so a runtime closing the same position at the same time can't overshoot). Spot coins
+  are kept. It prints what is left, alerts on Telegram, and exits with code 1 if anything is still open. The closes
+  go into the trade log and tax ledger (fees estimated at the taker rate). Afterwards: check both accounts on
+  Kraken, re-arm with `python main.py --kill-switch-reset`, and restart a live portfolio with
+  `--portfolio-adopt-exchange` so its book matches the now-flat account.
 - **After the max-drawdown kill:** the book stays flat until you re-arm it with `--portfolio-reset-peak` (logged).
 - **Currency:** one currency per portfolio for now. USD perps are fine, but EUR spot mixed with USD perps is refused
   until an FX feed exists.
@@ -399,7 +405,7 @@ This checklist is intentionally stricter. Completing it does **not** mean the re
 - Confirm the Norwegian tax ledger stays readable with `python main.py --tax-report --tax-year <year>` and export it before any production rollout.
 - For dry-run work, prefer a short bounded run first (`--runtime-iterations 3`) before longer sessions.
 - If testing live guards only, verify the CLI refuses `--runtime live` without the required flags instead of trying to work around the protections.
-- If the kill switch was triggered earlier, reset and verify the state before any further promotion attempt.
+- If the kill switch was triggered earlier, reset it (`python main.py --kill-switch-reset`) and verify the state before any further promotion attempt.
 
 ## Backup procedure
 
