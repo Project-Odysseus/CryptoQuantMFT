@@ -1651,13 +1651,15 @@ PORTFOLIO_KILL_SWITCH_FILE = Path("data/kill_switch_state.json")  # the same fil
 
 
 def run_portfolio_runtime(args: argparse.Namespace) -> int:
-    """Run a portfolio config on live Kraken candles (or mock candles) through paper sandbox exchanges.
+    """Run a portfolio config on Kraken candles (or mock candles).
 
-    Paper and live_dry_run both trade against sandbox accounts shaped like the
-    venues; live portfolio trading is not available yet (portfolio plan phase 6),
-    so it is refused here before anything starts.
+    Paper and live_dry_run trade against sandbox accounts shaped like the
+    venues; live trades Kraken Futures perps, only after the live gates in
+    `_portfolio_live_refusal` pass.
     """
     import tempfile
+
+    from src.utils.heartbeat import Heartbeat
 
     from src.portfolio.book import VENUE_CURRENCY, PortfolioBook
     from src.portfolio.config import PortfolioConfigError, load_portfolio_config
@@ -1710,11 +1712,14 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
         old_peak = engine.reset_peak(now=datetime.now(timezone.utc))
         print(f"Equity peak reset from {old_peak:,.2f} to {float(engine.book.peak_equity):,.2f}")
     feed = MockCandleFeed(config.instruments, grid_interval=engine.grid_interval) if mock else CandleFeed(config.instruments)
+    # The dead-man's switch pings an outside monitor; never from mock runs, which would hide a dead real runtime
+    heartbeat = Heartbeat(settings.healthcheck_url, min_interval=max(60.0, args.runtime_interval)) if settings.healthcheck_url and not mock else None
     runtime = PortfolioRuntime(engine, feed, interval_seconds=args.runtime_interval, trade_logger=trade_logger, notifier=notifier,
-                               kill_switch_file=PORTFOLIO_KILL_SWITCH_FILE)
+                               kill_switch_file=PORTFOLIO_KILL_SWITCH_FILE, heartbeat=heartbeat)
     print(f"Portfolio '{config.name}' ({args.runtime}{', mock candles' if mock else ''}): state in {state_dir}, "
           f"{'running until Ctrl-C' if args.runtime_iterations == 0 else f'{args.runtime_iterations} cycles'}, every {args.runtime_interval:g}s"
-          f"{', resumed from checkpoint' if engine.restored else ''}")
+          f"{', resumed from checkpoint' if engine.restored else ''}; "
+          f"dead-man's switch {'on' if heartbeat else 'OFF (set HEALTHCHECK_URL in .env)' if not mock else 'off for mock candles'}")
     reports = asyncio.run(runtime.run(iterations=args.runtime_iterations))
     decided = [report for report in reports if report.decided]
     fills = sum(len(report.fills) for report in reports)

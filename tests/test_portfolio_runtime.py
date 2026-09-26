@@ -297,3 +297,50 @@ def test_the_live_adapter_uses_krakens_contract_rules(monkeypatch) -> None:
     assert config.instruments[BTC].lot_step == pytest.approx(0.001) and config.instruments[ETH].min_order_size == pytest.approx(0.01)
     assert config.instruments[BTC].taker_fee_pct == pytest.approx(0.05)
     assert set(adapter.contracts) == {"BTC/USD", "ETH/USD"} and adapter.max_leverage == pytest.approx(3.0)
+
+
+class RecordingHeartbeat:
+    def __init__(self) -> None:
+        self.pings: list[str] = []
+
+    def started(self) -> bool:
+        self.pings.append("started")
+        return True
+
+    def alive(self) -> bool:
+        self.pings.append("alive")
+        return True
+
+    def failed(self, reason: str) -> bool:
+        self.pings.append(f"failed: {reason}")
+        return True
+
+
+def test_the_dead_mans_switch_is_pinged_while_healthy_and_told_at_once_when_it_fails_or_stops(tmp_path) -> None:
+    runtime, _, _ = _runtime(tmp_path)
+    runtime.heartbeat = heartbeat = RecordingHeartbeat()
+    asyncio.run(runtime.run(iterations=3))
+    assert heartbeat.pings == ["started", "alive", "alive", "alive"]  # a planned end with no stop reason stays quiet
+
+    class DeadFeed:
+        def now(self) -> datetime:
+            return T0
+
+        async def fetch(self, keys: Any, now: Any = None) -> Any:
+            raise ConnectionError("venue down")
+
+    broken, _, _ = _runtime(tmp_path / "broken", feed=DeadFeed())
+    broken.heartbeat = heartbeat = RecordingHeartbeat()
+    asyncio.run(broken.run(iterations=0))
+    failures = [ping for ping in heartbeat.pings if ping.startswith("failed")]
+    assert len(failures) == CYCLE_ERROR_LIMIT + 1 and "venue down" in failures[0]
+    assert "stopped" in failures[-1] and "failed cycles in a row" in failures[-1]
+
+
+def test_a_daily_summary_is_sent_once_per_utc_day(tmp_path) -> None:
+    runtime, logger, notifier = _runtime(tmp_path)
+    asyncio.run(runtime.run(iterations=14))  # 4h bars: a bit over two days
+    summaries = [alert for alert in notifier.alerts if alert["event_type"] == "daily_summary"]
+    assert len(summaries) == 2
+    assert summaries[0]["message"].startswith("Daily summary 2023-") and "Equity" in summaries[0]["message"] and "Open problems" in summaries[0]["message"]
+    assert len(logger.list_events(event_types=["portfolio_daily_summary"])) == 2

@@ -219,6 +219,14 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
   Kraken, re-arm with `python main.py --kill-switch-reset`, and restart a live portfolio with
   `--portfolio-adopt-exchange` so its book matches the now-flat account.
 - **After the max-drawdown kill:** the book stays flat until you re-arm it with `--portfolio-reset-peak` (logged).
+- **Dead-man's switch:** a process can't report its own death, so the runtime pings an outside monitor after
+  every good cycle (at most once a minute), and pings `/fail` with the reason when a cycle fails or the runtime
+  stops. Setup: create a free check at healthchecks.io with a period of about 2x `--runtime-interval` (at least
+  5 minutes) and a 10-minute grace, connect its Telegram integration, and put the ping URL in `.env` as
+  `HEALTHCHECK_URL=https://hc-ping.com/<uuid>`. The startup line says whether it is on. Mock-candle runs never ping.
+- **Daily summary:** on the first good cycle after midnight UTC, Telegram gets yesterday's equity change, drawdown,
+  positions, fills and fees, rejected orders, failed cycles, alerts and any open problems (also logged as
+  `portfolio_daily_summary`).
 - **Retries:** temporary exchange failures (timeouts, dropped connections, HTTP 429/5xx, Kraken's `EService` and
   rate-limit errors) are retried up to 3 times with backoff (0.5 s, 1 s), logged as `http_retry`. Only reads and
   cancels are retried. An order that times out is never resent; it is found later by its client order id.

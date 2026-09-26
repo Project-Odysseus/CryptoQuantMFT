@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +50,13 @@ class PortfolioRuntime:
         trade_logger: Any | None = None,
         notifier: Any | None = None,
         kill_switch_file: str | Path | None = None,
+        heartbeat: Any | None = None,
     ) -> None:
-        """`feed` needs `now()` and `async fetch(keys, now)` (see `src/portfolio/feed.py`)."""
+        """`feed` needs `now()` and `async fetch(keys, now)` (see `src/portfolio/feed.py`).
+
+        `heartbeat` is a dead-man's switch (`src/utils/heartbeat.py`): pinged after
+        every good cycle, told at once when a cycle fails or the runtime stops.
+        """
         self.engine = engine
         self.feed = feed
         self.interval_seconds = interval_seconds
@@ -68,6 +73,10 @@ class PortfolioRuntime:
         self._active_alerts: dict[str, str] = {}
         self._last_snapshot: datetime | None = None
         self._stop_event: asyncio.Event | None = None
+        self.heartbeat = heartbeat
+        # The daily summary covers one UTC day; it is sent on the first good cycle of the next day
+        self._summary_day: date | None = None
+        self._day: dict[str, Any] = {}
 
     # --- the loop ------------------------------------------------------------------------------------------------
 
@@ -79,6 +88,7 @@ class PortfolioRuntime:
         self._install_signal_handlers()
         self._event("INFO", "portfolio_runtime_started", f"portfolio {self.engine.config.name} started ({self.engine.mode})",
                     {"iterations": iterations, "interval_seconds": self.interval_seconds, "restored": self.engine.restored})
+        await self._ping("started")
         count = 0
         while not self.stop_requested and (iterations == 0 or count < iterations):
             await self.run_once()
@@ -91,6 +101,8 @@ class PortfolioRuntime:
                 pass
         self._event("INFO", "portfolio_runtime_stopped", f"portfolio {self.engine.config.name} stopped after {count} cycles: {self.stop_reason or 'done'}",
                     {"cycles": count, "reason": self.stop_reason}, self.feed.now())
+        if self.stop_reason is not None:
+            await self._ping("failed", f"portfolio {self.engine.config.name} stopped: {self.stop_reason}")
         return self.reports
 
     def request_stop(self, reason: str) -> None:
@@ -130,6 +142,8 @@ class PortfolioRuntime:
             logger.exception("portfolio cycle failed")
             self._event("ERROR", "portfolio_cycle_error", f"cycle failed ({self.consecutive_errors} in a row): {type(exc).__name__}: {exc}", {}, now)
             self._alert("cycle_error", f"Portfolio cycle failed: {type(exc).__name__}: {exc}", {"in_a_row": self.consecutive_errors})
+            self._day["errors"] = self._day.get("errors", 0) + 1
+            await self._ping("failed", f"cycle failed ({self.consecutive_errors} in a row): {type(exc).__name__}: {exc}")
             if self.consecutive_errors >= CYCLE_ERROR_LIMIT:
                 self.request_stop(f"{self.consecutive_errors} failed cycles in a row")
             return None
@@ -139,7 +153,49 @@ class PortfolioRuntime:
         del self.reports[:-200]
         self._watch(report, result.failed, stale)
         self._snapshot(report, result.now, force=report.decided)
+        self._daily_summary(report, result.now)
+        await self._ping("alive")
         return report
+
+    # --- dead-man's switch and daily summary ---------------------------------------------------------------------
+
+    async def _ping(self, kind: str, reason: str = "") -> None:
+        """Tell the outside monitor, in a thread so a slow monitor can't stall trading."""
+        if self.heartbeat is None:
+            return
+        if kind == "failed":
+            await asyncio.to_thread(self.heartbeat.failed, reason)
+        else:
+            await asyncio.to_thread(getattr(self.heartbeat, kind))
+
+    def _daily_summary(self, report: CycleReport, now: datetime) -> None:
+        """Count the day's activity; on the first good cycle of a new UTC day, send yesterday's summary."""
+        day = now.astimezone(timezone.utc).date()
+        if self._summary_day is not None and day != self._summary_day:
+            self._send_summary(report)
+        if self._summary_day != day:
+            self._summary_day = day
+            self._day = {"equity_start": report.equity, "cycles": 0, "errors": 0, "fills": 0, "fees": 0.0, "rejected": 0, "alerts": 0}
+        self._day["cycles"] += 1
+        self._day["fills"] += len(report.fills)
+        self._day["fees"] += sum(float(fill.get("fee") or 0.0) for fill in report.fills)
+        self._day["rejected"] += len(report.rejected)
+
+    def _send_summary(self, report: CycleReport) -> None:
+        snap = self.engine.snapshot(report)
+        start, end = float(self._day.get("equity_start") or 0.0), float(snap["equity"])
+        change = end / start - 1.0 if start > 0 else 0.0
+        currency = self.engine.config.base_currency
+        held = [f"{instrument.split(':', 1)[1]} {row['units']:+g} ({row['weight']:+.0%})" for instrument, row in snap["instruments"].items() if row["units"]]
+        problems = sorted(self._active_alerts.values())
+        message = (f"Daily summary {self._summary_day:%Y-%m-%d} ({self.engine.mode}, {self.engine.config.name}): running. "
+                   f"Equity {start:,.2f} -> {end:,.2f} {currency} ({change:+.1%}), drawdown {snap.get('drawdown', 0.0):.1%} from the peak. "
+                   f"Positions: {', '.join(held) if held else 'flat'}. "
+                   f"Fills {self._day['fills']} (fees {self._day['fees']:.4f}), rejected orders {self._day['rejected']}, failed cycles {self._day['errors']}, "
+                   f"alerts {self._day['alerts']}. Open problems: {'; '.join(problems) if problems else 'none'}.")
+        self._event("INFO", "portfolio_daily_summary", message, {**self._day, "day": str(self._summary_day), "equity_end": end})
+        if self.notifier is not None:
+            self.notifier.send_alert(event_type="daily_summary", message=message, metadata={})
 
     # --- checks and alerts ---------------------------------------------------------------------------------------
 
@@ -188,6 +244,7 @@ class PortfolioRuntime:
         if key in self._active_alerts:
             return
         self._active_alerts[key] = message
+        self._day["alerts"] = self._day.get("alerts", 0) + 1
         self._event("WARNING", "portfolio_alert", message, {"alert": key, **metadata}, self.feed.now())
         if self.notifier is not None:
             self.notifier.send_alert(event_type=key.split(":", 1)[0], message=message, metadata=metadata)

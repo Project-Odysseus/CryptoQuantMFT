@@ -65,6 +65,10 @@ class Settings(BaseSettings):
         default="",
         description="Telegram chat ID used for runtime alerts and trade notifications.",
     )
+    healthcheck_url: str = Field(
+        default="",
+        description="Dead-man's switch: a ping URL at an outside monitor (e.g. healthchecks.io) that alerts when the runtime goes quiet.",
+    )
     eur_nok_fallback: Decimal = Field(
         default=Decimal("11.50"),
         description="Fallback EUR/NOK exchange rate used when upstream FX data is unavailable.",

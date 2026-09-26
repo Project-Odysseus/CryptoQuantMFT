@@ -33,8 +33,8 @@ direction is in `aspirations.md`.
   sent twice, no position exceeds its cap, equity adds up
 - [ ] A crash and restart drill, in paper and then live at one lot: `kill -9` mid-cycle, turn the network off for a
   few minutes, restart with the same state dir. No duplicate orders, and the book matches Kraken afterwards
-- [ ] A dead-man's switch and a daily summary (section 3): today a dead process is silent, and silence looks like
-  "no trades"
+- [x] A dead-man's switch and a daily summary (2026-09-27, `src/utils/heartbeat.py`; runbook). To switch it on:
+  create a healthchecks.io check and set `HEALTHCHECK_URL` in `.env`
 - [x] Retries with backoff on Kraken's temporary errors (timeouts, 429/5xx, `EService:Unavailable`, rate limits),
   separate from real rejections (2026-09-27, `src/utils/retry.py`). Reads and cancels only; orders are never resent
 - [ ] A supervised first live session (a day or two, checked a few times a day): first-cycle adoption, orders at the
@@ -64,7 +64,7 @@ direction is in `aspirations.md`.
 
 - [x] Done: run-until-stopped mode for the portfolio, restart-safe checkpoints, the kill switch, alerts sent once per problem, and backup/restore steps in the runbook
 - [ ] A deployment kit in `deploy/`: a conda setup (or Dockerfile), a systemd unit with `Restart=always`, `.env` at `chmod 600`, and log rotation
-- [ ] A dead-man's switch: ping an external monitor (e.g. healthchecks.io) every cycle. Also a daily Telegram summary (still alive, P&L, positions) at midnight UTC
+- [x] A dead-man's switch and a daily Telegram summary (2026-09-27; set `HEALTHCHECK_URL`)
 - [ ] Nightly backups of `data/cryptoquant.db` (SQLite `.backup`) and `data/portfolio/`, kept off the server (the tax ledger is in the database)
 - [ ] Security: allow the API keys only from the server's IP; confirm neither Kraken key can withdraw; document key rotation and incident response
 - [ ] Single-strategy runtime, only if it keeps running unattended: bounded memory (`RuntimeOrchestrator.history`, and paper `run()` replaying every bar), bars from exchange candles, and HTTP off the event loop, as the portfolio feed does
