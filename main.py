@@ -17,6 +17,7 @@ from src.execution import ExecutionRouter, KrakenExecutionAdapter, PaperTradingE
 from src.execution.perps import SandboxPerpExecutionAdapter, assumed_perp_contract
 from src.risk.controls import DEFAULT_EXCHANGE_RISK_LIMITS, RiskControlConfig, RiskManager
 from src.risk.kill_switch import KillSwitchController
+from src.risk.sizing import SIZERS, build_sizer, describe_sizers
 from src.data.historical import fetch_kraken_ohlcv
 from src.data.pipeline import MarketDataPipeline
 from src.runtime import RuntimeConfig, RuntimeOrchestrator, RuntimeWatchdogError, build_runtime_config_from_args
@@ -57,6 +58,15 @@ async def run_pipeline(iterations: int = 3, interval_seconds: float = 1.0) -> No
             await asyncio.sleep(interval_seconds)
 
 
+def _validate_sizing(runtime_config: RuntimeConfig, *, risk_per_trade_pct: float | None) -> None:
+    """Build the configured sizer once so a bad name or parameter fails at startup with a clear message."""
+    params = dict(runtime_config.sizing_params)
+    name = runtime_config.sizing or "fixed_fraction"
+    if name == "fixed_fraction" and "fraction" not in params:
+        params["fraction"] = risk_per_trade_pct if risk_per_trade_pct is not None else 0.10
+    build_sizer(name, **params)
+
+
 def build_runtime_orchestrator(
     *,
     config: RuntimeConfig | None = None,
@@ -68,7 +78,6 @@ def build_runtime_orchestrator(
     risk_per_trade_pct: float | None = None,
     perp_max_leverage: float = 2.0,
     perp_sandbox_reset: bool = False,
-    target_annual_volatility: float | None = None,
 ) -> tuple[RuntimeOrchestrator, MarketDataPipeline]:
     """Build the runtime orchestrator and its market-data pipeline for a run."""
     runtime_config = config or RuntimeConfig(
@@ -121,11 +130,10 @@ def build_runtime_orchestrator(
             max_drawdown_pct=0.25,
             max_volatility_pct=0.50,
             risk_per_trade_pct=risk_per_trade_pct if risk_per_trade_pct is not None else 0.10,
-            target_annual_volatility=target_annual_volatility,
+            sizing=runtime_config.sizing or "fixed_fraction",
+            sizing_params=dict(runtime_config.sizing_params),
             max_position_size=1.0,
             volatility_window=10,
-            kelly_fraction=0.5,
-            kelly_window=20,
             max_slippage_pct=0.20,
             max_spread_pct=0.20,
             max_notional_per_trade=10000.0,
@@ -431,7 +439,6 @@ async def run_runtime_orchestrator(
     risk_per_trade_pct: float | None = None,
     perp_max_leverage: float = 2.0,
     perp_sandbox_reset: bool = False,
-    target_annual_volatility: float | None = None,
 ) -> RuntimeOrchestrator | None:
     """Run the runtime orchestrator over a simple market-data pipeline."""
     runtime_config = config or RuntimeConfig(
@@ -457,7 +464,6 @@ async def run_runtime_orchestrator(
             risk_per_trade_pct=risk_per_trade_pct,
             perp_max_leverage=perp_max_leverage,
             perp_sandbox_reset=perp_sandbox_reset and attempt == 0,
-            target_annual_volatility=target_annual_volatility,
         )
         loop = asyncio.get_running_loop()
 
@@ -676,8 +682,6 @@ def run_paper_trading(
             risk_per_trade_pct=0.10,
             max_position_size=1.0,
             volatility_window=10,
-            kelly_fraction=0.5,
-            kelly_window=20,
         )
     )
     trade_logger = TradeLogger(database_path="data/trades.db")
@@ -1666,8 +1670,11 @@ def main() -> None:
     parser.add_argument("--runtime-interval", type=float, default=1.0, help="Delay in seconds between runtime cycles")
     parser.add_argument("--bar-interval", default=None, choices=["1m", "5m", "15m", "30m", "1h", "4h", "1d"], help="Bar length for the strategy, independent of --runtime-interval (how often prices are polled). The strategy only acts when a bar completes. Default: one bar per poll")
     parser.add_argument("--warmup-bars", type=int, default=200, help="With --bar-interval: completed historical bars loaded at startup (Kraken spot OHLC, or futures mark candles for kraken_futures) so long-window strategies can signal immediately. 0 disables")
-    parser.add_argument("--risk-per-trade-pct", type=float, default=None, help="Override the fraction of equity risked per trade (default 0.10); needed for very small accounts to clear exchange minimum order sizes")
-    parser.add_argument("--target-annual-vol", type=float, default=None, help="Size each entry so its forecast annualised volatility is this (0.5 = 50%%), using an EWMA forecast with a 10-day half-life; capped by the exchange's position and per-trade limits (0.5x equity on Kraken), not resized while open. Default: the older fixed-fraction sizing")
+    parser.add_argument("--risk-per-trade-pct", type=float, default=None, help="Share of equity per position for the default fixed_fraction sizing (default 0.10 = 10%%); raise it for very small accounts to clear exchange minimum order sizes")
+    parser.add_argument("--sizing", choices=sorted(SIZERS), default=None, help="How entries are sized (see --list-sizing). Default: fixed_fraction at --risk-per-trade-pct. Every sizing gives a share of equity, capped by the exchange's position and per-trade limits")
+    parser.add_argument("--sizing-params", default="{}", help="JSON parameters for --sizing, e.g. '{\"target_annual_vol\": 0.5}' for vol_target or '{\"kelly_fraction\": 0.5, \"min_trades\": 20}' for kelly")
+    parser.add_argument("--list-sizing", action="store_true", help="Print every sizing method with its parameters and defaults, then exit")
+    parser.add_argument("--target-annual-vol", type=float, default=None, help="Shorthand for --sizing vol_target --sizing-params '{\"target_annual_vol\": X}' (0.5 = 50%% a year; EWMA forecast, 10-day half-life)")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures trades perpetual futures: the in-process margin sandbox under live_dry_run, real Kraken Futures orders under live")
     parser.add_argument("--perp-sandbox-reset", action="store_true", help="Start the perpetual-futures dry-run account fresh; the previous saved state (data/perp_sandbox_<contract>.json) is moved aside, not deleted")
     parser.add_argument("--perp-max-leverage", type=float, default=2.0, help="Leverage cap this runtime enforces on a perpetual-futures account (default 2; live refuses more than 3)")
@@ -1730,9 +1737,15 @@ def main() -> None:
     parser.add_argument("--tax-fx-rate", type=float, default=None, help="Optional EUR/NOK rate override used with --tax-log-fiat-eur")
     parser.add_argument("--tax-reference", default=None, help="Optional reference recorded with manual tax-ledger entries")
     args = parser.parse_args()
-    if args.target_annual_vol is not None and not 0.0 < args.target_annual_vol <= 3.0:
-        parser.error("--target-annual-vol must be above 0 and at most 3 (300% a year); 0.5 means 50%")
-    runtime_config = build_runtime_config_from_args(args, argv=sys.argv[1:])
+    if args.list_sizing:
+        print(describe_sizers())
+        return
+    try:
+        runtime_config = build_runtime_config_from_args(args, argv=sys.argv[1:])
+        if args.runtime:
+            _validate_sizing(runtime_config, risk_per_trade_pct=args.risk_per_trade_pct)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     logger.info("CryptoQuantMFT startup complete")
     logger.info("database_path={}", settings.database_path)
@@ -1903,7 +1916,6 @@ def main() -> None:
                 risk_per_trade_pct=args.risk_per_trade_pct,
                 perp_max_leverage=args.perp_max_leverage,
                 perp_sandbox_reset=args.perp_sandbox_reset,
-                target_annual_volatility=args.target_annual_vol,
             )
         )
         if args.dashboard:

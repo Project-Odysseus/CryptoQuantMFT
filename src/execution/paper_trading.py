@@ -154,6 +154,9 @@ class PaperTradingEngine:
         # that happened between cycles rather than assume flat/no-fill.
         # Keyed by order id so a partial fill only logs its new delta.
         self._reconciled_fill_size_by_order_id: dict[str, float] = {}
+        # The position last seen (size, average entry). When it goes flat or flips, the round trip's return is
+        # reported to the risk manager, whose Kelly sizer learns from the strategy's own trades.
+        self._observed_position: tuple[float, float | None] = (0.0, None)
 
     def run(self, bars: Sequence[Any], signals: Sequence[float | int | str | None]) -> PaperTradingResult:
         """Process a stream of bars and signals into simulated orders and fills."""
@@ -168,6 +171,7 @@ class PaperTradingEngine:
         peak_equity = self.initial_cash
         fees_paid = 0.0
         realized_pnl = 0.0
+        self._observed_position = (0.0, None)
         orders: list[PaperOrder] = []
         trades: list[PaperTrade] = []
         equity_curve: list[float] = []
@@ -213,7 +217,7 @@ class PaperTradingEngine:
                         )
                         continue
 
-                    fill_size = min(order.remaining_size, self.default_order_size * self.partial_fill_fraction)
+                    fill_size = min(order.remaining_size, order.size * self.partial_fill_fraction)  # scale-free across coins
                     if fill_size <= 0.0:
                         continue
 
@@ -414,9 +418,7 @@ class PaperTradingEngine:
                             price=price,
                             cash=cash,
                             equity=current_equity,
-                            requested_size=self.default_order_size,
-                            risk_position_size=risk_decision.position_size,
-                            equity_fraction=getattr(risk_decision, "equity_fraction", None),
+                            risk_decision=risk_decision,
                         )
                         if order_size > 0.0:
                             order = self._create_order(timestamp=timestamp, side="buy", size=order_size, bar=bar)
@@ -470,9 +472,7 @@ class PaperTradingEngine:
                             price=price,
                             cash=cash,
                             equity=current_equity,
-                            requested_size=self.default_order_size,
-                            risk_position_size=risk_decision.position_size,
-                            equity_fraction=getattr(risk_decision, "equity_fraction", None),
+                            risk_decision=risk_decision,
                         )
                         if order_size > 0.0:
                             order = self._create_order(timestamp=timestamp, side="sell", size=order_size, bar=bar)
@@ -489,6 +489,7 @@ class PaperTradingEngine:
                             )
                             if order.status in {"FILLED", "CANCELED"}:
                                 active_orders.remove(order)
+            self._observe_position(position_size=position_size, avg_entry_price=avg_entry_price, price=price)
             equity = cash + (position_size * price if position_size else 0.0)
             peak_equity = max(peak_equity, equity)
             position_side = "flat"
@@ -557,6 +558,7 @@ class PaperTradingEngine:
         ]
         cash, position_size, avg_entry_price, fees_paid, position_opened_at = self._current_account_state(price=price, symbol=symbol)
         current_equity = self._account_equity(cash=cash, position_size=position_size, avg_entry_price=avg_entry_price, price=price)
+        self._observe_position(position_size=position_size, avg_entry_price=avg_entry_price, price=price)
 
         bar_day = timestamp.date() if hasattr(timestamp, "date") else None
         if bar_day is not None and bar_day != self._exchange_current_day:
@@ -675,9 +677,7 @@ class PaperTradingEngine:
                     price=price,
                     cash=self._entry_buying_power(cash=cash, price=price),
                     equity=current_equity,
-                    requested_size=self.default_order_size,
-                    risk_position_size=risk_decision.position_size,
-                    equity_fraction=getattr(risk_decision, "equity_fraction", None),
+                    risk_decision=risk_decision,
                 )
                 if order_size > 0.0:
                     entry_order = self._create_order(timestamp=timestamp, side="buy", size=order_size, bar=bar)
@@ -736,9 +736,7 @@ class PaperTradingEngine:
                     price=price,
                     cash=self._entry_buying_power(cash=cash, price=price),
                     equity=current_equity,
-                    requested_size=self.default_order_size,
-                    risk_position_size=risk_decision.position_size,
-                    equity_fraction=getattr(risk_decision, "equity_fraction", None),
+                    risk_decision=risk_decision,
                 )
                 if order_size > 0.0:
                     entry_order = self._create_order(timestamp=timestamp, side="sell", size=order_size, bar=bar)
@@ -749,6 +747,7 @@ class PaperTradingEngine:
 
         self._record_derivative_ledger(timestamp=timestamp)
         cash, position_size, avg_entry_price, fees_paid, _position_opened_at = self._current_account_state(price=price, symbol=symbol)
+        self._observe_position(position_size=position_size, avg_entry_price=avg_entry_price, price=price)
         portfolio_snapshot = self._build_exchange_portfolio_snapshot(
             timestamp=timestamp,
             price=price,
@@ -878,9 +877,10 @@ class PaperTradingEngine:
             details["risk_position_size"] = risk_decision.position_size
         if hasattr(risk_decision, "reason"):
             details["risk_reason"] = risk_decision.reason
-        if getattr(risk_decision, "annual_volatility_forecast", None) is not None:
-            details["annual_volatility_forecast"] = risk_decision.annual_volatility_forecast
-            details["equity_fraction"] = risk_decision.equity_fraction
+        if getattr(risk_decision, "sizing", None):
+            details["sizing"] = risk_decision.sizing
+            details["equity_fraction"] = getattr(risk_decision, "equity_fraction", None)
+            details.update(getattr(risk_decision, "sizing_details", {}) or {})
         return details
 
     def _log_order_event(self, *, order: PaperOrder, timestamp: datetime, event_type: str, message: str, reason: str | None = None, **metadata: Any) -> None:
@@ -1401,34 +1401,39 @@ class PaperTradingEngine:
             daily_reference_equity=daily_reference_equity,
         )
 
-    def _resolve_order_size(
-        self,
-        *,
-        price: float,
-        cash: float,
-        equity: float,
-        requested_size: float,
-        risk_position_size: float,
-        equity_fraction: float | None = None,
-    ) -> float:
+    def _resolve_order_size(self, *, price: float, cash: float, equity: float, risk_decision: Any) -> float:
+        """Units to trade: the risk decision's share of equity at this price, limited to what `cash` can pay for.
+
+        This is the only place a share of equity becomes a unit count. Without a
+        risk manager, orders are `default_order_size` units (simple simulations
+        and tests).
+        """
         if price <= 0.0:
             return 0.0
         max_affordable_size = cash / price
         if max_affordable_size <= 0.0:
             return 0.0
-        if equity_fraction is not None:
-            # Volatility-target sizing gives a share of equity; it replaces the unit-based caps below.
-            return max(0.0, min(equity_fraction * equity / price, max_affordable_size))
+        if self.risk_manager is None:
+            return max(0.0, min(self.default_order_size, max_affordable_size))
+        fraction = getattr(risk_decision, "equity_fraction", None)
+        if fraction is None:
+            fraction = float(getattr(risk_decision, "position_size", 0.0) or 0.0)
+        return max(0.0, min(fraction * max(equity, 0.0) / price, max_affordable_size))
 
-        max_risk_fraction = 0.0
-        if self.risk_manager is not None and getattr(self.risk_manager, "config", None) is not None:
-            max_risk_fraction = float(getattr(self.risk_manager.config, "risk_per_trade_pct", 0.0))
+    def _observe_position(self, *, position_size: float, avg_entry_price: float | None, price: float) -> None:
+        """Report a closed round trip to the risk manager when the position went flat or flipped since last seen.
 
-        max_risk_size = float("inf")
-        if max_risk_fraction > 0.0:
-            max_risk_size = (equity * max_risk_fraction) / price
-
-        return max(0.0, min(requested_size, risk_position_size, max_affordable_size, max_risk_size))
+        The return is measured from the average entry to this bar's price, before
+        fees: close enough for the Kelly sizer, which only needs each trade's
+        size of win or loss.
+        """
+        last_size, last_entry = self._observed_position
+        closed = last_size != 0.0 and (position_size == 0.0 or (position_size > 0.0) != (last_size > 0.0))
+        if closed and last_entry and price > 0.0:
+            recorder = getattr(self.risk_manager, "record_trade_return", None)
+            if callable(recorder):
+                recorder((1.0 if last_size > 0.0 else -1.0) * (price / last_entry - 1.0))
+        self._observed_position = (position_size, avg_entry_price if position_size != 0.0 else None)
 
     def _apply_cost(self, price: float, *, side: str, size: float) -> float:
         if self.cost_model is None:

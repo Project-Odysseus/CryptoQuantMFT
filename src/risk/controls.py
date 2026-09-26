@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
+from src.risk.sizing import PositionSizer, SizingContext, build_sizer, ewma_annual_volatility  # noqa: F401 - ewma re-exported
+
 
 DEFAULT_EXCHANGE_RISK_LIMITS: dict[str, dict[str, Any]] = {
     "kraken": {
@@ -48,15 +50,16 @@ class RiskControlConfig:
 
     max_drawdown_pct: float = 0.25
     max_volatility_pct: float = 0.10
+    # The share of equity per position for `fixed_fraction` sizing when `sizing_params` doesn't set "fraction"
+    # (kept under its old name so existing configs and --risk-per-trade-pct keep working). Other sizers ignore it.
     risk_per_trade_pct: float = 0.02
+    # Upper limit on a position as a share of equity (1.0 = no leverage); exchange limits can lower it.
     max_position_size: float = 1.0
     volatility_window: int = 10
-    kelly_fraction: float = 0.5
-    kelly_window: int = 20
-    # Off by default: the multiplier is estimated from the market's recent bar returns, not from the strategy's
-    # trades, so it returns 0 whenever recent bars fell more than they rose (about 40% of the time on BTC 4h bars)
-    # and it ignores trade direction. With it on, allowed entries were silently sized to zero.
-    kelly_sizing: bool = False
+    # How entries are sized, by name from src/risk/sizing.py (fixed_fraction, fixed_notional, vol_target, atr_risk,
+    # kelly) with that sizer's parameters. Every sizer returns a share of equity; the caps below then apply.
+    sizing: str = "fixed_fraction"
+    sizing_params: dict[str, Any] = field(default_factory=dict)
     max_slippage_pct: float = 0.03
     max_spread_pct: float = 0.03
     max_quote_age_seconds: int = 900
@@ -94,12 +97,6 @@ class RiskControlConfig:
     # are only meaningful for live fills.  Paper trading does not have real
     # execution risk so these checks just prevent signals from filling.
     paper_mode: bool = False
-    # Opt-in volatility-target sizing (docs/research_log.md, 2026-09-26): each entry gets a share of equity equal to
-    # this annualised volatility divided by an EWMA forecast of the market's, capped by max_position_size and the
-    # exchange's per-trade notional. The position is not resized while open. None keeps the older sizing
-    # (risk_per_trade_pct / std of the last volatility_window bars, which the engine reads as asset units).
-    target_annual_volatility: float | None = None
-    volatility_halflife_days: float = 10.0
 
 
 @dataclass(slots=True)
@@ -107,11 +104,13 @@ class RiskDecision:
     """Result of evaluating whether a trade should be allowed."""
 
     allow_entry: bool
+    # The new position as a share of equity (0.25 = worth 25% of equity), after all caps. Never a unit count:
+    # the engine converts it to units at the entry price.
     position_size: float
     reason: str | None = None
-    # Set by volatility-target sizing: the position as a share of equity (the engine converts it to units).
     equity_fraction: float | None = None
-    annual_volatility_forecast: float | None = None
+    sizing: str | None = None
+    sizing_details: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -171,8 +170,22 @@ class RiskManager:
     """Gate new entries using drawdown and volatility thresholds."""
 
     def __init__(self, config: RiskControlConfig | None = None) -> None:
-        """Initialize the object with its runtime state."""
+        """Build the sizer named in the config; closed trade returns start empty (see `record_trade_return`)."""
         self.config = config or RiskControlConfig()
+        self.sizer: PositionSizer = build_sizer(self.config.sizing, **self._sizer_params())
+        self.trade_returns: list[float] = []
+
+    def _sizer_params(self) -> dict[str, Any]:
+        params = dict(self.config.sizing_params)
+        if self.config.sizing == "fixed_fraction" and "fraction" not in params:
+            params["fraction"] = self.config.risk_per_trade_pct
+        return params
+
+    def record_trade_return(self, trade_return: float) -> None:
+        """Remember a closed round trip's return on its notional; the Kelly sizer learns from these."""
+        self.trade_returns.append(float(trade_return))
+        if len(self.trade_returns) > 1000:
+            del self.trade_returns[:-1000]
 
     def evaluate(
         self,
@@ -257,73 +270,15 @@ class RiskManager:
         if not self.config.paper_mode and volatility_pct > self.config.max_volatility_pct:
             return RiskDecision(allow_entry=False, position_size=0.0, reason="volatility_limit")
 
-        if self.config.target_annual_volatility is not None:
-            return self._volatility_target_decision(
-                bars=bars,
-                equity=equity,
-                exchange_name=exchange_name,
-                signal_side=signal_side,
-                inventory_skew=inventory_skew,
-                current_notional=current_notional,
-                current_exchange_notional=current_exchange_notional,
-                exchange_position_size=exchange_position_size,
-            )
-
-        if volatility_pct <= 0.0:
-            position_size = self._resolve_position_limit(exchange_name=exchange_name)
-            position_size = self._apply_inventory_penalty(
-                position_size=position_size,
-                signal_side=signal_side,
-                inventory_skew=inventory_skew,
-            )
-            position_size = self._apply_position_caps(
-                position_size=position_size,
-                current_notional=current_notional,
-                equity=equity,
-                exchange_name=exchange_name,
-                current_exchange_notional=current_exchange_notional,
-                exchange_position_size=exchange_position_size,
-            )
-            return RiskDecision(allow_entry=True, position_size=max(0.0, min(self._resolve_position_limit(exchange_name=exchange_name), position_size)))
-
-        base_position_size = min(self._resolve_position_limit(exchange_name=exchange_name), self.config.risk_per_trade_pct / volatility_pct)
-        kelly_multiplier = self._estimate_kelly_multiplier(bars) if self.config.kelly_sizing else 1.0
-        position_size = base_position_size * kelly_multiplier
-        position_size = self._apply_inventory_penalty(
-            position_size=position_size,
-            signal_side=signal_side,
-            inventory_skew=inventory_skew,
-        )
-        position_size = self._apply_position_caps(
-            position_size=position_size,
-            current_notional=current_notional,
-            equity=equity,
-            exchange_name=exchange_name,
-            current_exchange_notional=current_exchange_notional,
-            exchange_position_size=exchange_position_size,
-        )
-        return RiskDecision(allow_entry=True, position_size=max(0.0, min(self._resolve_position_limit(exchange_name=exchange_name), position_size)))
-
-    def _volatility_target_decision(
-        self,
-        *,
-        bars: Sequence[Any],
-        equity: float,
-        exchange_name: str | None,
-        signal_side: str | None,
-        inventory_skew: float,
-        current_notional: float,
-        current_exchange_notional: float,
-        exchange_position_size: float,
-    ) -> RiskDecision:
-        """Size an entry so its forecast volatility matches the target, as a share of equity."""
-        forecast = ewma_annual_volatility(bars, halflife_days=self.config.volatility_halflife_days)
-        if forecast is None or forecast <= 0.0:
-            return RiskDecision(allow_entry=False, position_size=0.0, reason="volatility_forecast_unavailable")
-        fraction = min(self._resolve_position_limit(exchange_name=exchange_name), float(self.config.target_annual_volatility) / forecast)
-        max_trade_notional = float(self._exchange_caps(exchange_name).get("max_notional_per_trade", self.config.max_notional_per_trade))
+        price = _get_close(current_bar) if current_bar is not None else (_get_close(bars[-1]) if len(bars) else 0.0)
+        sized = self.sizer.size(SizingContext(bars=bars, equity=equity, price=price, side=signal_side, trade_returns=self.trade_returns))
+        details = {**sized.details, "sizer_fraction": sized.fraction}
+        if sized.fraction <= 0.0:
+            return RiskDecision(allow_entry=False, position_size=0.0, reason=sized.reason or "sizing_zero", sizing=self.sizer.name, sizing_details=details)
+        fraction = min(self._resolve_position_limit(exchange_name=exchange_name), sized.fraction)
+        max_trade_notional = float(self._exchange_caps(exchange_name).get("max_notional_per_trade", 0.0))
         if max_trade_notional > 0.0 and equity > 0.0:
-            fraction = min(fraction, max_trade_notional / equity)
+            fraction = min(fraction, max_trade_notional / equity)  # the exchange's per-trade money limit
         fraction = self._apply_inventory_penalty(position_size=fraction, signal_side=signal_side, inventory_skew=inventory_skew)
         fraction = self._apply_position_caps(
             position_size=fraction,
@@ -334,8 +289,8 @@ class RiskManager:
             exchange_position_size=exchange_position_size,
         )
         if fraction <= 0.0:
-            return RiskDecision(allow_entry=False, position_size=0.0, reason="position_caps", annual_volatility_forecast=forecast)
-        return RiskDecision(allow_entry=True, position_size=fraction, equity_fraction=fraction, annual_volatility_forecast=forecast)
+            return RiskDecision(allow_entry=False, position_size=0.0, reason="position_caps", sizing=self.sizer.name, sizing_details=details)
+        return RiskDecision(allow_entry=True, position_size=fraction, equity_fraction=fraction, sizing=self.sizer.name, sizing_details=details)
 
     def evaluate_exit(
         self,
@@ -429,43 +384,6 @@ class RiskManager:
             return 0.0
 
         return float(np.std(returns, ddof=0))
-
-    def _estimate_kelly_multiplier(self, bars: Sequence[Any]) -> float:
-        if len(bars) < 2:
-            return 1.0
-
-        closes = [_get_close(bar) for bar in bars[-self.config.kelly_window :]]
-        returns = []
-        for index in range(1, len(closes)):
-            previous_close = closes[index - 1]
-            current_close = closes[index]
-            if previous_close <= 0.0:
-                continue
-            returns.append((current_close - previous_close) / previous_close)
-
-        if len(returns) < 2:
-            return 1.0 if any(value > 0.0 for value in returns) else 0.0
-
-        positive_returns = [value for value in returns if value > 0.0]
-        negative_returns = [abs(value) for value in returns if value < 0.0]
-        if not positive_returns or not negative_returns:
-            # No losses at all → no basis for Kelly to shrink sizing.
-            # No wins at all → Kelly would say 0, but that blocks every entry.
-            # Use a conservative fallback (kelly_fraction/2) so the caller
-            # can still place a trade and gain real trade data.
-            return self.config.kelly_fraction * 0.5 if positive_returns else self.config.kelly_fraction * 0.25
-
-        win_rate = len(positive_returns) / len(returns)
-        avg_win = float(np.mean(positive_returns))
-        avg_loss = float(np.mean(negative_returns))
-        if avg_loss <= 0.0:
-            return 1.0 if avg_win > 0.0 else 0.0
-
-        win_loss_ratio = avg_win / avg_loss
-        kelly_fraction = (win_rate * win_loss_ratio - (1.0 - win_rate)) / win_loss_ratio
-        kelly_fraction = max(0.0, min(1.0, kelly_fraction))
-
-        return max(0.0, min(1.0, kelly_fraction * self.config.kelly_fraction))
 
     def _apply_inventory_penalty(self, *, position_size: float, signal_side: str | None, inventory_skew: float) -> float:
         if position_size <= 0.0:
@@ -600,32 +518,6 @@ def _get_timestamp(bar: Any) -> Any | None:
     if isinstance(bar, dict):
         return bar.get("timestamp")
     return None
-
-
-def ewma_annual_volatility(bars: Sequence[Any], *, halflife_days: float, min_returns: int = 20) -> float | None:
-    """Annualised EWMA volatility of the bars' log returns, or None without enough history.
-
-    The half-life is in days, so the forecast means the same on 1m, 4h or 1d
-    bars; the bar length is read from the timestamps. Same estimator as
-    `src.research.volatility.ewma_vol` (zero-mean, weights halving every
-    half-life), truncated after eight half-lives.
-    """
-    stamps = [_get_timestamp(bar) for bar in bars[-50:]]
-    gaps = [(later - earlier).total_seconds() for earlier, later in zip(stamps, stamps[1:]) if earlier is not None and later is not None]
-    gaps = [gap for gap in gaps if gap > 0.0]
-    if not gaps:
-        return None
-    bar_seconds = float(np.median(gaps))
-    halflife_bars = max(1.0, halflife_days * 86_400.0 / bar_seconds)
-    window = list(bars[-(int(8 * halflife_bars) + 2) :])
-    closes = np.array([_get_close(bar) for bar in window], dtype=float)
-    valid = (closes[1:] > 0.0) & (closes[:-1] > 0.0)
-    returns = np.log(closes[1:][valid] / closes[:-1][valid])
-    if len(returns) < min_returns:
-        return None
-    weights = 0.5 ** (np.arange(len(returns))[::-1] / halflife_bars)
-    variance = float(np.sum(weights * returns**2) / np.sum(weights))
-    return float(np.sqrt(variance * 365.0 * 86_400.0 / bar_seconds))
 
 
 def gate_reentry(signal: float, blocked_side: str | None) -> tuple[float, str | None, bool]:

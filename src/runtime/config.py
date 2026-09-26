@@ -34,6 +34,9 @@ class RuntimeConfig:
     bar_interval_seconds: int | None = None
     # Completed historical bars loaded at startup so long-window strategies can signal immediately.
     warmup_bars: int = 0
+    # Entry sizing by name (src/risk/sizing.py) and its parameters. None = fixed_fraction at --risk-per-trade-pct.
+    sizing: str | None = None
+    sizing_params: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "RuntimeConfig":
@@ -61,6 +64,8 @@ class RuntimeConfig:
             "state_path": str(self.state_path) if self.state_path is not None else None,
             "bar_interval_seconds": self.bar_interval_seconds,
             "warmup_bars": self.warmup_bars,
+            "sizing": self.sizing,
+            "sizing_params": self.sizing_params,
         }
 
     @classmethod
@@ -85,6 +90,8 @@ class RuntimeConfig:
             state_path=payload.get("state_path"),
             bar_interval_seconds=int(payload["bar_interval_seconds"]) if payload.get("bar_interval_seconds") else None,
             warmup_bars=int(payload.get("warmup_bars", 0) or 0),
+            sizing=payload.get("sizing"),
+            sizing_params=dict(payload.get("sizing_params", {}) or {}),
         )
 
     def save(self, path: str | Path) -> None:
@@ -126,6 +133,7 @@ def build_runtime_config_from_args(args: argparse.Namespace, argv: list[str] | N
     live_plot = bool(getattr(args, "live_plot", False))
     if loaded_config is not None and not _argument_was_provided(effective_argv, "--live-plot"):
         live_plot = bool(loaded_config.live_plot)
+    sizing, sizing_params = _resolve_sizing(effective_argv, args, loaded_config)
     live_plot_path = getattr(args, "live_plot_path", None)
     if loaded_config is not None and not _argument_was_provided(effective_argv, "--live-plot-path"):
         live_plot_path = loaded_config.live_plot_path
@@ -214,10 +222,31 @@ def build_runtime_config_from_args(args: argparse.Namespace, argv: list[str] | N
         warmup_bars=int(
             _resolve_cli_value(effective_argv, "--warmup-bars", getattr(args, "warmup_bars", 0), loaded_config.warmup_bars if loaded_config is not None else 0) or 0
         ),
+        sizing=sizing,
+        sizing_params=sizing_params,
     )
     if config_path:
         runtime_config.save(config_path)
     return runtime_config
+
+
+def _resolve_sizing(argv: list[str] | None, args: argparse.Namespace, loaded: RuntimeConfig | None) -> tuple[str | None, dict[str, Any]]:
+    """Sizing from --sizing / --sizing-params / --target-annual-vol, falling back to a loaded config's."""
+    sizing = _resolve_cli_value(argv, "--sizing", getattr(args, "sizing", None), loaded.sizing if loaded is not None else None)
+    params: dict[str, Any] = dict(loaded.sizing_params) if loaded is not None else {}
+    if loaded is not None and sizing != loaded.sizing:
+        params = {}  # another sizer's parameters don't carry over
+    if _argument_was_provided(argv, "--sizing-params") or loaded is None:
+        parsed = json.loads(getattr(args, "sizing_params", "{}") or "{}")
+        if not isinstance(parsed, dict):
+            raise ValueError("--sizing-params must be a JSON object")
+        params = parsed
+    target = getattr(args, "target_annual_vol", None)
+    if target is not None and _argument_was_provided(argv, "--target-annual-vol"):
+        if sizing not in (None, "vol_target"):
+            raise ValueError("--target-annual-vol is shorthand for --sizing vol_target; don't combine it with another --sizing")
+        sizing, params = "vol_target", {**params, "target_annual_vol": float(target)}
+    return sizing, params
 
 
 BAR_INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}

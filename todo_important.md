@@ -119,7 +119,21 @@ This file breaks **Priority 3: Close the Live-Execution Gap Safely** into concre
 
 - [x] **Allowed entries sized to zero (fixed 2026-09-26).** `RiskManager.evaluate` multiplied the position size by a "Kelly" factor estimated from the market's last 20 bar returns, not from the strategy's trades. It returned 0 whenever recent bars fell more than they rose (42% of sampled points on BTC 4h), ignored trade direction, and so turned allowed entries into zero-size orders with no reason recorded (`entries_were_allowed_but_no_fill_was_recorded`). It is now opt-in (`RiskControlConfig.kelly_sizing`, default False); sizing is `risk_per_trade_pct / volatility`, capped by the position and notional limits and the engine's per-trade risk cap. This changes position sizes in paper, dry-run, live and `run_backtest`-based backtests (not the research toolkit, which uses no risk manager). A trade-outcome-based Kelly would be the proper replacement if sizing by edge is wanted later.
 
-- [ ] **Entry sizing mixes units (found 2026-09-26 while adding volatility-target sizing)**
+- [x] **Entry sizing mixes units (found 2026-09-26 while adding volatility-target sizing; fixed 2026-09-26)**
+  - **Fix:** `src/risk/sizing.py` now owns all sizing.
+    - Every sizer returns a share of equity. The risk manager applies the caps, and the engine converts the share to
+      units in `_resolve_order_size`, the only place this happens.
+    - The old unit caps (`default_order_size` and `risk_per_trade_pct × equity / price`) and the market-return Kelly
+      multiplier are gone.
+    - Choose a method with `--sizing` / `--sizing-params` (list them with `--list-sizing`). It's saved in the runtime
+      config.
+    - The default, `fixed_fraction` at `--risk-per-trade-pct` (0.10), is what paper runs actually did before, so
+      paper baselines keep their sizes.
+    - `run_backtest` now defaults to full size (`BacktestConfig.sizing_params = {"fraction": 1.0}`), like the
+      research toolkit. It used to be `min(1, 0.02 / 10-bar std)`.
+    - Simulated partial fills are a share of each order instead of `default_order_size` units.
+    - Tests: `tests/test_sizing.py`.
+  - The original analysis, kept for reference:
   - The volatility term in the default sizing has no effect.
     - `RiskManager.evaluate` returns `risk_per_trade_pct / volatility` capped by `max_position_size`, and its own
       caps treat that number as a share of equity (`available_capacity / equity`).
@@ -137,8 +151,8 @@ This file breaks **Priority 3: Close the Live-Execution Gap Safely** into concre
     exchange's `max_notional_per_trade` and buying power. The engine converts the share to units at the entry
     price. Entries are refused with `volatility_forecast_unavailable` until there are 20 bars of history (use
     `--warmup-bars`). Research basis: `docs/research_log.md`, 2026-09-26 volatility entry.
-  - [ ] Decide whether `--target-annual-vol` becomes the default and the unit-based path is removed. That would
-    change the paper baseline's sizes, so it needs the user's go-ahead.
+  - [x] The unit-based path is removed (2026-09-26). The default stays `fixed_fraction` 10%, which keeps paper
+    baseline sizes the same. Switching the default to `vol_target` is a separate decision for the user.
 
 - [x] **First real `--runtime live` sessions (2026-09-25) — found and fixed 3 real bugs, none catastrophic**
   - Ran `moving_average_crossover` live on Kraken BTC/EUR with `--risk-per-trade-pct 0.35` (needed to clear Kraken's minimum order size on a ~14 EUR account) across 4 short guarded sessions. Every bug below was caught because it was actually run live, not because it was anticipated — this is the expected/intended value of live-testing before scaling size.

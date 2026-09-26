@@ -248,9 +248,16 @@ def test_position_stop_loss_now_applies_to_shorts_in_exchange_cycles() -> None:
 def test_liquidation_buffer_forces_an_exit_before_the_venue_liquidates() -> None:
     """With a buffer configured, the position is cut while still some distance from its liquidation price."""
     adapter = _adapter(collateral=1000.0, leverage=5.0)
-    engine = _engine(adapter, liquidation_buffer_pct=0.05)
-    engine.risk_manager.config.risk_per_trade_pct = 4.0  # oversize on purpose: a ~4x position sits close to liquidation
+    # Oversize on purpose: a 4x position sits close to liquidation. The sizing asks for 4x equity and the
+    # exchange's 0.5x position limit is lifted, since sizes are shares of equity (not units).
+    engine = _engine(
+        adapter,
+        liquidation_buffer_pct=0.05,
+        sizing_params={"fraction": 4.0},
+        exchange_risk_limits={"kraken": {"max_position_size": 5.0, "max_notional_per_trade": 10000.0, "max_total_notional": 25000.0, "max_open_positions": 1, "max_open_orders": 2}},
+    )
     engine.run_exchange_cycle([_bar(0, 50000.0)], [1.0])
+    assert adapter.position_size() * 50000.0 == pytest.approx(4000.0, rel=0.01)
     liq = adapter.liquidation_price()
     assert liq is not None and adapter.position_size() > 0.0
 

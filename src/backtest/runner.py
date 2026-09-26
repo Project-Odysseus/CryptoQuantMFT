@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
 from src.backtest.costs import CostModel, build_default_cost_model
@@ -41,8 +41,9 @@ class BacktestConfig:
     risk_per_trade_pct: float = 0.02
     max_position_size: float = 1.0
     volatility_window: int = 10
-    kelly_fraction: float = 0.5
-    kelly_window: int = 20
+    # Entry sizing (src/risk/sizing.py); full size by default, like the research toolkit.
+    sizing: str = "fixed_fraction"
+    sizing_params: dict[str, Any] = field(default_factory=lambda: {"fraction": 1.0})
 
 
 @dataclass(slots=True)
@@ -144,8 +145,8 @@ def run_backtest(bars: Sequence[Any], config: BacktestConfig | None = None, regi
             risk_per_trade_pct=resolved_config.risk_per_trade_pct,
             max_position_size=resolved_config.max_position_size,
             volatility_window=resolved_config.volatility_window,
-            kelly_fraction=resolved_config.kelly_fraction,
-            kelly_window=resolved_config.kelly_window,
+            sizing=resolved_config.sizing,
+            sizing_params=dict(resolved_config.sizing_params),
         )
     )
     backtester = SimpleBacktester(

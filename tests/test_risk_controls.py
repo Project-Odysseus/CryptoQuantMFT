@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -691,7 +693,8 @@ def test_simple_backtester_respects_risk_manager() -> None:
 def test_allowed_entries_are_not_sized_to_zero_after_a_falling_stretch() -> None:
     """Regression: the market-return Kelly multiplier returned 0 after mostly-down bars, so 'allowed' entries got size 0.
 
-    It was on by default and ignored trade direction; it is now opt-in via kelly_sizing.
+    That multiplier is gone. Kelly sizing now learns from the strategy's own closed trades, uses a fallback share
+    until it has enough, and refuses with an explicit reason (never an allowed entry of size 0) when the edge is negative.
     """
     from datetime import datetime, timedelta, timezone
 
@@ -711,5 +714,10 @@ def test_allowed_entries_are_not_sized_to_zero_after_a_falling_stretch() -> None
     default = RiskManager(RiskControlConfig(risk_per_trade_pct=0.10, max_volatility_pct=0.5, paper_mode=True)).evaluate(**kwargs)
     assert default.allow_entry and default.position_size > 0.0
 
-    with_kelly = RiskManager(RiskControlConfig(risk_per_trade_pct=0.10, max_volatility_pct=0.5, paper_mode=True, kelly_sizing=True)).evaluate(**kwargs)
-    assert with_kelly.allow_entry and with_kelly.position_size == 0.0  # the old behaviour, still available on request
+    kelly = RiskManager(RiskControlConfig(max_volatility_pct=0.5, paper_mode=True, sizing="kelly"))
+    fallback = kelly.evaluate(**kwargs)
+    assert fallback.allow_entry and fallback.position_size == pytest.approx(0.1)  # too few trades: fallback share
+    for _ in range(25):
+        kelly.record_trade_return(-0.02)
+    losing = kelly.evaluate(**kwargs)
+    assert not losing.allow_entry and losing.reason == "kelly_no_edge" and losing.position_size == 0.0

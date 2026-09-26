@@ -132,22 +132,39 @@ python main.py --runtime live_dry_run --execution-exchange kraken \
 
 ### Position size
 
-- **Default:** each entry is `--risk-per-trade-pct` of equity (10% unless set). This is a fixed fraction: the
-  volatility term in the older sizing never binds for BTC or ETH (see `todo_important.md`).
-- **`--target-annual-vol 0.5`:** sizes each entry so its forecast volatility is 50% a year. The share of equity is
-  0.5 divided by an EWMA forecast with a 10-day half-life, so calm markets get bigger positions and turbulent ones
-  smaller.
-  - The share is capped by the exchange's `max_position_size` (0.5 of equity on `kraken` and `kraken_futures`, 0.35
-    on `firi`, 1.0 on `sandbox`), its per-trade notional limit (500 on `kraken` and `kraken_futures`, 400 on
-    `firi`) and buying power. These caps live in `DEFAULT_EXCHANGE_RISK_LIMITS` (`src/risk/controls.py`).
-  - The position is sized once at entry and not resized while open. Research found resizing open positions hurt;
-    see `research_log.md`.
-  - It needs at least 20 bars of history, so pair it with `--warmup-bars`. Until then, entries are refused with
-    reason `volatility_forecast_unavailable`.
-  - The forecast and chosen share are recorded in each entry decision's risk details (`annual_volatility_forecast`,
-    `equity_fraction`).
-  - It helped moving-average crossover and long/short Keltner in research, but not breakout long-only rules
-    (Keltner long-only, Donchian).
+Every sizing method gives a **share of equity** (0.25 = a position worth 25% of equity). The risk manager caps it,
+and the engine converts it to units at the entry price. Positions are sized once, at entry, and not resized while
+open.
+
+| `--sizing` | What it does | Example `--sizing-params` |
+| --- | --- | --- |
+| `fixed_fraction` (default) | The same share every time; `--risk-per-trade-pct` sets it (default 0.10) | `'{"fraction": 0.2}'` |
+| `fixed_notional` | The same amount of money every time, e.g. to clear an exchange minimum on a small account | `'{"notional": 50}'` |
+| `vol_target` | Share = target / EWMA volatility forecast: bigger in calm markets, smaller in turbulent ones. `--target-annual-vol 0.5` is shorthand | `'{"target_annual_vol": 0.5}'` |
+| `atr_risk` | Lose about `risk_fraction` of equity if a stop `atr_multiplier` ATRs away is hit. Pair with the same ATR stop in the risk config | `'{"risk_fraction": 0.01, "atr_multiplier": 2}'` |
+| `kelly` | A fraction of the Kelly leverage from the strategy's own closed trades; `fallback_fraction` until `min_trades` exist; can start from a research prior | `'{"kelly_fraction": 0.5, "prior_mean": 0.02, "prior_std": 0.1, "prior_trades": 20}'` |
+
+```bash
+python main.py --list-sizing                                              # every method with its parameters and defaults
+python main.py --runtime paper --use-mock-connector --sizing vol_target --sizing-params '{"target_annual_vol": 0.4}' --dashboard
+```
+
+- **Caps, in order:**
+  - the exchange's `max_position_size`: 0.5 of equity on `kraken` and `kraken_futures`, 0.35 on `firi`, 1.0 on
+    `sandbox` (`DEFAULT_EXCHANGE_RISK_LIMITS` in `src/risk/controls.py`);
+  - the per-trade notional limit: 500 on `kraken` and `kraken_futures`, 400 on `firi`;
+  - total exposure capacity;
+  - buying power.
+- **Refusals carry a reason.** When a method can't size, the entry is refused with that reason instead of being
+  placed at size 0. Reasons: `volatility_forecast_unavailable` (fewer than 20 bars; use `--warmup-bars`),
+  `atr_unavailable`, `kelly_no_edge` (its trades lose on average), `position_caps`.
+- **Logging:** the chosen method, share and inputs (e.g. `annual_volatility_forecast`, `full_kelly`) are in each
+  entry decision's risk details.
+- **Persistence:** `--sizing` and `--sizing-params` are saved with `--runtime-config-path`. Kelly's trade history
+  lives in memory and restarts empty. Seed it with a research prior, since daily strategies trade too rarely to
+  learn Kelly quickly.
+- **Research:** `vol_target` helped MA crossover and long/short Keltner, but not breakout long-only rules (see
+  `research_log.md`).
 
 ## Recording order-flow data
 

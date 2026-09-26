@@ -111,9 +111,13 @@ flowchart TD
 - `src/risk/controls.py`
   - `RiskManager` and `RiskControlConfig` gate entries and size decisions.
   - They limit overtrading and make the runtime safer by enforcing drawdown, volatility, spread/slippage, and position caps.
-  - With `target_annual_volatility` set (`--target-annual-vol`), entries are sized as a share of equity from an EWMA
-    volatility forecast (`ewma_annual_volatility`), returned as `RiskDecision.equity_fraction`. The engine converts
-    it to units in `PaperTradingEngine._resolve_order_size`.
+- `src/risk/sizing.py`
+  - Pluggable entry sizing (`fixed_fraction`, `fixed_notional`, `vol_target`, `atr_risk`, `kelly`), built by name with
+    `build_sizer`. Every sizer returns a share of equity.
+  - `RiskManager` builds the one named in `RiskControlConfig.sizing` / `sizing_params`, caps its answer, and returns
+    it as `RiskDecision.position_size` / `equity_fraction`.
+  - `PaperTradingEngine._resolve_order_size` is the only place a share becomes units. The engine reports closed
+    round trips to `RiskManager.record_trade_return` for the Kelly sizer.
 
 ### Execution layer
 

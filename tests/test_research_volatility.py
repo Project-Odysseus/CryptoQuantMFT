@@ -99,7 +99,7 @@ def _bars(close: np.ndarray, hours: int) -> list:
 
 
 def test_runtime_ewma_forecast_matches_the_research_estimator() -> None:
-    from src.risk.controls import ewma_annual_volatility
+    from src.risk.sizing import ewma_annual_volatility
 
     rng = np.random.default_rng(11)
     close = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, 800)))
@@ -111,21 +111,23 @@ def test_runtime_ewma_forecast_matches_the_research_estimator() -> None:
 
 def test_volatility_target_sizes_entries_as_a_share_of_equity() -> None:
     from src.execution.paper_trading import PaperTradingEngine
-    from src.risk.controls import RiskControlConfig, RiskManager, ewma_annual_volatility
+    from src.risk.controls import RiskControlConfig, RiskManager
+    from src.risk.sizing import ewma_annual_volatility
 
     rng = np.random.default_rng(5)
     close = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.02, 300)))  # daily vol ~2%, ~38% a year
     bars = _bars(close, 24)
-    config = RiskControlConfig(max_drawdown_pct=1.0, max_volatility_pct=1.0, target_annual_volatility=0.2, max_position_size=1.0, max_notional_per_trade=0.0, max_total_notional=0.0, paper_mode=True)
+    config = RiskControlConfig(max_drawdown_pct=1.0, max_volatility_pct=1.0, sizing="vol_target", sizing_params={"target_annual_vol": 0.2}, max_position_size=1.0, max_total_notional=0.0, paper_mode=True)
     manager = RiskManager(config)
 
     decision = manager.evaluate(bars=bars, equity=10_000.0, peak_equity=10_000.0)
     forecast = ewma_annual_volatility(bars, halflife_days=10)
     assert decision.allow_entry and decision.equity_fraction == pytest.approx(0.2 / forecast)
-    assert decision.annual_volatility_forecast == pytest.approx(forecast)
+    assert decision.sizing_details["annual_volatility_forecast"] == pytest.approx(forecast)
 
-    capped = RiskManager(RiskControlConfig(**{**{f: getattr(config, f) for f in config.__slots__}, "max_notional_per_trade": 1_000.0}))
-    assert capped.evaluate(bars=bars, equity=10_000.0, peak_equity=10_000.0).equity_fraction == pytest.approx(0.1)  # per-trade notional cap
+    limits = {"kraken": {"max_position_size": 1.0, "max_notional_per_trade": 1_000.0, "max_total_notional": 0.0}}
+    capped = RiskManager(RiskControlConfig(**{**{f: getattr(config, f) for f in config.__slots__}, "exchange_risk_limits": limits}))
+    assert capped.evaluate(bars=bars, equity=10_000.0, peak_equity=10_000.0, exchange_name="kraken").equity_fraction == pytest.approx(0.1)  # per-trade notional cap
     assert RiskManager(config).evaluate(bars=bars[:5], equity=10_000.0, peak_equity=10_000.0).reason == "volatility_forecast_unavailable"
 
     # The engine turns the share of equity into units at the entry bar's price (not 10% of equity, not 1 unit).
