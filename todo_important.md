@@ -17,8 +17,14 @@ mirror them in `TODO.MD`.
 - [ ] **`live_dry_run` fills look like real fills in `trades`** (exchange `kraken`, source `paper_trading`; e.g.
   trades 23594-23597 on 2026-09-25). The tax ledger is unaffected (checked), but reports and dashboards can't tell
   sandbox fills from real ones. Tag them (exchange `kraken_sandbox` or a mode column)
-- [ ] **Spot: kill-switch preview against a real open order** (the cancel target list, checked against Kraken's
-  actual open orders)
+- [x] **Spot: kill-switch preview against a real open order** (the cancel target list, checked against Kraken's
+  actual open orders). Done 2026-09-26, together with a real activation. The test found that `--kill-switch` on its
+  own cancelled nothing on the exchange (it only wrote the state file), and that the single-strategy runtime never
+  re-read that file. Both fixed: it now cancels every Kraken order and closes every Kraken Futures position
+  reduce-only by itself, and `--kill-switch-reset` re-arms it. Live result: the preview from a fresh process listed
+  the resting order `OQS5AR-Y7MBP-M7EQMA`; `--kill-switch` cancelled it (Kraken: `canceled`, nothing filled, "User
+  requested"), `CancelAll` found nothing left, Kraken Futures was flat, the Telegram alert arrived, and the reset
+  re-armed it
 - [x] **Spot: reconciled fills can record `fee=0`.** Kraken's `QueryOrders` can report `closed` before the fee
   settles, and reconciliation trusted the first answer. This corrupted tax rows once (backfilled by hand on
   2026-09-25). Fixed 2026-09-26: a fill with no fee waits up to `FEE_SETTLE_MAX_POLLS` (3) cycles for it, then is
