@@ -58,11 +58,11 @@ class FakeKraken:
             signed = float(params["size"]) * (1 if params["side"] == "buy" else -1)
             if params.get("reduceOnly") == "true" and (abs(size + signed) > abs(size) + 1e-12 or (size + signed) * size < 0):
                 return {"result": "success", "sendStatus": {"status": "wouldNotReducePosition"}}
-            self._fill(params["symbol"], signed, params["cliOrdId"])
+            order_id = self._fill(params["symbol"], signed, params["cliOrdId"])
             if self.lose_next_response:
                 self.lose_next_response = False
                 raise TimeoutError("read timed out")  # the order reached Kraken; our process never heard back
-            return {"result": "success", "sendStatus": {"status": "placed", "order_id": f"uuid-{len(self.fills)}"}}
+            return {"result": "success", "sendStatus": {"status": "placed", "order_id": order_id}}
         if endpoint == "fills":
             return {"result": "success", "fills": list(self.fills)}
         if endpoint == "openorders":
@@ -79,7 +79,7 @@ class FakeKraken:
             return {"result": "success", "cancelStatus": {"status": "cancelled"}}
         raise AssertionError(f"unexpected endpoint {endpoint}")
 
-    def _fill(self, symbol: str, signed: float, cli_ord_id: str) -> None:
+    def _fill(self, symbol: str, signed: float, cli_ord_id: str) -> str:
         price = self.prices[symbol]
         size, entry = self.positions.get(symbol, [0.0, 0.0])
         if size and (size > 0) != (signed > 0):
@@ -98,6 +98,7 @@ class FakeKraken:
         fill = {"cliOrdId": cli_ord_id, "order_id": f"uuid-{len(self.fills) + len(self.hidden_fills) + 1}", "symbol": symbol, "size": abs(signed), "price": price,
                 "side": "buy" if signed > 0 else "sell", "fillType": "taker"}
         (self.hidden_fills if self.delay_fills else self.fills).append(fill)
+        return fill["order_id"]  # unique, as Kraken's order ids are
 
     def release_fills(self) -> None:
         self.fills += self.hidden_fills
@@ -363,3 +364,47 @@ def test_the_live_test_command_needs_the_live_gates_and_keys(monkeypatch, capsys
     fake = FakeKraken(equity=20.0)
     code = main.futures_live_test(args, transport=fake, fetch_contract=lambda symbol: CONTRACTS[0], fetch_mark=lambda venue_symbol: 50_000.0, sleep=lambda seconds: None)
     assert code == 0 and "LIVE TEST OK" in capsys.readouterr().out and fake.positions == {}
+
+
+def _book_matches_kraken(engine: PortfolioEngine, fake: FakeKraken) -> bool:
+    held = {symbol: size for symbol, (size, _entry) in fake.positions.items()}
+    return (float(engine.book.units().get(BTC, 0)) == pytest.approx(held.get("PF_XBTUSD", 0.0), abs=1e-9)
+            and float(engine.book.units().get(ETH, 0)) == pytest.approx(held.get("PF_ETHUSD", 0.0), abs=1e-9))
+
+
+def test_a_fill_that_appears_after_the_order_was_written_off_is_still_booked(tmp_path) -> None:
+    from test_portfolio_engine import RecordingNotifier
+
+    fake = FakeKraken()
+    notifier = RecordingNotifier()
+    engine = _live_engine(fake, tmp_path, notifier=notifier)
+    fake.delay_fills = True  # the orders fill on Kraken, but /fills doesn't show them yet
+    _cycle(engine, fake, FIRST)
+    _cycle(engine, fake, FIRST + 1)
+    assert engine.written_off_orders and not engine.pending_orders
+    assert not _book_matches_kraken(engine, fake)
+    watched_ids = set(engine.written_off_orders)
+
+    fake.release_fills()
+    report = _cycle(engine, fake, FIRST + 2)
+    assert _book_matches_kraken(engine, fake) and not engine.written_off_orders
+    assert any(alert["event_type"] == "late_fill" for alert in notifier.alerts)
+    assert watched_ids <= {fill["order_id"] for fill in report.fills}  # booked as fills of the original orders
+
+
+def test_written_off_orders_survive_a_restart_and_are_still_settled(tmp_path) -> None:
+    fake = FakeKraken()
+    engine = _live_engine(fake, tmp_path)
+    fake.delay_fills = True
+    _cycle(engine, fake, FIRST)
+    _cycle(engine, fake, FIRST + 1)
+    watched = set(engine.written_off_orders)
+    assert watched
+
+    restarted = _live_engine(fake, tmp_path)  # same state dir: a new process
+    assert set(restarted.written_off_orders) == watched
+    fake.release_fills()
+    _cycle(restarted, fake, FIRST + 2)
+    assert _book_matches_kraken(restarted, fake)
+    sent = [params["cliOrdId"] for params in fake.sent_orders()]
+    assert len(sent) == len(set(sent))  # nothing was resent after the restart

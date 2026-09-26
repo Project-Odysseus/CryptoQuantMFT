@@ -227,6 +227,8 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
 - **Daily summary:** on the first good cycle after midnight UTC, Telegram gets yesterday's equity change, drawdown,
   positions, fills and fees, rejected orders, failed cycles, alerts and any open problems (also logged as
   `portfolio_daily_summary`).
+- **Late fills:** an IOC order with no fill after 3 checks and 15 s is written off, but watched for another hour.
+  If its fill then appears in Kraken's `/fills`, it is booked normally and Telegram gets a `late_fill` alert.
 - **Retries:** temporary exchange failures (timeouts, dropped connections, HTTP 429/5xx, Kraken's `EService` and
   rate-limit errors) are retried up to 3 times with backoff (0.5 s, 1 s), logged as `http_retry`. Only reads and
   cancels are retried. An order that times out is never resent; it is found later by its client order id.

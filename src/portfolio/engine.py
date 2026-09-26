@@ -53,6 +53,8 @@ from src.utils.telegram import TradeAlert
 
 BarsByKey = Mapping[tuple[str, str], Sequence[Any]]  # (instrument id, interval) -> completed bars, oldest first
 SLEEVE_ERROR_LIMIT = 3  # consecutive failing cycles before a sleeve is disabled until restart
+LATE_FILL_WATCH = timedelta(hours=1)  # matches the live adapter's watch on written-off orders
+LATE_FILL_MIN_CHECKS = 10  # ...and at least this many settle passes
 
 
 @dataclass(slots=True)
@@ -181,6 +183,8 @@ class PortfolioEngine:
         self.record_tax = record_tax
         self.pending_tax: list[dict[str, Any]] = []  # flows the ledger couldn't take yet (e.g. no FX rate); retried each cycle
         self.pending_orders: dict[str, dict[str, Any]] = {}  # sent to a live exchange, fill not settled yet (survives restarts)
+        # Written off as unfilled, but watched for an hour in case the exchange's fill list was only late (survives restarts)
+        self.written_off_orders: dict[str, dict[str, Any]] = {}
         self.unreconciled: dict[str, dict[str, float]] = {}  # book vs exchange disagreements: only reductions until resolved
         self.funding_booked_until: dict[str, str] = {}  # live: the last funding hour booked per instrument
         self.funding_source = funding_source
@@ -193,7 +197,7 @@ class PortfolioEngine:
         for adapter in self.adapters.values():
             if hasattr(adapter, "client_id_prefix"):
                 adapter.client_id_prefix = f"cqm-{self.book_id}"
-        for order_id, meta in self.pending_orders.items():  # re-register orders sent before a restart
+        for order_id, meta in {**self.written_off_orders, **self.pending_orders}.items():  # re-register orders sent before a restart
             spec = self.config.instruments[meta["instrument"]]
             track = getattr(self.adapters[spec.venue], "track_order", None)
             if callable(track):
@@ -448,23 +452,41 @@ class PortfolioEngine:
             self.notifier.send_trade_alert(self._trade_alert(meta, fill, report, now))
 
     def _settle_pending(self, report: CycleReport, now: datetime) -> None:
-        """Book fills of orders a live exchange accepted earlier, and drop the ones that ended."""
-        if not self.pending_orders:
+        """Book fills of orders a live exchange accepted earlier, drop the ones that ended, and book late fills."""
+        # Stop watching a written-off order once it is both an hour old and was checked for several cycles, so a long
+        # runtime interval (or a fast replay) can't drop it before its late fill had a chance to appear
+        horizon = (now - LATE_FILL_WATCH).isoformat()
+        for meta in self.written_off_orders.values():
+            meta["checks"] = int(meta.get("checks", 0)) + 1
+        self.written_off_orders = {order_id: meta for order_id, meta in self.written_off_orders.items()
+                                   if meta.get("written_off_at", "") >= horizon or meta["checks"] <= LATE_FILL_MIN_CHECKS}
+        if not self.pending_orders and not self.written_off_orders:
             return
         for venue, adapter in self.adapters.items():
             settle = getattr(adapter, "settle_orders", None)
             if not callable(settle):
                 continue
             for item in settle():
-                meta = self.pending_orders.get(item["order_id"])
+                # One of ours written off earlier (possibly by the adapter of a previous process): only a fill matters
+                late = item["order_id"] in self.written_off_orders
+                if late and not item.get("filled_size"):
+                    continue
+                meta = self.written_off_orders.pop(item["order_id"]) if late else self.pending_orders.get(item["order_id"])
                 if meta is None:
                     continue
                 if item.get("filled_size"):
                     self._book_fill(meta, filled_size=float(item["filled_size"]), fill_price=float(item["fill_price"]), fee=float(item["fee"]), report=report, now=now)
+                if late:
+                    message = f"late fill: {meta['side']} {item['filled_size']} {meta['instrument']} at {float(item['fill_price']):,.2f} appeared after the order was written off"
+                    self._event("WARNING", "portfolio_late_fill", message, {**meta, "filled_size": item["filled_size"]}, now)
+                    if self.notifier is not None:
+                        self.notifier.send_alert(event_type="late_fill", message=f"{message}; booked now.", metadata={})
+                    continue
                 if item.get("status") in {"FILLED", "CANCELED"}:
                     self.pending_orders.pop(item["order_id"], None)
                     if item["status"] == "CANCELED" and not item.get("filled_size"):
                         self._event("WARNING", "portfolio_order_unfilled", f"{meta['side']} {meta['units']} {meta['instrument']} ended without a fill", meta, now)
+                        self.written_off_orders[item["order_id"]] = {**meta, "written_off_at": now.isoformat()}
 
     def _trade_alert(self, meta: Mapping[str, Any], fill: Mapping[str, Any], report: CycleReport, now: datetime) -> TradeAlert:
         notes = []
@@ -693,6 +715,7 @@ class PortfolioEngine:
             "last_decisions": self.last_decisions,
             "pending_tax": self.pending_tax,
             "pending_orders": self.pending_orders,
+            "written_off_orders": self.written_off_orders,
             "unreconciled": self.unreconciled,
             "funding_booked_until": self.funding_booked_until,
             "book_id": self.book_id,
@@ -722,6 +745,7 @@ class PortfolioEngine:
         self.last_decisions = dict(payload.get("last_decisions", {}))
         self.pending_tax = list(payload.get("pending_tax", []))
         self.pending_orders = dict(payload.get("pending_orders", {}))
+        self.written_off_orders = dict(payload.get("written_off_orders", {}))
         self.unreconciled = dict(payload.get("unreconciled", {}))
         self.funding_booked_until = dict(payload.get("funding_booked_until", {}))
         self.book_id = str(payload.get("book_id", self.book_id))

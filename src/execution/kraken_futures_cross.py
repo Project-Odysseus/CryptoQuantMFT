@@ -44,6 +44,8 @@ from src.execution.kraken_futures_adapter import (
 )
 from src.execution.perps import PerpContract
 
+LATE_FILL_WATCH_SECONDS = 3600.0  # a written-off order is still watched this long: a fill that shows up late is booked
+
 
 class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
     """Several Kraken Futures perps in one account: IOC market orders, fills by client id, account-wide margin."""
@@ -94,6 +96,7 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
         self._settle_attempts: dict[str, int] = {}
         self._submitted_monotonic: dict[str, float] = {}
         self.min_unfilled_age_seconds = MIN_UNFILLED_AGE_SECONDS
+        self._written_off: dict[str, float] = {}  # order id -> when it was written off (monotonic), still watched for late fills
         self.margin_equity: float | None = None
         self.available_margin: float | None = None
         self.total_unrealized: float = 0.0
@@ -212,15 +215,21 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
         CANCELED) and, when more was filled since the last call, `filled_size`,
         `fill_price` (the VWAP of the new fills) and an estimated `fee`.
         """
+        now = time.monotonic()
+        for order_id, since in list(self._written_off.items()):
+            if now - since > LATE_FILL_WATCH_SECONDS:
+                del self._written_off[order_id]
         pending = self.pending_orders()
-        if not pending:
+        watched = [self._orders[order_id] for order_id in self._written_off if order_id in self._orders]
+        if not pending and not watched:
             return []
         fills = list(self._client.call("GET", "fills").get("fills", []))
         open_ids: set[str] = set()
         for item in self._client.call("GET", "openorders").get("openOrders", []):
             open_ids.update(str(item[key]) for key in ("cliOrdId", "order_id") if item.get(key))
         settled = []
-        for order in pending:
+        for order in pending + watched:
+            late = order.order_id in self._written_off
             cli_ord_id = self.client_order_id(order.order_id)
             own = [fill for fill in fills if fill.get("cliOrdId") == cli_ord_id or (order.remote_order_id and fill.get("order_id") == order.remote_order_id)]
             total = sum(float(fill["size"]) for fill in own)
@@ -238,8 +247,17 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
                 self._filled_so_far[order.order_id] = total
                 order.filled_size, order.fill_price = total, value_total / total
                 order.fee = total * order.fill_price * contract.taker_fee_rate
-                signed = new if order.side == "buy" else -new
-                self._positions[str(order.symbol)] = self._positions.get(str(order.symbol), 0.0) + signed
+                if not late:  # a late fill is usually in Kraken's position already, adopted by the last account sync
+                    signed = new if order.side == "buy" else -new
+                    self._positions[str(order.symbol)] = self._positions.get(str(order.symbol), 0.0) + signed
+            if late:
+                # Written off as unfilled, but its fill has now appeared in /fills: settle it after all
+                if "filled_size" in item:
+                    del self._written_off[order.order_id]
+                    order.status, order.message = "FILLED", "late fill: found in /fills after the order was written off"
+                    item.update({"status": "FILLED", "late_fill": True})
+                    settled.append(item)
+                continue
             if still_open:
                 order.status = "PARTIALLY_FILLED" if total > 0 else "SUBMITTED"
             elif total > 0:
@@ -252,6 +270,7 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
                 if attempts >= LOST_ORDER_SETTLE_ATTEMPTS and age >= self.min_unfilled_age_seconds:
                     order.status = "CANCELED"
                     order.message = "IOC order ended without a fill" if order.remote_order_id else "no fill found for a lost-response order"
+                    self._written_off[order.order_id] = time.monotonic()
             if order.status != "SUBMITTED" or "filled_size" in item:
                 item["status"] = order.status
                 settled.append(item)

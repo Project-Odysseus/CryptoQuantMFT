@@ -57,6 +57,16 @@ mirror them in `TODO.MD`.
 
 Dropped: Kraken/Firi counterparty monitoring (all trading is on Kraken).
 
+## Found by the fault-injection soak test (2026-09-27)
+
+- [x] **Kraken Futures: a fill that reaches `/fills` after its IOC order was written off was never booked.** After
+  3 checks and 15 s the portfolio adapter writes an unfilled IOC order off. If Kraken's `/fills` lags longer than
+  that, the real fill was lost: the book missed the position, the engine saw a mismatch, allowed only reductions,
+  and needed a manual `--portfolio-adopt-exchange`, which loses the fill's price, fee and tax record. Fixed: a
+  written-off order is watched for an hour (and at least 10 cycles), also across restarts, and a late fill is booked
+  like any other, with a `late_fill` alert. The soak test also found that its own fake exchange reused order ids;
+  fixed in the test.
+
 ## Done: the guarded live path (2026-09-18 to 2026-09-25)
 
 1. The `live_dry_run` path is defined and wired through the orchestrator, with exchange-shaped sandbox routing and

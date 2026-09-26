@@ -28,9 +28,10 @@ direction is in `aspirations.md`.
 - [ ] An always-on machine (section 3). For a local test, `caffeinate -i` stops the Mac from sleeping
 - [ ] A paper soak of `config/portfolio.btc_live.toml` on real candles: at least a few days before live, 2-4 weeks
   before scaling up (portfolio plan phase 5). Watch memory, candle gaps, restarts and alert volume
-- [ ] A fault-injection soak test: `PortfolioRuntime` with `MockCandleFeed` and an adapter that times out, rejects,
-  fills late and loses responses, for thousands of cycles. Invariants: the book matches the adapter, no client id is
-  sent twice, no position exceeds its cap, equity adds up
+- [x] A fault-injection soak test (2026-09-27, `tests/test_fault_injection_soak.py`): the real live adapter and engine
+  for ~1,700 cycles against a Kraken Futures that times out, returns 503s and rate limits, rejects, loses responses
+  and fills late. It found a real bug (a fill reaching `/fills` after its order was written off was never booked),
+  now fixed
 - [ ] A crash and restart drill, in paper and then live at one lot: `kill -9` mid-cycle, turn the network off for a
   few minutes, restart with the same state dir. No duplicate orders, and the book matches Kraken afterwards
 - [x] A dead-man's switch and a daily summary (2026-09-27, `src/utils/heartbeat.py`; runbook). To switch it on:
