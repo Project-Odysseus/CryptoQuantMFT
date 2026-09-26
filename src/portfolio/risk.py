@@ -51,6 +51,13 @@ class PortfolioRiskConfig:
             raise ValueError("risk.drawdown_derisk_start must be above 0 and below risk.max_drawdown")
         if not 0 <= self.drawdown_derisk_floor <= 1:
             raise ValueError("risk.drawdown_derisk_floor must be between 0 and 1")
+        if self.daily_loss_limit is not None and not 0 < self.daily_loss_limit < 1:
+            raise ValueError("risk.daily_loss_limit must be above 0 and below 1 (0.05 = 5% of the day's starting equity)")
+        for venue, limit in self.max_venue_exposure.items():
+            if not limit > 0:
+                raise ValueError(f"risk.max_venue_exposure.{venue} must be above 0")
+        if self.stale_after_bars < 1:
+            raise ValueError("risk.stale_after_bars must be at least 1")
 
 
 @dataclass(frozen=True, slots=True)
