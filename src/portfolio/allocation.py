@@ -34,8 +34,8 @@ def sleeve_scales(budgets: Mapping[str, float], method: str, *, volatility: Mapp
         method: One of `ALLOCATION_METHODS`.
         volatility: Sleeve id to its instrument's recent volatility (any
             consistent unit). Needed for `inverse_vol`; a sleeve without a
-            usable value gets the average of the others, or equal weight if
-            none has one.
+            usable value is treated as having the average of the others, and
+            if none has one the scales follow the budgets alone.
     """
     if method not in ALLOCATION_METHODS:
         raise ValueError(f"unknown allocation {method!r}; choose from {ALLOCATION_METHODS}")
