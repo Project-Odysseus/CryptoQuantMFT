@@ -7,9 +7,11 @@ Dated findings from strategy research, newest first. Methodology and column mean
 
 ## 2026-09-26: Full history on BTC and ETH perpetuals, 2020-02-26 to 2026-09-25
 
-**Data:** Kraken Futures trade candles for the inverse perpetuals `PI_XBTUSD` / `PI_ETHUSD` (the longest
-single-contract history Kraken has; closes within a median 0.05% / 0.09% of the linear `PF_` contracts), 2,403 daily
-and 14,420 4h bars each, no gaps. Load with `load_bars("BTC/USD", "1d", source="perp")` or `--source perp`.
+**Data:** Kraken Futures trade candles, stitched from the inverse perpetuals (`PI_XBTUSD` / `PI_ETHUSD`, from
+2020-02-26 to 2022) and the linear ones (`PF_`, from 2023-01-01), 2,404 daily and 14,422 4h bars each, no gaps.
+Load with `load_bars("BTC/USD", "1d", source="perp")` or `--source perp`. *Correction:* the first version of this
+entry used the inverse contracts for the whole period, but they went quiet after 2022 (by 2026, 42-69% of their 15m
+bars had no trades). The numbers below are from the clean stitched series; they moved by a few points at most.
 The series starts two weeks before the 12 March 2020 crash, so 4h and short-window strategies trade through its
 tail while long-window daily ones are still warming up. Costs: perp fees (0.05% + 5 bps per fill) and funding
 0.01%/day; Kraken only publishes the last year of funding, so 0.05%/day (roughly 2021 bull-market levels) was run
@@ -20,14 +22,14 @@ as a stress test. Full size, no leverage, no stops.
 
 - **Daily trend-following is robust across every setting.** `moving_average_crossover`, `donchian_breakout` and
   `keltner_breakout` are positive in-sample for 100% of combos, long/short and long-only. Median in-sample / holdout
-  Sharpe: long-only MA 1.07 / 0.79, Keltner 1.03 / 0.62, Donchian 0.98 / 0.46; long/short MA 0.74 / 0.71, Donchian
-  0.72 / 0.72, Keltner 0.60 / 0.71. Buy-and-hold: 1.02 / 0.52. So daily trend roughly matched holding in the
+  Sharpe: long-only MA 1.10 / 0.75, Keltner 1.03 / 0.65, Donchian 0.99 / 0.45; long/short MA 0.75 / 0.68, Donchian
+  0.72 / 0.64, Keltner 0.60 / 0.51. Buy-and-hold: 1.03 / 0.49. So daily trend roughly matched holding in the
   2020-2024 period and beat it in the choppier 2024-2026 holdout.
 - **Mean reversion fails over the full history**, even at perp costs: `band_reversion` and `rsi_reversion` are
   negative for almost every combo long/short, and around 0.2 long-only. The positive 4h result in the entry below
   came from one 3-month rally.
 - **4h trend is weaker than daily**: in-sample medians 0.2-0.44 long/short and 0.8-0.94 long-only, but holdout
-  roughly flat, below buy-and-hold's 0.48.
+  roughly flat, below buy-and-hold's 0.49.
 
 **Year by year** (mid-plateau parameters, not the best cells; funding 0.01%/day; per-strategy start after warmup,
 April 2020 for daily, March 2020 for 4h). CAGR / Sharpe / max drawdown vs buy-and-hold over the same dates:
@@ -35,18 +37,18 @@ April 2020 for daily, March 2020 for 4h). CAGR / Sharpe / max drawdown vs buy-an
 | | BTC | ETH |
 | --- | --- | --- |
 | Buy and hold (daily, from 15 Apr 2020) | 48% / 0.97 / 77% | 56% / 0.96 / 79% |
-| `keltner_breakout(40, 2)` 1d long-only | 40% / 1.12 / **39%** | 53% / 1.10 / **42%** |
-| `moving_average_crossover(4, 48)` 1d long-only | 53% / 1.21 / 61% | 62% / 1.12 / 61% |
-| `donchian_breakout(40, 10)` 1d long-only | 31% / 0.91 / 40% | 33% / 0.82 / 54% |
-| `keltner_breakout(40, 2)` 1d long/short | 31% / 0.82 / 57% | 52% / 0.98 / 70% |
-| `moving_average_crossover(8, 96)` 4h long-only | 42% / 1.08 / 51% | 42% / 0.92 / 54% |
+| `keltner_breakout(40, 2)` 1d long-only | 42% / 1.15 / **39%** | 52% / 1.08 / **42%** |
+| `moving_average_crossover(4, 48)` 1d long-only | 53% / 1.21 / 61% | 65% / 1.16 / 61% |
+| `donchian_breakout(40, 10)` 1d long-only | 33% / 0.95 / 40% | 27% / 0.74 / 54% |
+| `keltner_breakout(40, 2)` 1d long/short | 35% / 0.88 / 57% | 52% / 0.97 / 69% |
+| `moving_average_crossover(8, 96)` 4h long-only | 42% / 1.07 / 51% | 44% / 0.94 / 54% |
 
 - **The 2022 bear market is where trend earns its keep.** Buy-and-hold lost 64% (BTC) and 67% (ETH). Long-only
   Keltner lost 32% / 21%, long/short Keltner 23% / 9%, and long/short `trend_tstat` made +15% / +52%.
 - **The cost is lagging in strong bulls.** From 7 April to the end of 2020 buy-and-hold made +303% / +348% against
   +239% / +195% for long-only Keltner, and in 2023-24 BTC buy-and-hold beat most rules.
 - **2025-2026 was choppy.** Buy-and-hold was -6% / -11% in 2025, and most trend rules were near flat, with ETH
-  long/short MA crossover (+127%) and Keltner (+100%) the exceptions.
+  long/short MA crossover (+126%) and Keltner (+98%) the exceptions.
 - **Long-only beats long/short on BTC** in every row and on ETH in most (`trend_tstat` is the exception). Shorts pay
   off in 2022 and cost in bull years.
 - **Costs are small here**: daily rules trade 4-12 times a year. The 0.05%/day funding stress cut long-only CAGR by
