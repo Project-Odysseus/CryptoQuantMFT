@@ -22,12 +22,27 @@ Tick items here, and in those files, when they are done.
 
 ## 1. Critical path: the BTC book live
 
-- [ ] An always-on machine (section 3)
-- [ ] A paper soak of `config/portfolio.btc_live.toml` for 2-4 weeks (portfolio plan phase 5)
+Everything below the first line is needed before live runs for days unattended, server or not. The long-term
+direction is in `aspirations.md`.
+
+- [ ] An always-on machine (section 3). For a local test, `caffeinate -i` stops the Mac from sleeping
+- [ ] A paper soak of `config/portfolio.btc_live.toml` on real candles: at least a few days before live, 2-4 weeks
+  before scaling up (portfolio plan phase 5). Watch memory, candle gaps, restarts and alert volume
+- [ ] A fault-injection soak test: `PortfolioRuntime` with `MockCandleFeed` and an adapter that times out, rejects,
+  fills late and loses responses, for thousands of cycles. Invariants: the book matches the adapter, no client id is
+  sent twice, no position exceeds its cap, equity adds up
+- [ ] A crash and restart drill, in paper and then live at one lot: `kill -9` mid-cycle, turn the network off for a
+  few minutes, restart with the same state dir. No duplicate orders, and the book matches Kraken afterwards
+- [ ] A dead-man's switch and a daily summary (section 3): today a dead process is silent, and silence looks like
+  "no trades"
+- [ ] Retries with backoff on Kraken's temporary errors (timeouts, `EService:Unavailable`, rate limits), separate
+  from real rejections. Today a failed call waits for the next cycle
+- [ ] A supervised first live session (a day or two, checked a few times a day): first-cycle adoption, orders at the
+  bar close, fills, reconciliation, tax rows, Telegram
 - [ ] Run it live (runbook, "Live portfolio trading"). In the first week, check the dashboard, drift alerts and the tax queue daily
 - [x] Trigger the kill switch once against a real open position at minimum size (2026-09-26: `--kill-switch` now closes Kraken Futures positions and cancels orders on its own; verified live against a 0.0001 BTC long). In the first live week, trigger it once more while the book runs
 - [ ] Funding and fees from Kraken's account log. They are estimated from the public hourly rates and the taker rate for now; the equity-drift alert catches gaps
-- [ ] The open items in `todo_important.md`
+- [x] The open items in `todo_important.md` (all done 2026-09-27)
 
 ## 2. Portfolio (plan: `docs/portfolio_plan.md`)
 

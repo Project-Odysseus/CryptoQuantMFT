@@ -14,7 +14,8 @@ research track. **Paper mode is the source of truth**, and real trading sits beh
 | Kraken spot live (single-strategy runtime) | Proven with small round trips; the last hardening items are in `todo_important.md` |
 | Options | Research only (pricing, calibration, SVI surface, exposures); no execution |
 
-The roadmap is in [`TODO.MD`](TODO.MD), and live-execution hardening in [`todo_important.md`](todo_important.md).
+The roadmap is in [`TODO.MD`](TODO.MD), live-execution hardening in [`todo_important.md`](todo_important.md), and
+the long-term direction (what an industry-level setup needs) in [`aspirations.md`](aspirations.md).
 
 ## Setup
 

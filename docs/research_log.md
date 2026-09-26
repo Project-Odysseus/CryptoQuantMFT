@@ -6,6 +6,30 @@ accident.
 
 ---
 
+## 2026-09-27: Does Kraken's minimum lot break the live BTC book at small capital?
+
+**Question:** the research simulator trades continuous weights, but on Kraken Futures the book can only hold whole
+0.0001 BTC lots (about 8.4 USD, 44% of a 19 USD account). Does the backtest still describe the live book?
+`config/portfolio.btc_live.toml`, 2020-2026, full period, with the config's risk overlay and money cap, positions
+rounded to whole lots after the overlay.
+
+| Capital (USD) | Lots | Sharpe | CAGR | Max drawdown | Avg gross | Turnover/yr |
+| --- | --- | --- | --- | --- | --- | --- |
+| 19 | continuous | 1.41 | 22.7% | 16.8% | 0.22 | 8.7 |
+| 19 | whole lots | 1.43 | 23.0% | 19.0% | 0.21 | 12.1 |
+| 100 | whole lots | 1.00 | 6.4% | 9.5% | 0.10 | 5.4 |
+| 5000 | whole lots | 0.89 | 0.3% | 0.4% | 0.003 | 0.1 |
+
+**Findings**
+1. **At 19 USD the lot size doesn't break the book**: the same Sharpe, 2 points more drawdown, and 38% more
+   turnover (the book jumps between flat and one lot). The backtest is a fair guide to the live book.
+2. **`max_gross_notional = 15` is a fixed dollar cap.** With more capital and the same config the book barely trades
+   (gross 0.003 at 5,000 USD). Raise it with the capital: it was sized for one lot, on purpose.
+3. **The expected money is small**: about 23% a year on 19 USD is roughly 4 USD a year. The first live run is a
+   test of the machinery, not a source of profit.
+
+---
+
 ## 2026-09-26: Risk exits and account breakers for the single-strategy runtime
 
 **Question:** the runtime's defaults (a 60-bar time stop, a 3x ATR stop from entry, a 5% position stop, a 5% daily

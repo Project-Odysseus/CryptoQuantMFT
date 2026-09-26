@@ -21,8 +21,8 @@ mirror them in `TODO.MD`.
   `XBTEUR` instead of `BTC/EUR`
 - [x] **`live_dry_run` fills look like real fills in `trades`.** Fixed 2026-09-26: the runtime now logs each
   trade's `source` as its mode (`paper_trading`, `live_dry_run` or `live`). The tax ledger was never affected.
-  Still to do by hand (a database edit, left for you): retag the old rows, 23594-23597 and 23606 as `live_dry_run`,
-  and the real fills 23601-23605 as `live`
+  The old rows were retagged on 2026-09-27 (backup `data/cryptoquant.db.bak.retag`): 23594-23597 and 23606 as
+  `live_dry_run`, and the real fills 23601-23605 as `live`
 - [x] **Spot: kill-switch preview against a real open order** (the cancel target list, checked against Kraken's
   actual open orders). Done 2026-09-26, together with a real activation. The test found that `--kill-switch` on its
   own cancelled nothing on the exchange (it only wrote the state file), and that the single-strategy runtime never
