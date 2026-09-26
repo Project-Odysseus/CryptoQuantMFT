@@ -56,8 +56,8 @@ plus slippage by liquidity tier (3-25 bps). Signs were fixed in-sample.
 **Next:** taker-buy share is a candidate for a cross-sectional sleeve (portfolio plan 7.4), not for trading yet. The
 steps: a finer test (the rebalance interval, and the universe size around 30-50), its correlation with the trend
 book, and a multiple-testing adjustment (the TODO's deflated-Sharpe item). Live, it needs Binance's public daily
-klines for the taker-buy volume (no API keys) and would trade the Kraken-listed perps. The altcoin carry study can
-run once the `premium_1d` download (started 2026-09-26) has finished.
+klines for the taker-buy volume (no API keys) and would trade the Kraken-listed perps. The data for the altcoin carry study
+(`premium_1d`, the perp's basis to spot) is downloaded too.
 
 ---
 
