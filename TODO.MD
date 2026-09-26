@@ -278,7 +278,8 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [x] Portfolio backtester: `src/research/portfolio.py` (target weights per coin, fees, liquidity-based slippage, per-coin funding, delistings, long/short leg attribution), plus `rank_weights`, `liquid_universe`, `cross_sectional_ic`
     - [x] Study: `scripts/research/cross_sectional_study.py`, 8 features, IC and long/short portfolios, signs fixed in-sample, 2024+ holdout, `--kraken-only`; tested end to end on synthetic data
     - [x] Downloaded (2026-09-26: klines, funding and `premium_1d` for 859 symbols, about 61,000 files, 84 MB), run on the full and the Kraken-listed universe, and written up in `docs/research_log.md`. Only taker-buy share holds in both periods; the volatility effect is priced through funding
-    - [ ] Taker-buy share as a cross-sectional sleeve candidate: finer test (rebalance interval, universe size), correlation with the trend book, multiple-testing adjustment; then portfolio plan 7.4
+    - [x] Taker-buy share robustness (2026-09-26, `scripts/research/diversification_study.py`, research log): 44/45 grid cells positive in both periods, deflated Sharpe 0.94 after 77 trials, survives 3x costs and no funding at 10-day rebalancing, zero correlation with the trend book (a 30% blend: holdout Sharpe 1.24 -> 1.64)
+    - [ ] Basket sleeves (portfolio plan 7.4) so the taker-buy book can run as a sleeve: Binance public daily klines for the signal, Kraken perps for orders; check Kraken minimum sizes for a 30-50 coin basket at our capital
   - [ ] **Funding/basis carry** (long spot, short perp when funding is paid): measure net carry after fees across coins and exchanges before building; Kraken BTC/ETH funding averaged only ~3%/yr over the last year
     - [x] BTC/ETH across Binance, Bybit, Deribit and Kraken (2026-09-26, `src/research/carry.py`, `scripts/research/carry_study.py`, research log): 11-14%/yr net on notional over 2019-2026, but 2-3%/yr over the last 12 months; an on/off funding filter does worse than always-on. Not worth building for BTC/ETH now
     - [ ] **On wifi:** altcoin carry across the Binance archive (`update_cache(datasets=("funding", "premium_1d"))`), with the basis from the premium index, and a cross-coin rule (hold the carry on the coins paying the most funding)
@@ -287,6 +288,7 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [ ] HAR in the runtime (needs 1h bars and a year of history at startup); EWMA is used for now
   - [ ] **Calendar/event features**: US macro releases (CPI, FOMC), options expiries, CME weekend gaps
   - [ ] **Multiple-testing control**: we have now run thousands of configurations; add a deflated Sharpe or reality-check test and keep a never-touched final holdout
+    - [x] Deflated and probabilistic Sharpe (2026-09-26, `src/research/stats.py`), used in the diversification study; still to do: a never-touched final holdout
 - [ ] **Portfolio, multi-strategy, multi-asset** (plan: `docs/portfolio_plan.md`; follow its steps in order, and tick them there and here)
   - [x] Phase 0: sizing contract (share of equity, `src/risk/sizing.py`) and the research portfolio backtester
   - [x] Phase 1: research. Sleeve targets, any bar interval, allocation, `scripts/research/portfolio_backtest.py` and a study (2026-09-26; findings in `docs/research_log.md`: equal allocation, 40% kill, no de-risking)

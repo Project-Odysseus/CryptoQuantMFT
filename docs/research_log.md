@@ -6,6 +6,75 @@ accident.
 
 ---
 
+## 2026-09-26: Diversifying the trend book: more coins, and the taker-buy cross-sectional book
+
+**Question:** the example book is 5 BTC/ETH trend sleeves that move together. What diversifies it: the same trend
+rules on more coins, or the taker-buy share candidate from the cross-sectional study? Reproduce with
+`python scripts/research/diversification_study.py`. Prices and funding come from Binance's daily perp archive, a
+proxy for Kraken. The new multiple-testing tools are in `src/research/stats.py` (probabilistic and deflated
+Sharpe).
+
+**Short answer:** the taker-buy book is the diversifier. It has zero correlation with the trend book (-0.02); a 30%
+blend lifted Sharpe from 0.61 to 0.80 in-sample and from 1.24 to 1.64 in the holdout, and cut the drawdown from 36%
+to 26% and from 22% to 16%. More coins with the same trend rules only reduce drawdown: they are 0.71 correlated with
+the core book and cost holdout return.
+
+**Part 1: the same rules on 12 more Kraken-listed coins** (SOL, XRP, ZEC, DOGE, BNB, ADA, AVAX, LINK, NEAR, BCH,
+LTC, FIL). MA 4/48 long-only and Keltner 40/2 long/short, vol-targeted, unchanged: no new parameters were fitted.
+The period is 2021-05 to 2026-08, holdout from 2024-10.
+
+| Book | Sharpe IS | Sharpe HO | CAGR HO | Max DD IS | Max DD HO |
+| --- | --- | --- | --- | --- | --- |
+| core (BTC/ETH, 4 daily sleeves) | 0.61 | 1.24 | 40% | 36% | 22% |
+| alts (24 sleeves) | 0.61 | 0.73 | 17% | 34% | 30% |
+| core 50% / alts 50% | 0.69 | 1.17 | 30% | 29% | 15% |
+
+The alt sleeves alone are weak (median Sharpe 0.22 IS, 0.17 HO; 16 and 14 of 24 positive). They correlate 0.30
+with each other and 0.33 with the core sleeves, but the alt book as a whole correlates 0.71 with the core book.
+Trend in crypto is mostly one market factor. (The core's in-sample Sharpe here is lower than in the earlier study
+because the alts' history moves the start to 2021-05, after the 2020-21 rally.)
+
+**Part 2: taker-buy share, robustness** on the Kraken-listed universe: 45 configurations (universe 20/30/50 ×
+legs 10/20/30% × rebalance every 3/5/7/10/14 days). In-sample is 2020-06 to 2023, holdout 2024 onward.
+- 44/45 positive in-sample and 44/45 in the holdout; median Sharpe 1.40 IS and 1.19 HO. It is a broad plateau, not
+  a spike. Rebalancing every 10-14 days is best: the signal is slow, and trading it faster only pays costs.
+- Deflated Sharpe of the best in-sample cell (top 50, 30% legs, every 10 days: 1.90 IS, 1.65 HO): **0.94** after the
+  77 configurations tried across both studies. That is just short of the usual 0.95 bar.
+- Stress (holdout Sharpe):
+
+| Configuration | Base | 2x costs | 3x costs | No funding | 3x costs, no funding |
+| --- | --- | --- | --- | --- | --- |
+| top 50, 20% legs, weekly (the first study's) | 0.97 | 0.58 | 0.19 | 0.61 | -0.17 |
+| top 30, 20% legs, every 10 days | 1.88 | 1.65 | 1.42 | 1.56 | 1.10 |
+| top 50, 30% legs, every 10 days | 1.65 | 1.33 | 1.00 | 1.16 | 0.51 |
+
+  At 10-day rebalancing it survives triple costs and the loss of all funding income. The weekly version does not.
+
+**Part 3: blends of daily returns** (core book plus a share in the other book, holdout from 2024-10). The taker book
+here is the weekly configuration, deliberately the weaker one:
+
+| Blend | Sharpe IS | Sharpe HO | Max DD IS | Max DD HO |
+| --- | --- | --- | --- | --- |
+| core alone | 0.61 | 1.24 | 36% | 22% |
+| core + 30% alt trend | 0.65 | 1.18 | 31% | 18% |
+| core + 30% taker-buy | 0.80 | 1.64 | 26% | 16% |
+| core + 40% taker-buy | 0.86 | 1.77 | 24% | 14% |
+
+**Caveats**
+- "Kraken-listed" uses today's Kraken listings, a mild look-ahead in the universe. The full Binance universe gave
+  similar numbers (0.96 / 0.90 weekly), so it isn't what drives the result.
+- Slippage tiers come from Binance volume, and Kraken's altcoin books are thinner. That is why the 2-3x cost
+  stress matters, and the 10-day versions pass it.
+- Funding is Binance's, and Kraken's differs. The no-funding stress covers this.
+- With small capital, a 30-50 coin basket means small orders per coin. Kraken's minimum sizes must be checked
+  before paper trading it.
+
+**Next:** build basket sleeves (portfolio plan 7.4) so the taker-buy book can run as a sleeve. The signal needs
+Binance's public daily klines (taker-buy volume, no API keys); orders go to the Kraken perps. Paper-trade it next to
+the trend book. Adding alt trend sleeves is optional: they cut drawdown but not return.
+
+---
+
 ## 2026-09-26: Risk budget of the example portfolio (how big should the book be?)
 
 **Question:** what does the example book (`config/portfolio.example.toml`, 5 trend sleeves on the BTC and ETH perps)
