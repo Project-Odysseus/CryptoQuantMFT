@@ -109,8 +109,10 @@ def greeks(model: PricingModel, forward: float, strike: float, t: float, right: 
     """Bump-and-reprice greeks for any model.
 
     Delta and gamma are with respect to the forward (relative bump `bump`).
-    Vega bumps the model's `sigma` (its base volatility), and theta shortens
-    the time by one day (the value lost per year, i.e. x365 of a day's decay).
+    Vega moves the volatility: through the model's `shifted(dv)` if it has
+    one (a fitted surface moves all its vols), else by bumping its `sigma`.
+    Theta shortens the time by one day (the value lost per year, i.e. x365 of
+    a day's decay).
     """
     base = model.price(forward, strike, t, right, discount)
     step = forward * bump
@@ -118,7 +120,10 @@ def greeks(model: PricingModel, forward: float, strike: float, t: float, right: 
     delta = (up - down) / (2 * step)
     gamma = (up - 2 * base + down) / step**2
     vega = 0.0
-    if hasattr(model, "sigma"):
+    if hasattr(model, "shifted"):
+        vol_step = 1e-4
+        vega = (model.shifted(vol_step).price(forward, strike, t, right, discount) - model.shifted(-vol_step).price(forward, strike, t, right, discount)) / (2 * vol_step)
+    elif hasattr(model, "sigma"):
         vol_step = 1e-4
         vega = (replace(model, sigma=model.sigma + vol_step).price(forward, strike, t, right, discount)
                 - replace(model, sigma=max(1e-8, model.sigma - vol_step)).price(forward, strike, t, right, discount)) / (2 * vol_step)

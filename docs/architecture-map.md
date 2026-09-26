@@ -172,6 +172,11 @@ Plan and status: `docs/portfolio_plan.md`.
   threads, with each instrument failing on its own. `MockCandleFeed` supplies synthetic candles for smoke runs.
 - `src/execution/kraken_futures_cross.py`: `KrakenFuturesCrossMarginAdapter`, real orders on several Kraken Futures
   perps in one account (live portfolios). It shares the signed-request client with the single-contract adapter.
+- `src/portfolio/exposure.py`: greeks per underlying (delta, gamma, vega, theta in money) and a shock-scenario grid
+  for any mix of perps, spot, calls and puts, by full revaluation with a pricing model.
+- `src/options/`: option pricing on the forward (`pricing.py`, `pde.py`), the model validation gate
+  (`validation.py`), calibration in vol points (`calibration.py`), the SVI market surface (`surface.py`), and Deribit
+  chain snapshots (`deribit.py`). Design: `docs/options_plan.md`.
 - `src/portfolio/runtime.py`: `PortfolioRuntime`, the loop. It fetches, finds stale instruments, runs a cycle,
   alerts once per problem, writes snapshots to SQLite (`portfolio_snapshots`), checks the kill switch and handles
   SIGTERM.

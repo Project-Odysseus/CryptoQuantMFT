@@ -6,6 +6,33 @@ accident.
 
 ---
 
+## 2026-09-26: First fit to a live Deribit BTC option chain
+
+**Question:** how well do the pricing models fit the market, in implied-vol points? One snapshot (992 BTC options,
+13 expiries from 2 days to 1 year; 370 liquid out-of-the-money quotes). Reproduce with
+`notebooks/options_research.ipynb`.
+
+| Model | IV RMSE, all expiries | IV RMSE, 90-day expiry |
+| --- | --- | --- |
+| SVI surface (5 numbers per expiry) | 0.20 | 0.17 |
+| Flat Black-76 per expiry (no smile) | 5.14 | 6.38 |
+| Merton jumps (one parameter set) | 2.97 | 1.74 |
+| Local vol + jumps PDE (fitted to the 90-day expiry only) | n/a | 1.95 |
+
+**Findings**
+1. **The term structure dominates.** At-the-money vol ran from 17.5% (2 days) to 40% (1 year). One Merton parameter
+   set can't bend to it: its error is 12.7 vol points on the 2-day options and about 2 on the longer ones. A model
+   meant for all expiries needs time-dependent parameters or stochastic volatility.
+2. **The richer PDE model didn't beat Merton on one expiry** (1.95 vs 1.74 vol points, with its jump intensity near
+   its upper bound). Extra parameters aren't worth it until they buy fit out of sample.
+3. **Use the SVI surface for risk** (greeks and scenarios). It passes the validation gate once its wings beyond the
+   quoted strikes are held at the edge vol. Fitted on a narrow range, a 20-day slice had extrapolated to a 150%
+   vol and an impossible put price.
+4. This is one snapshot. The model gate's out-of-sample and trading tests need the recorded history
+   (`--record-option-chains`).
+
+---
+
 ## 2026-09-26: Diversifying the trend book: more coins, and the taker-buy cross-sectional book
 
 **Question:** the example book is 5 BTC/ETH trend sleeves that move together. What diversifies it: the same trend

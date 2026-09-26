@@ -310,9 +310,10 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [ ] The order-flow recorder streams several GB a day: it needs a bigger disk, compression, or object storage before it runs there
 - [ ] **Options in the portfolio** (plan: `docs/options_plan.md`). Design by exposures, pluggable pricing models behind a test gate
   - [x] Foundation (2026-09-26): `src/options/pricing.py` (Black-76 on the forward, Merton jumps, bump greeks, implied vol) and `src/options/validation.py` (the model gate), plus a review of the options notebook with reproducible findings (options plan, section 6)
-  - [ ] O1 record Deribit BTC/ETH chain snapshots hourly (public, a few MB a day)
-  - [ ] O2 forward + SVI smile per expiry; O3 exposure layer and scenario grid (useful for the current book too); O4 IV vs realized-vol premium study
-  - [ ] O5 option sleeves in research; O6 port the notebook's PDE model through the gate; O7 Deribit testnet paper trading; O8 live
+  - [ ] O1 record Deribit BTC/ETH chain snapshots hourly (public, a few MB a day). Built 2026-09-26 (`--record-option-chains`); start it on the always-on machine
+  - [x] O2 SVI surface with flat-vol wings (2026-09-26); O3 exposure layer and scenario grid (`src/portfolio/exposure.py`); O6 the notebook's PDE ported, fixed and through the gate; `notebooks/options_research.ipynb`
+  - [ ] O3b exposure limits (`[risk.exposure]`) in the risk overlay and an exposure section on the dashboard; O4 IV vs realized-vol premium study
+  - [ ] O5 option instruments and sleeves in the portfolio (research first); O7 Deribit testnet paper trading; O8 live (needs Deribit keys and more capital: the smallest BTC option is 0.1 BTC, and the smallest linear USDC option 0.01 BTC)
 - [ ] **Needs exchange API keys (Binance / Bybit / OKX / Deribit)**: collected here so research never waits on keys. Everything so far used public data. Put keys in `.env` only, read-only first, with no withdrawal permission, and never print them. Check first that each venue offers derivatives to a Norwegian account.
   - [ ] Read-only keys: the fee tier each account actually gets (maker/taker, VIP level), to replace the assumed fees in carry and cross-sectional backtests
   - [ ] Trading keys and an execution adapter per venue: only after a strategy has passed paper and dry-run on that venue

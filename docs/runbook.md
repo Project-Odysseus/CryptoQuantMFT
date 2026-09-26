@@ -93,6 +93,17 @@ python main.py \
 
 This submits a **real Kraken market sell** for the full currently held base-asset size after validate-only checks pass.
 
+## Recording option chains (Deribit, public)
+
+```bash
+python main.py --option-chain-snapshot            # one BTC and ETH snapshot now
+python main.py --record-option-chains             # every hour until Ctrl-C (--option-chain-interval to change)
+```
+
+Snapshots go to `data/options/deribit/<currency>/<date>/<time>.parquet`, about 150 KB each. Load them with
+`src.options.deribit.load_chains`. This is the dataset every option model and option strategy is tested on, and it
+only starts growing once the recorder runs, so run it on the always-on machine.
+
 ## First live test on Kraken Futures (minimum size)
 
 1. On futures.kraken.com: Settings, then API keys, then create a key with **General API: Full access** (trading) and

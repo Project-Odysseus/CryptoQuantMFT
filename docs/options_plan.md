@@ -1,8 +1,16 @@
 # Options in the portfolio: exposures first, pricing models you can test
 
 How options fit into the portfolio (`docs/portfolio_plan.md`): a strategy is designed by the exposures it takes, and
-a new pricing model can be dropped in and tested before anything relies on it. Status 2026-09-26: design, plus the
-pricing and validation foundation (`src/options/`).
+a new pricing model can be dropped in and tested before anything relies on it.
+
+Status 2026-09-26:
+- **Built:** pricing on the forward (`pricing.py`: Black-76, Merton), the validation gate (`validation.py`), the
+  notebook's local-vol + jump PDE ported and fixed (`pde.py`, passes the gate), calibration for any model in vol
+  points (`calibration.py`), the SVI market surface with flat-vol wings (`surface.py`), Deribit chain snapshots with
+  storage and loading (`deribit.py`, `--option-chain-snapshot` / `--record-option-chains`), the exposure layer and
+  scenario grid for perps, spot and options (`src/portfolio/exposure.py`), and `notebooks/options_research.ipynb`.
+- **Next:** start recording chains on an always-on machine; exposure limits in the risk overlay and on the dashboard;
+  option instruments and sleeves in the portfolio, with a Deribit testnet adapter for paper trading.
 
 ---
 
@@ -96,12 +104,12 @@ separate trades.
 
 | Step | What | Needs |
 | --- | --- | --- |
-| O1 | Record Deribit chain snapshots (BTC and ETH, hourly: forward, bid, ask, mark IV, OI per contract) | nothing (public API, small) |
-| O2 | Surface: a forward and an SVI smile per expiry, with arbitrage checks; greeks from market IV | O1 |
-| O3 | Exposure layer and scenario grid for the current book; dashboard section; `[risk.exposure]` limits | nothing |
+| O1 | Record Deribit chain snapshots (BTC and ETH, hourly: forward, bid, ask, mark IV, OI per contract). **Built**; recording not started | nothing (public API, small) |
+| O2 | Surface: a forward and an SVI smile per expiry, with arbitrage checks; greeks from market IV. **Done** (0.20 vol pts on a live BTC chain) | O1 |
+| O3 | Exposure layer and scenario grid for the current book; dashboard section; `[risk.exposure]` limits. **Exposure and scenarios done**; limits and dashboard next | nothing |
 | O4 | Vol research: the IV vs realized-vol premium (DVOL history is already cached), by tenor and regime | nothing |
 | O5 | Option sleeves in the research backtester, first on a synthetic DVOL-based surface, then on recorded chains | O1-O3 |
-| O6 | Port the notebook's PDE model as a `PricingModel` (with the fixes in section 6) and put it through the gate | O1 |
+| O6 | Port the notebook's PDE model as a `PricingModel` (with the fixes in section 6) and put it through the gate. **Done** | O1 |
 | O7 | Paper-trade on Deribit's testnet (test.deribit.com: same API, free) | Deribit testnet keys |
 | O8 | Live, behind the same gates as perps | Deribit account and keys |
 

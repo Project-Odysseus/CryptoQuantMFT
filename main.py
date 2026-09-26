@@ -1717,6 +1717,26 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
     return 0
 
 
+def option_chains(args: argparse.Namespace) -> int:
+    """Snapshot or record Deribit option chains (public API) into data/options/deribit/<currency>/<date>/."""
+    from src.options.deribit import fetch_chain, record_chains, save_chain
+
+    if args.option_chain_snapshot is not None:
+        for currency in args.option_chain_snapshot or ["BTC", "ETH"]:
+            chain = fetch_chain(currency)
+            path = save_chain(chain)
+            print(f"{currency}: {len(chain)} contracts over {chain['expiry'].nunique()} expiries -> {path}")
+        return 0
+    currencies = args.record_option_chains or ["BTC", "ETH"]
+    print(f"Recording {', '.join(currencies)} option chains every {args.option_chain_interval:g}s into data/options/deribit/ (Ctrl-C to stop)")
+    try:
+        saved = asyncio.run(record_chains(currencies, every_seconds=args.option_chain_interval))
+    except KeyboardInterrupt:
+        saved = None
+    print(f"Stopped{f' after {saved} snapshots' if saved is not None else ''}.")
+    return 0
+
+
 def futures_live_test(args: argparse.Namespace, *, transport: Any = None, fetch_contract: Any = None, fetch_mark: Any = None, sleep: Any = None) -> int:
     """One real round trip at the minimum size on Kraken Futures (see src/execution/live_test.py), behind the live gates."""
     from src.execution.kraken_futures_cross import KrakenFuturesCrossMarginAdapter
@@ -1963,6 +1983,9 @@ def main() -> None:
     parser.add_argument("--since", default=None, help="Filter --post-run-analysis to data on or after this date (YYYY-MM-DD)")
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
+    parser.add_argument("--option-chain-snapshot", nargs="*", metavar="CURRENCY", default=None, help="Fetch and store one Deribit option chain snapshot per currency (default BTC ETH), then exit. Public data, no keys")
+    parser.add_argument("--record-option-chains", nargs="*", metavar="CURRENCY", default=None, help="Record Deribit option chains (default BTC ETH) every --option-chain-interval seconds until Ctrl-C, into data/options/deribit/")
+    parser.add_argument("--option-chain-interval", type=float, default=3600.0, help="Seconds between option chain snapshots (default 3600)")
     parser.add_argument("--futures-live-test", action="store_true", help="REAL ORDERS: buy the smallest --futures-symbol size on Kraken Futures and close it right away, checking fills, positions, the tax ledger and Telegram. Needs --enable-live-trading and --live-confirmation")
     parser.add_argument("--futures-venue-check", action="store_true", help="Non-destructive: fetch Kraken Futures public specs, fees, live mark price and funding history for --futures-symbol and print them (no credentials, no orders)")
     parser.add_argument("--futures-verify-credentials", action="store_true", help="Non-destructive: call Kraken Futures private read-only endpoints (accounts, open positions, open orders) with KRAKEN_FUTURES_API_KEY/SECRET and print the result. Places no orders")
@@ -2043,6 +2066,9 @@ def main() -> None:
 
     if args.futures_live_test:
         raise SystemExit(futures_live_test(args))
+
+    if args.option_chain_snapshot is not None or args.record_option_chains is not None:
+        raise SystemExit(option_chains(args))
 
     if args.futures_verify_credentials:
         _run_futures_verify_credentials(symbol=args.futures_symbol)
