@@ -1,0 +1,10 @@
+{
+  "root": "data/market_data",
+  "kraken_futures_symbols": ["PF_XBTUSD", "PF_ETHUSD"],
+  "kraken_spot_symbols": ["BTC/USD", "ETH/USD"],
+  "binance_liquidations": true,
+  "bybit_liquidation_symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"],
+  "book_depth": 10,
+  "book_interval_seconds": 1.0,
+  "ticker_interval_seconds": 10.0
+}

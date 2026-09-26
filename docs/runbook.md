@@ -130,6 +130,35 @@ python main.py --runtime live_dry_run --execution-exchange kraken \
   next bar close, so a restart never acts on a bar that closed hours earlier.
 - The time stop counts bars, so `time_stop_bars=60` on 4h bars is 10 days.
 
+## Recording order-flow data
+
+`--record-market-data` records public data that can't be downloaded later. It needs no credentials and places no
+orders. It records:
+- Kraken Futures trades (taker side, and whether each was a liquidation), order-book samples every second (top 10
+  levels plus the size within 10/25/50/100 bps of the mid), and the ticker (mark and index price, funding, open
+  interest) every 10 s;
+- Kraken spot trades and book samples;
+- Binance (all symbols) and Bybit liquidations.
+
+Symbols and intervals are in `config/market_data.json`.
+
+```bash
+mkdir -p logs
+nohup caffeinate -is python main.py --record-market-data > logs/market_data_recorder.log 2>&1 &   # start in the background
+python main.py --market-data-status          # rows, days, disk use per venue/channel, and recording gaps
+pkill -f -- --record-market-data             # stop cleanly (SIGTERM); Ctrl-C works in the foreground
+```
+
+- Data goes to `data/market_data/<venue>/<channel>/<YYYY-MM-DD>.csv`. Finished days are compacted to `.parquet`
+  when the day rolls over, or at the next start. Expect roughly 100 MB a day at the default settings.
+- Run one recorder at a time. It is safe to restart: it appends to today's files and drops a half-written last row.
+- Each feed reconnects on its own with backoff. Every connect, disconnect, start, stop and 5-minute heartbeat
+  (with row counts) is written to `recorder/events`, so the status command can list the gaps.
+- `caffeinate -is` stops the Mac from idle-sleeping while plugged in, but closing the lid still sleeps it. Gaps from
+  sleep appear in the status output.
+- A book whose checksum (spot) or sequence number (futures) stops matching is rebuilt by reconnecting that feed.
+  The log shows `resync:` when this happens; a few a day is normal.
+
 ## Promotion checklist: paper -> live_dry_run
 
 Use this only after the paper baseline has been stable. The goal is to exercise exchange-shaped execution and reconciliation without enabling production trading.

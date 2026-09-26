@@ -243,6 +243,29 @@ positioning = load_positioning("BTC", closes)     # every source, aligned so eac
 - `scripts/research/positioning_study.py` runs the study (feature ICs at 4/24/72h, deciles, a walk-forward ridge,
   and an unfitted crowding composite, traded with taker and resting limit-order fills).
 
+### Recorded order flow (only from when the recorder started)
+
+`python main.py --record-market-data` (see `runbook.md`) records trades, order-book samples, perp tickers and
+liquidations. Read them back with:
+
+```python
+from src.data.recorder import load_market_data, recording_gaps
+
+trades = load_market_data("kraken_futures", "trades", start="2026-10-01")   # side = taker side; kind "liquidation" marks forced trades
+book = load_market_data("kraken_futures", "book10")                         # bid/ask_px_1..10, _qty_1..10, bid/ask_depth_{10,25,50,100}bps
+liquidations = load_market_data("binance", "liquidations")                  # liquidated_side long/short, price, qty
+recording_gaps()                                                            # exclude these periods from any study
+```
+
+- Channels: `kraken_futures` has `trades`, `book10` and `ticker`; `kraken_spot` has `trades` and `book10`;
+  `binance` and `bybit` have `liquidations`.
+- `received_at` is this machine's clock and `exchange_time` the exchange's. They differ by the network delay plus
+  clock skew (5-10 ms here), so order events by one clock only.
+- Binance publishes at most one liquidation per symbol per second (the latest), so it undercounts cascades. Bybit
+  publishes all of them.
+- Book samples are snapshots every second, not every change, which is enough for imbalance features at minute
+  horizons and up.
+
 ## A research loop that works
 
 1. Write the hypothesis in one sentence (why would this make money, and who is on the other side?).

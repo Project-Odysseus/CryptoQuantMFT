@@ -1044,6 +1044,66 @@ def _run_futures_venue_check(*, symbol: str) -> None:
     print("  note: whether this product is open to your account and jurisdiction is not in the public data; confirm with Kraken.")
 
 
+def _load_recorder_config(config_path: str | None) -> "RecorderConfig":
+    from src.data.recorder import RecorderConfig
+
+    if not config_path:
+        return RecorderConfig()
+    if not Path(config_path).exists():
+        raise SystemExit(f"Recorder config not found: {config_path}")
+    return RecorderConfig.from_json(config_path)
+
+
+def _run_market_data_recorder(*, config_path: str | None, duration_minutes: float | None) -> None:
+    """Record public trades, books, tickers and liquidations until Ctrl-C, SIGTERM or the duration ends.
+
+    Public data only: no credentials are read and nothing is sent to an exchange except subscriptions.
+    """
+    from src.data.recorder import MarketDataRecorder
+
+    config = _load_recorder_config(config_path)
+    recorder = MarketDataRecorder(config)
+    print(f"Recording to {config.root}/ ({', '.join(feed.name for feed in recorder.feeds)}). Stop with Ctrl-C.")
+
+    async def _record() -> None:
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(signal.SIGTERM, recorder.stop, "SIGTERM")
+        await recorder.run(duration_seconds=None if duration_minutes is None else duration_minutes * 60.0)
+
+    try:
+        asyncio.run(_record())
+    except KeyboardInterrupt:
+        pass
+    print("Recorder stopped; rows written: " + ", ".join(f"{key} {count}" for key, count in sorted(recorder.counts.items())))
+
+
+def _run_market_data_status(*, config_path: str | None) -> None:
+    """Print stored rows and disk use per venue/channel, and the recording gaps of the last 7 days."""
+    import pandas as pd
+
+    from src.data.recorder import load_market_data, market_data_status, recording_gaps
+
+    root = _load_recorder_config(config_path).root
+    status = market_data_status(root)
+    if status.empty:
+        print(f"No recorded market data under {root}/")
+        return
+    print(status.to_string(index=False))
+    print(f"Total size: {status['size_mb'].sum():.1f} MB")
+    events = load_market_data("recorder", "events", root=root)
+    if not events.empty:
+        last = events.iloc[-1]
+        state = "stopped" if last["event"] == "stopped" else "running, or died without stopping"
+        print(f"Last recorder event: {last['event']} at {last['received_at']:%Y-%m-%d %H:%M:%S} UTC ({state})")
+    gaps = recording_gaps(root)
+    recent = gaps[gaps["gap_to"] >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=7)] if not gaps.empty else gaps
+    if recent.empty:
+        print("No recording gaps in the last 7 days.")
+    else:
+        print(f"Recording gaps in the last 7 days ({recent['seconds'].sum() / 3600:.2f} feed-hours):")
+        print(recent.to_string(index=False))
+
+
 def _run_futures_verify_credentials(*, symbol: str) -> None:
     """Authenticate against Kraken Futures with read-only calls and print margin, positions and open orders."""
     if not settings.kraken_futures_api_key or not settings.kraken_futures_secret:
@@ -1625,6 +1685,10 @@ def main() -> None:
     parser.add_argument("--futures-venue-check", action="store_true", help="Non-destructive: fetch Kraken Futures public specs, fees, live mark price and funding history for --futures-symbol and print them (no credentials, no orders)")
     parser.add_argument("--futures-verify-credentials", action="store_true", help="Non-destructive: call Kraken Futures private read-only endpoints (accounts, open positions, open orders) with KRAKEN_FUTURES_API_KEY/SECRET and print the result. Places no orders")
     parser.add_argument("--futures-symbol", default="BTC/USD", help="Symbol for --futures-venue-check, e.g. BTC/USD, ETH/USD or SOL/USD")
+    parser.add_argument("--record-market-data", action="store_true", help="Record public order flow until stopped (Ctrl-C): Kraken Futures and spot trades, order-book samples and perp tickers, Binance/Bybit liquidations. No credentials, no orders. Files go to data/market_data/")
+    parser.add_argument("--record-config", default="config/market_data.json", help="JSON file with the symbols and sampling settings for --record-market-data")
+    parser.add_argument("--record-duration-minutes", type=float, default=None, help="Stop --record-market-data after this many minutes (default: run until stopped)")
+    parser.add_argument("--market-data-status", action="store_true", help="Print what --record-market-data has stored (rows, days, disk use per venue and channel) and recent recording gaps")
     parser.add_argument("--account-summary", action="store_true", help="Print a non-destructive Kraken account summary: balances, positions, open orders, exchange minimums, and recent live/manual actions")
     parser.add_argument("--account-summary-symbol", default=None, help="Symbol to use for --account-summary exchange-minimum checks, e.g. BTC/EUR")
     parser.add_argument("--account-summary-limit", type=int, default=10, help="Number of recent trades/actions to show with --account-summary")
@@ -1683,6 +1747,14 @@ def main() -> None:
 
     if args.futures_venue_check:
         _run_futures_venue_check(symbol=args.futures_symbol)
+        return
+
+    if args.record_market_data:
+        _run_market_data_recorder(config_path=args.record_config, duration_minutes=args.record_duration_minutes)
+        return
+
+    if args.market_data_status:
+        _run_market_data_status(config_path=args.record_config)
         return
 
     if args.account_summary:

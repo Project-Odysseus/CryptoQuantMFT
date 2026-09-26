@@ -61,6 +61,17 @@ flowchart TD
   - `MarketDataPipeline` orchestrates connectors and the shared aggregator/store.
   - `run_once()` asks each connector for a snapshot and `flush_bars()` returns completed OHLCV bars.
 
+- `src/data/recorder.py` (`main.py --record-market-data`, `--market-data-status`)
+  - A standalone async recorder of public WebSocket data: Kraken Futures and spot trades, checked order books
+    sampled every second, perp tickers, and Binance/Bybit liquidations. It writes daily CSV files, compacted to
+    Parquet, under `data/market_data/`.
+  - `load_market_data()` and `recording_gaps()` read them back for research. The recorder is not part of the
+    trading runtime and shares nothing with it.
+
+- `src/data/positioning.py`
+  - Public funding, open-interest, long/short-ratio and implied-vol history from Binance, Bybit and Deribit for
+    research, cached under `data/historical_cache/positioning/`.
+
 ### Storage layer
 
 - `src/storage/market_store.py`
