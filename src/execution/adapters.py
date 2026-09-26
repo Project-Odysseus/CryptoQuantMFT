@@ -10,11 +10,13 @@ import math
 import time
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from config import settings
+from src.utils.retry import TransientExchangeError, has_transient_marker, retry_call
 
 
 @dataclass(slots=True)
@@ -584,6 +586,10 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
         )
 
 
+# Private calls safe to repeat after a timeout: reads and cancels. AddOrder is not (it may already be live).
+KRAKEN_SPOT_RETRYABLE = {"Balance", "OpenOrders", "ClosedOrders", "QueryOrders", "TradesHistory", "Ledgers", "CancelOrder", "CancelAll"}
+
+
 class KrakenExecutionAdapter(ExchangeExecutionAdapter):
     """Adapter for Kraken order routing with authenticated API calls and reconciliation."""
 
@@ -604,6 +610,7 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         # checks, so cache per pair to avoid hammering Kraken's public API
         # from a running strategy loop.
         self._pair_metadata_cache: dict[str, dict[str, Any]] = {}
+        self._retry_sleep: Callable[[float], None] = time.sleep  # replaced in tests
 
     def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
         """Submit an order through the adapter and capture the execution result.
@@ -1418,8 +1425,25 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
         return summary
 
     def _private_request(self, *, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
+        """A signed Kraken spot call. Reads and cancels are retried on temporary failures; AddOrder never is."""
         if not self.api_key or not self.api_secret:
             raise RuntimeError("Kraken credentials not configured")
+        if endpoint not in KRAKEN_SPOT_RETRYABLE:
+            return self._private_request_once(endpoint=endpoint, params=params)
+
+        def attempt() -> dict[str, Any]:
+            payload = self._private_request_once(endpoint=endpoint, params=params)
+            errors = payload.get("error") if isinstance(payload, dict) else None
+            if errors and has_transient_marker(errors):
+                raise TransientExchangeError(f"Kraken {endpoint}: {errors}", payload)
+            return payload
+
+        try:
+            return retry_call(attempt, label=f"kraken {endpoint}", sleep=self._retry_sleep)
+        except TransientExchangeError as exc:
+            return exc.payload  # still failing after the retries: hand back Kraken's answer, as without retries
+
+    def _private_request_once(self, *, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
 
         nonce = str(int(time.time() * 1000))
         body = dict(params)

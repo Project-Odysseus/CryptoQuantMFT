@@ -41,11 +41,13 @@ from typing import Any
 
 from src.execution.adapters import ExecutionOrder, ExecutionReport
 from src.execution.perps import MarginAccountAdapter, PerpContract
+from src.utils.retry import TransientExchangeError, has_transient_marker, retry_call
 
 API_BASE = "https://futures.kraken.com/derivatives"
 
 # sendorder statuses that mean the order reached the matching engine.
 _ACCEPTED_SEND_STATUSES = {"placed", "partiallyFilled", "filled"}
+FUTURES_RETRYABLE_POSTS = {"cancelorder", "cancelallorders"}  # safe to repeat; sendorder is not
 LOST_ORDER_SETTLE_ATTEMPTS = 3  # an IOC order with no fill after this many checks...
 MIN_UNFILLED_AGE_SECONDS = 15.0  # ...and at least this old never filled (/fills can lag the order by a few seconds)
 
@@ -82,6 +84,7 @@ class KrakenFuturesPrivateClient:
         self.api_key = api_key
         self.api_secret = api_secret
         self.transport = transport or _default_transport
+        self.sleep: Callable[[float], None] = time.sleep  # between retries; replaced in tests
         self._last_nonce = 0
 
     def nonce(self) -> str:
@@ -91,7 +94,17 @@ class KrakenFuturesPrivateClient:
         return str(nonce)
 
     def call(self, method: str, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Call an authenticated endpoint and return its JSON, raising on anything but `result == success`."""
+        """Call an authenticated endpoint and return its JSON, raising on anything but `result == success`.
+
+        Reads (GET) and cancels are retried on temporary failures, each attempt
+        with a fresh nonce. `sendorder` is never retried: a timed-out order may
+        already be live, and the adapters find it by its client order id.
+        """
+        if method == "GET" or endpoint in FUTURES_RETRYABLE_POSTS:
+            return retry_call(lambda: self._call_once(method, endpoint, params), label=f"kraken_futures {endpoint}", sleep=self.sleep)
+        return self._call_once(method, endpoint, params)
+
+    def _call_once(self, method: str, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         post_data = urllib.parse.urlencode({key: value for key, value in (params or {}).items() if value is not None})
         nonce = self.nonce()
         headers = {
@@ -112,6 +125,8 @@ class KrakenFuturesPrivateClient:
         payload = self.transport(method, url, headers, body)
         if not isinstance(payload, dict) or payload.get("result") != "success":
             error = payload.get("error") if isinstance(payload, dict) else payload
+            if has_transient_marker(error):
+                raise TransientExchangeError(f"Kraken Futures {endpoint} failed: {error}", payload)
             raise RuntimeError(f"Kraken Futures {endpoint} failed: {error}")
         return payload
 

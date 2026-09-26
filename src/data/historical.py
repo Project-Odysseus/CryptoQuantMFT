@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from src.storage.bar_aggregator import OHLCVBar
+from src.utils.retry import retry_call
 
 
 def fetch_kraken_ohlcv(
@@ -241,6 +242,11 @@ def load_ohlcv_csv(
 
 
 def _request_json(method: str, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A public request, retried on temporary failures (public reads are always safe to repeat)."""
+    return retry_call(lambda: _request_json_once(method, url, params=params), label=url.split("?")[0])
+
+
+def _request_json_once(method: str, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
     if params:
         query = urllib.parse.urlencode(params)
         separator = "&" if "?" in url else "?"

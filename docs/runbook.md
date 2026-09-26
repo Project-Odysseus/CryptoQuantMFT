@@ -219,6 +219,9 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
   Kraken, re-arm with `python main.py --kill-switch-reset`, and restart a live portfolio with
   `--portfolio-adopt-exchange` so its book matches the now-flat account.
 - **After the max-drawdown kill:** the book stays flat until you re-arm it with `--portfolio-reset-peak` (logged).
+- **Retries:** temporary exchange failures (timeouts, dropped connections, HTTP 429/5xx, Kraken's `EService` and
+  rate-limit errors) are retried up to 3 times with backoff (0.5 s, 1 s), logged as `http_retry`. Only reads and
+  cancels are retried. An order that times out is never resent; it is found later by its client order id.
 - **Small accounts:** with `[portfolio] small_account_equity` set (95 USD, about 1000 NOK, in the BTC live config),
   a target too small for one lot holds one lot anyway, up to `small_account_max_lot_weight` (90%) of equity and
   within `max_gross_notional`. Above the threshold, targets round toward zero on the lot grid. Research matches

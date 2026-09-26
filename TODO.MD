@@ -35,8 +35,8 @@ direction is in `aspirations.md`.
   few minutes, restart with the same state dir. No duplicate orders, and the book matches Kraken afterwards
 - [ ] A dead-man's switch and a daily summary (section 3): today a dead process is silent, and silence looks like
   "no trades"
-- [ ] Retries with backoff on Kraken's temporary errors (timeouts, `EService:Unavailable`, rate limits), separate
-  from real rejections. Today a failed call waits for the next cycle
+- [x] Retries with backoff on Kraken's temporary errors (timeouts, 429/5xx, `EService:Unavailable`, rate limits),
+  separate from real rejections (2026-09-27, `src/utils/retry.py`). Reads and cancels only; orders are never resent
 - [ ] A supervised first live session (a day or two, checked a few times a day): first-cycle adoption, orders at the
   bar close, fills, reconciliation, tax rows, Telegram
 - [ ] Run it live (runbook, "Live portfolio trading"). In the first week, check the dashboard, drift alerts and the tax queue daily
