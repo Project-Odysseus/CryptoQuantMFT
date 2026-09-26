@@ -72,7 +72,7 @@ class ChaosKraken:
 
 
 def _positions_within_caps(engine: PortfolioEngine, fake: FakeKraken) -> None:
-    account = fake({"GET": "GET"}["GET"], "https://x/accounts", {}, None)["accounts"]["flex"]
+    account = fake("GET", "https://x/accounts", {}, None)["accounts"]["flex"]
     equity = account["marginEquity"]
     values = {symbol: abs(size) * fake.prices[symbol] for symbol, (size, _entry) in fake.positions.items()}
     risk = engine.config.risk
