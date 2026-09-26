@@ -388,6 +388,10 @@ Python and need no network, so they are good hotspot work.
   (a) one sandbox perp adapter per instrument (isolated margin, with collateral split per instrument), or (b) extend
   the margin adapter to several contracts sharing one wallet (cross margin, which is how Kraken Futures'
   multi-collateral account works). Needs a decision before 3.2.
+- Decision (2026-09-26, user): a new multi-contract cross-margin sandbox, leaving the single-contract adapter and
+  the single-strategy runtime untouched. Built as `SandboxCrossMarginPerpAdapter` (`src/execution/cross_margin.py`,
+  tests in `tests/test_cross_margin_sandbox.py`). It has one wallet and one margin check across all positions,
+  per-symbol funding and slippage, `reduce_only` orders, account-wide liquidation, and an atomic JSON state file.
 - Tasks: one adapter per venue; submit planned orders with `symbol=`; apply fills to the book; reconcile the book
   against each adapter per instrument; log orders, fills and decisions with `strategy_id=<sleeve_id>`. For netted
   orders, use the dominant sleeve's id or `portfolio`, and record the attribution in the event metadata.
