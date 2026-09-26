@@ -65,6 +65,53 @@ def test_positions_drift_between_rebalances_without_costs() -> None:
     assert result.net_exposure.iloc[1] == pytest.approx(1.0) and result.gross_exposure.iloc[1] == pytest.approx(1.0)
 
 
+def test_the_same_book_on_daily_and_4h_bars_gives_the_same_daily_returns() -> None:
+    """4h bars walk to each daily close; a daily decision lands on the day's last 4h bar (stamped 20:00, closing at 24:00)."""
+    rng = np.random.default_rng(4)
+    days = pd.date_range("2024-01-01", periods=40, freq="D", tz="UTC")
+    daily_close = 100.0 * np.exp(np.cumsum(rng.normal(0.0, 0.03, len(days))))
+    daily_weights = pd.Series(0.5, index=days)
+    daily_weights.iloc[12:20] = 0.0
+    daily_weights.iloc[20:] = -0.3
+
+    four_hours = pd.date_range(days[0], periods=len(days) * 6, freq="4h")
+    path = [daily_close[0]] * 6
+    for day in range(1, len(days)):
+        path.extend(daily_close[day - 1] * (daily_close[day] / daily_close[day - 1]) ** (np.arange(1, 7) / 6))
+    intraday_weights = pd.Series(np.nan, index=four_hours)
+    intraday_weights.iloc[5::6] = daily_weights.to_numpy()
+    intraday_weights = intraday_weights.ffill().fillna(0.0)
+
+    costs = PortfolioCosts(fee_pct=0.05, slippage_bps=5.0)
+    daily = simulate_portfolio(pd.DataFrame({"A": daily_close}, index=days), daily_weights.to_frame("A"), costs=costs, rebalance_band=1.0)
+    intraday = simulate_portfolio(pd.DataFrame({"A": path}, index=four_hours), intraday_weights.to_frame("A"), costs=costs, rebalance_band=1.0)
+
+    assert daily.periods_per_year == pytest.approx(365.0) and intraday.periods_per_year == pytest.approx(365.0 * 6)
+    at_day_end = intraday.equity.iloc[5::6]
+    assert at_day_end.to_numpy() == pytest.approx(daily.equity.to_numpy(), rel=1e-12)
+    assert (intraday.turnover > 0).sum() == (daily.turnover > 0).sum() == 3  # open long, close, open short
+
+
+def test_the_rebalance_band_skips_small_top_ups_but_always_closes_and_flips() -> None:
+    prices = pd.DataFrame({"A": [100.0, 104.0, 104.0, 130.0, 130.0, 130.0], "B": 100.0}, index=DAYS)
+    weights = pd.DataFrame({"A": [0.5, 0.5, 0.5, 0.5, 0.0, -0.5], "B": 0.5}, index=DAYS)
+    result = simulate_portfolio(prices, weights, costs=PortfolioCosts(fee_pct=0.1, slippage_bps=0.0), rebalance_band=0.05)
+    assert result.turnover.iloc[1] == 0.0 and result.turnover.iloc[2] == 0.0  # A drifted to ~0.51: inside the band
+    assert result.turnover.iloc[3] > 0.0  # A drifted to ~0.57: traded back
+    assert result.net_exposure.iloc[4] == pytest.approx(0.5, rel=1e-2) and result.turnover.iloc[4] > 0.0  # a close always trades
+    assert result.net_exposure.iloc[5] == pytest.approx(0.0, abs=1e-2)  # the flip goes to -0.5 of A, +0.5 of B
+    assert result.gross_exposure.iloc[5] == pytest.approx(1.0, rel=1e-2)
+
+
+def test_fees_can_differ_per_instrument() -> None:
+    prices = pd.DataFrame({"PERP": 100.0, "SPOT": 100.0}, index=DAYS)
+    weights = pd.DataFrame({"PERP": 0.5, "SPOT": 0.5}, index=DAYS)
+    result = simulate_portfolio(prices, weights, costs=PortfolioCosts(fee_pct={"PERP": 0.05, "SPOT": 0.40}, slippage_bps=0.0))
+    assert result.costs.iloc[0] == pytest.approx(0.5 * 0.0005 + 0.5 * 0.004, rel=1e-2)
+    with pytest.raises(ValueError, match="no fee for"):
+        simulate_portfolio(prices, weights, costs=PortfolioCosts(fee_pct={"PERP": 0.05}))
+
+
 def test_rank_weights_are_dollar_neutral_quantile_legs() -> None:
     coins = [f"C{i}" for i in range(10)]
     scores = pd.DataFrame([list(range(10))], columns=coins, index=DAYS[:1])

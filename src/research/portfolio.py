@@ -24,7 +24,7 @@ short legs separately and the cost and funding drag.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -40,13 +40,14 @@ class PortfolioCosts:
     """Trading costs, charged on traded notional.
 
     Attributes:
-        fee_pct: Fee per side in % of notional (0.05 = Kraken Futures' entry taker tier).
+        fee_pct: Fee per side in % of notional (0.05 = Kraken Futures' entry taker tier),
+            or one per symbol (a mapping), since a book can mix perps with spot at 0.40%.
         slippage_bps: Per side, either one number or a frame (date x symbol),
             e.g. from `slippage_by_liquidity`.
         charge_funding: Apply each coin's funding to held positions.
     """
 
-    fee_pct: float = 0.05
+    fee_pct: float | Mapping[str, float] = 0.05
     slippage_bps: float | pd.DataFrame = 5.0
     charge_funding: bool = True
 
@@ -149,7 +150,13 @@ def simulate_portfolio(
         slippage = costs.slippage_bps.reindex(index=dates, columns=symbols).ffill().fillna(costs.slippage_bps.max().max()).to_numpy(dtype=float) / 10_000.0
     else:
         slippage = np.full_like(close, float(costs.slippage_bps) / 10_000.0)
-    fee = costs.fee_pct / 100.0
+    if isinstance(costs.fee_pct, Mapping):
+        missing = [symbol for symbol in symbols if symbol not in costs.fee_pct]
+        if missing:
+            raise ValueError(f"PortfolioCosts.fee_pct has no fee for {missing}")
+        fee = np.array([float(costs.fee_pct[symbol]) for symbol in symbols]) / 100.0
+    else:
+        fee = float(costs.fee_pct) / 100.0
 
     count = len(dates)
     spacing = pd.Series(dates).diff().median() if count > 1 else pd.Timedelta(days=1)
@@ -169,7 +176,8 @@ def simulate_portfolio(
         delisted = (holdings != 0.0) & ~listed[day]
         peak_equity = max(peak_equity, equity)
         if dates[day].normalize() != current_day:
-            current_day, day_start_equity = dates[day].normalize(), equity
+            # Bars are stamped at their open, so this bar's P&L happened today: the day started before it.
+            current_day, day_start_equity = dates[day].normalize(), start_equity
         row = target[day]
         if adjust_targets is not None:
             current_weights = drifted / equity if equity > 0 else np.zeros(len(symbols))
