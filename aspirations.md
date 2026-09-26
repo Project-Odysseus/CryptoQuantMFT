@@ -118,7 +118,7 @@ At our turnover, costs decide whether an edge survives (the intraday studies die
 
 ### 8. Software architecture: one engine for every strategy type
 
-This is what makes complex strategies possible.
+This is what makes complex strategies possible. The build plan is in `docs/engine_plan.md`.
 
 - **One event-driven engine.** Market data, fills, timers and signals are all events; strategies subscribe to what
   they need. Bar-close trend sleeves are one case. Intraday rules, order-book strategies, options structures with

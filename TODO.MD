@@ -54,6 +54,12 @@ direction is in `aspirations.md`.
 - [ ] A cooldown after repeated order rejections. Rejections alert, but trading doesn't pause automatically
 - [ ] Phase 7 enhancements: portfolio vol targeting, correlation-aware caps, regime filters as sleeve inputs. Sleeve health (disable after 3 failing cycles) is already done
 
+## 2b. One engine for every strategy type (plan: `docs/engine_plan.md`)
+
+- [ ] E0-E1: the strategy interface, intents and event loop, with the current sleeves wrapped and parity with `run_book`
+- [ ] E2: execution policies with maker-first; E3: basket strategies (the cross-sectional book)
+- [ ] E4-E6: options intents and exposure limits, intra-bar events, and retiring the single-strategy runtime
+
 ## 3. Run 24/7 (merges the old deployment, monitoring and security items)
 
 - [x] Done: run-until-stopped mode for the portfolio, restart-safe checkpoints, the kill switch, alerts sent once per problem, and backup/restore steps in the runbook
