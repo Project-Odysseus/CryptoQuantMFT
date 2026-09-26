@@ -4,8 +4,8 @@ A step-by-step plan for running several strategies on several coins and venues a
 that you, or any coding agent, can pick it up cold and continue. It doesn't depend on who wrote the earlier steps.
 Each step says which files to touch, what to build, how to test it, and how to tell it's done.
 
-Status as of 2026-09-26: Phases 0 and 1 are done. Steps 2.2, 2.4 and 2.5 are done and tested. The
-`--portfolio-check` flag (2.1), 2.3 and 2.6-2.7 are next (see the tracker in section 10).
+Status as of 2026-09-26: Phases 0 and 1 are done. Steps 2.1, 2.2, 2.4 and 2.5 are done and tested. 2.3 and
+2.6-2.7 are next (see the tracker in section 10).
 
 ---
 
@@ -513,8 +513,9 @@ Python and need no network, so they are good hotspot work.
 ---
 
 ## 9. User guide (grows as steps land)
-- **Validate a config:** `python main.py --portfolio-check config/portfolio.example.toml` (after 2.1).
-- **Backtest a config:** `python scripts/research/portfolio_backtest.py config/portfolio.example.toml` (after 1.4).
+- **Validate a config:** `python main.py --portfolio-check config/portfolio.example.toml`.
+- **Backtest a config:** `python scripts/research/portfolio_backtest.py config/portfolio.example.toml`.
+- **Try a new signal as a sleeve:** `notebooks/signal_research.ipynb`, section 7 (`candidate_report`).
 - **Run in paper:** `python main.py --runtime paper --portfolio config/portfolio.example.toml --dashboard` (after
   4.2).
 - **Sizing options:** `python main.py --list-sizing`.
@@ -533,7 +534,7 @@ Python and need no network, so they are good hotspot work.
 - [x] 1.2 Any bar interval in `simulate_portfolio` (2026-09-26): `periods_per_year`, `rebalance_band`, the `adjust_targets` hook with `current_weights`, per-instrument fees (`PortfolioCosts.fee_pct` as a mapping), and the day-start fix in the step's findings. Tests in `tests/test_portfolio.py`.
 - [x] 1.3 Allocation functions (2026-09-26): `src/portfolio/allocation.py`, tests in `tests/test_portfolio_allocation.py`.
 - [x] 1.4 Research script, example config, study and log entry (2026-09-26): `scripts/research/portfolio_backtest.py` over `src/portfolio/backtest.py`, tests in `tests/test_portfolio_backtest.py`, findings in `docs/research_log.md`.
-- [ ] 2.1 Config and validation, `--portfolio-check`. **Code and tests done** (`src/portfolio/config.py`: `load_portfolio_config`, `describe`, all rules, every error reported at once, non-numeric values reported instead of crashing; `tests/test_portfolio_config.py`). Only the `--portfolio-check` flag in `main.py` is left.
+- [x] 2.1 Config and validation, `--portfolio-check` (2026-09-26): `src/portfolio/config.py` (`load_portfolio_config`, `describe`, all rules, every error reported at once, non-numeric values reported instead of crashing), `main.py --portfolio-check PATH` (exit code 1 on a bad config), tests in `tests/test_portfolio_config.py`.
 - [x] 2.2 Sleeve runner with state (2026-09-26, the same module as 1.1): stepping one bar at a time with a JSON restart every bar matches `run_sleeve`; stops flatten the sleeve and block re-entry until the signal resets. `SleeveState` keeps `bars_held` instead of an entry time.
 - [ ] 2.3 Allocation (runtime form)
 - [x] 2.4 Netting and attribution (2026-09-26): `src/portfolio/netting.py`, tests in `tests/test_portfolio_allocation.py`.

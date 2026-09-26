@@ -127,3 +127,28 @@ def test_a_disabled_sleeve_is_kept_but_not_traded() -> None:
     assert [sleeve.id for sleeve in config.enabled_sleeves] == ["btc_ma"] and config.budgets() == {"btc_ma": 1.0}
     line = next(line for line in describe(config).splitlines() if "spot_ma" in line)
     assert "[disabled]" in line and "volatility" not in line
+
+
+def test_portfolio_check_prints_the_plan_or_every_problem(tmp_path, capsys) -> None:
+    import main
+
+    assert main.portfolio_check(EXAMPLE) == 0
+    text = capsys.readouterr().out
+    assert "Portfolio 'trend-core'" in text and "btc_ma_4h" in text and text.rstrip().endswith("OK: the config is valid.")
+
+    bad = tmp_path / "bad.toml"
+    bad.write_text('[portfolio]\nallocation = "nope"\n')
+    assert main.portfolio_check(str(bad)) == 1
+    text = capsys.readouterr().out
+    assert "Portfolio config is not valid." in text and "allocation must be one of" in text and "no instruments" in text
+
+
+def test_the_portfolio_check_flag_exits_with_the_check_result(monkeypatch, capsys) -> None:
+    import sys
+
+    import main
+
+    monkeypatch.setattr(sys, "argv", ["main.py", "--portfolio-check", EXAMPLE])
+    with pytest.raises(SystemExit) as exited:
+        main.main()
+    assert exited.value.code == 0 and "OK: the config is valid." in capsys.readouterr().out

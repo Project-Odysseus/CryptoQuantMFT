@@ -1639,6 +1639,25 @@ def _run_kraken_close_submission(
     return submission
 
 
+def portfolio_check(path: str) -> int:
+    """Validate a portfolio config and print what it resolves to; returns the process exit code.
+
+    A bad config must fail before any run starts, with every problem listed
+    at once, so this is the first thing to run after editing a portfolio
+    file. It only reads the file and builds the strategies and sizers.
+    """
+    from src.portfolio.config import PortfolioConfigError, describe, load_portfolio_config
+
+    try:
+        config = load_portfolio_config(path)
+    except PortfolioConfigError as exc:
+        print(f"Portfolio config is not valid.\n{exc}")
+        return 1
+    print(describe(config))
+    print("OK: the config is valid.")
+    return 0
+
+
 def main() -> None:
     """Initialize the runtime and run either the data pipeline or a demo backtest."""
     parser = argparse.ArgumentParser(description="CryptoQuantMFT runtime")
@@ -1674,6 +1693,7 @@ def main() -> None:
     parser.add_argument("--sizing", choices=sorted(SIZERS), default=None, help="How entries are sized (see --list-sizing). Default: fixed_fraction at --risk-per-trade-pct. Every sizing gives a share of equity, capped by the exchange's position and per-trade limits")
     parser.add_argument("--sizing-params", default="{}", help="JSON parameters for --sizing, e.g. '{\"target_annual_vol\": 0.5}' for vol_target or '{\"kelly_fraction\": 0.5, \"min_trades\": 20}' for kelly")
     parser.add_argument("--list-sizing", action="store_true", help="Print every sizing method with its parameters and defaults, then exit")
+    parser.add_argument("--portfolio-check", metavar="PATH", default=None, help="Validate a portfolio TOML (sleeves, instruments, allocation, risk limits) and print the resolved plan, then exit. Touches no network or database")
     parser.add_argument("--target-annual-vol", type=float, default=None, help="Shorthand for --sizing vol_target --sizing-params '{\"target_annual_vol\": X}' (0.5 = 50%% a year; EWMA forecast, 10-day half-life)")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures trades perpetual futures: the in-process margin sandbox under live_dry_run, real Kraken Futures orders under live")
     parser.add_argument("--perp-sandbox-reset", action="store_true", help="Start the perpetual-futures dry-run account fresh; the previous saved state (data/perp_sandbox_<contract>.json) is moved aside, not deleted")
@@ -1740,6 +1760,8 @@ def main() -> None:
     if args.list_sizing:
         print(describe_sizers())
         return
+    if args.portfolio_check:
+        raise SystemExit(portfolio_check(args.portfolio_check))
     try:
         runtime_config = build_runtime_config_from_args(args, argv=sys.argv[1:])
         if args.runtime:
