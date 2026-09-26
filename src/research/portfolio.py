@@ -24,12 +24,15 @@ short legs separately and the cost and funding drag.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 DAYS_PER_YEAR = 365.0
+# adjust_targets(targets, equity=..., peak_equity=..., day_start_equity=..., index=...) -> targets; see simulate_portfolio.
+TargetAdjuster = Callable[..., np.ndarray]
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +65,7 @@ class PortfolioResult:
     gross_exposure: pd.Series
     net_exposure: pd.Series
     positions: pd.Series
+    periods_per_year: float = DAYS_PER_YEAR
 
     def metrics(self, start: str | pd.Timestamp | None = None, end: str | pd.Timestamp | None = None) -> dict[str, float]:
         """CAGR, volatility, Sharpe, max drawdown, turnover and drags over [start, end)."""
@@ -77,19 +81,20 @@ class PortfolioResult:
         returns = self.returns[window]
         if len(returns) < 2:
             return {}
+        per_year = self.periods_per_year
         equity = (1.0 + returns).cumprod()
-        years = len(returns) / DAYS_PER_YEAR
+        years = len(returns) / per_year
         std = float(returns.std())
         return {
             "cagr": float(equity.iloc[-1] ** (1 / years) - 1) if equity.iloc[-1] > 0 else -1.0,
-            "vol": std * np.sqrt(DAYS_PER_YEAR),
-            "sharpe": float(returns.mean() / std * np.sqrt(DAYS_PER_YEAR)) if std > 0 else 0.0,
+            "vol": std * np.sqrt(per_year),
+            "sharpe": float(returns.mean() / std * np.sqrt(per_year)) if std > 0 else 0.0,
             "max_drawdown": float((1 - equity / equity.cummax()).max()),
-            "long_leg_pct_per_year": float(self.long_pnl[window].mean() * DAYS_PER_YEAR * 100),
-            "short_leg_pct_per_year": float(self.short_pnl[window].mean() * DAYS_PER_YEAR * 100),
-            "turnover_per_year": float(self.turnover[window].mean() * DAYS_PER_YEAR),
-            "cost_pct_per_year": float(self.costs[window].mean() * DAYS_PER_YEAR * 100),
-            "funding_pct_per_year": float(self.funding[window].mean() * DAYS_PER_YEAR * 100),
+            "long_leg_pct_per_year": float(self.long_pnl[window].mean() * per_year * 100),
+            "short_leg_pct_per_year": float(self.short_pnl[window].mean() * per_year * 100),
+            "turnover_per_year": float(self.turnover[window].mean() * per_year),
+            "cost_pct_per_year": float(self.costs[window].mean() * per_year * 100),
+            "funding_pct_per_year": float(self.funding[window].mean() * per_year * 100),
             "avg_gross_exposure": float(self.gross_exposure[window].mean()),
             "avg_net_exposure": float(self.net_exposure[window].mean()),
             "avg_positions": float(self.positions[window].mean()),
@@ -103,12 +108,28 @@ def simulate_portfolio(
     funding: pd.DataFrame | None = None,
     costs: PortfolioCosts | None = None,
     rebalance_every: int = 1,
+    rebalance_band: float | None = None,
+    adjust_targets: TargetAdjuster | None = None,
     initial_equity: float = 1.0,
 ) -> PortfolioResult:
-    """Trade `weights` (date x symbol, decided at each close) on `prices` (daily closes, NaN when not trading).
+    """Trade `weights` (time x symbol, decided at each close) on `prices` (closes, NaN when not trading).
 
-    `funding` is the funding paid per unit of long notional over each day
-    (date x symbol, e.g. the daily sums from `binance_archive.parse_funding`).
+    Bars can be any length: returns are annualised from the index spacing.
+    `funding` is the funding paid per unit of long notional over each bar
+    (time x symbol, e.g. the daily sums from `binance_archive.parse_funding`
+    on daily bars).
+
+    `rebalance_band` (e.g. 0.02): trade a coin only when its target differs
+    from its drifted weight by more than this share of equity, or when the
+    target closes or flips the position. This is how the runtime trades
+    (positions drift with price between decisions). None trades back to the
+    target every rebalance bar.
+
+    `adjust_targets` is called with each bar's target row and the account
+    state (`equity`, `peak_equity`, `day_start_equity`, `index`,
+    `current_weights`) and returns
+    the row to trade. The portfolio risk overlay (`src/portfolio/risk.py`)
+    plugs in here, so research applies the same drawdown rules as the runtime.
     """
     costs = costs or PortfolioCosts()
     prices = prices.sort_index()
@@ -131,8 +152,12 @@ def simulate_portfolio(
     fee = costs.fee_pct / 100.0
 
     count = len(dates)
+    spacing = pd.Series(dates).diff().median() if count > 1 else pd.Timedelta(days=1)
+    periods_per_year = DAYS_PER_YEAR * pd.Timedelta(days=1) / spacing if pd.notna(spacing) and spacing > pd.Timedelta(0) else DAYS_PER_YEAR
     series = {name: np.zeros(count) for name in ("equity", "returns", "long", "short", "costs", "funding", "turnover", "gross", "net", "positions")}
     equity = initial_equity
+    peak_equity = initial_equity
+    day_start_equity, current_day = initial_equity, None
     holdings = np.zeros(len(symbols))  # notional per coin after the last rebalance
     for day in range(count):
         start_equity = equity
@@ -142,12 +167,25 @@ def simulate_portfolio(
         equity = equity + long_pnl + short_pnl - funding_paid
         drifted = holdings * (1.0 + day_return[day])
         delisted = (holdings != 0.0) & ~listed[day]
+        peak_equity = max(peak_equity, equity)
+        if dates[day].normalize() != current_day:
+            current_day, day_start_equity = dates[day].normalize(), equity
+        row = target[day]
+        if adjust_targets is not None:
+            current_weights = drifted / equity if equity > 0 else np.zeros(len(symbols))
+            row = np.asarray(adjust_targets(row.copy(), equity=equity, peak_equity=peak_equity, day_start_equity=day_start_equity, index=day, current_weights=current_weights), dtype=float)
+            row[~listed[day]] = 0.0
         if day % rebalance_every == 0:
             # Targets are shares of the equity left after paying for the trade, and the cost depends on the
             # trade: a few fixed-point passes converge (each shrinks the error by the cost rate, ~0.1%).
             after_cost = max(equity, 0.0)
+            keep = np.zeros(len(symbols), dtype=bool)
+            if rebalance_band is not None and equity > 0:
+                current_weight = drifted / equity
+                same_side = np.sign(row) == np.sign(current_weight)
+                keep = same_side & (row != 0.0) & (np.abs(row - current_weight) <= rebalance_band) & listed[day]
             for _ in range(4):
-                new = target[day] * after_cost
+                new = np.where(keep, drifted, row * after_cost)
                 cost = float(np.sum(np.abs(new - drifted) * (fee + slippage[day])))
                 after_cost = max(equity - cost, 0.0)
         else:
@@ -175,6 +213,7 @@ def simulate_portfolio(
         equity=as_series["equity"], returns=as_series["returns"], long_pnl=as_series["long"], short_pnl=as_series["short"],
         costs=as_series["costs"], funding=as_series["funding"], turnover=as_series["turnover"],
         gross_exposure=as_series["gross"], net_exposure=as_series["net"], positions=as_series["positions"],
+        periods_per_year=float(periods_per_year),
     )
 
 

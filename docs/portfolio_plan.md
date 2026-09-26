@@ -509,15 +509,15 @@ Python and need no network, so they are good hotspot work.
 ## 10. Progress tracker
 - [x] 0.1 Sizing contract
 - [x] 0.2 Research portfolio backtester
-- [ ] 1.1 Sleeve targets over history
-- [ ] 1.2 Any bar interval in `simulate_portfolio`
-- [ ] 1.3 Allocation functions
-- [ ] 1.4 Research script, example config, study and log entry
-- [ ] 2.1 Config and validation, `--portfolio-check`
+- [ ] 1.1 Sleeve targets over history. **In progress (2026-09-26):** `src/portfolio/sleeves.py` (`SleeveRunner.step`, `run_sleeve`, `SleeveState`) is written and merges steps 1.1 and 2.2: research replays the same bar-by-bar runner as the runtime. It needs its tests (see the step's list).
+- [ ] 1.2 Any bar interval in `simulate_portfolio`. **Code done** (`periods_per_year`, `rebalance_band`, `adjust_targets` hook with `current_weights`); needs its tests. Still to add: per-instrument fees in `PortfolioCosts`.
+- [ ] 1.3 Allocation functions. **Code done** (`src/portfolio/allocation.py`); needs tests.
+- [ ] 1.4 Research script, example config, study and log entry. The example config exists (`config/portfolio.example.toml`, it validates); `scripts/research/portfolio_backtest.py` is not written yet.
+- [ ] 2.1 Config and validation, `--portfolio-check`. **Code done** (`src/portfolio/config.py`: `load_portfolio_config`, `describe`, all rules, every error reported at once); needs tests and the `--portfolio-check` flag in `main.py`.
 - [ ] 2.2 Sleeve runner with state
 - [ ] 2.3 Allocation (runtime form)
-- [ ] 2.4 Netting and attribution
-- [ ] 2.5 Portfolio risk overlay
+- [ ] 2.4 Netting and attribution. **Code done** (`src/portfolio/netting.py`); needs tests.
+- [ ] 2.5 Portfolio risk overlay. **Code done** (`src/portfolio/risk.py`: `apply_portfolio_risk`, `drawdown_multiplier`, `array_overlay` for research); needs tests.
 - [ ] 2.6 Order planner
 - [ ] 2.7 Parity test
 - [ ] 3.1 Portfolio book
