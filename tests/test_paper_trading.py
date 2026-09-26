@@ -371,6 +371,117 @@ def test_exchange_cycle_reconciles_async_fill_and_avoids_duplicate_entry() -> No
     assert len(logger.trades) == 1
 
 
+class _LateFeeAdapter:
+    """Kraken-shaped stub: the order fills on the first poll, but its fee only appears on a later poll."""
+
+    exchange_name = "kraken"
+    name = "kraken"
+    _base_currency = "EUR"
+
+    def __init__(self, fees_by_poll: list[float]) -> None:
+        self._balances = {"EUR": 1000.0}
+        self._positions: dict[str, float] = {}
+        self._orders: list[SimpleNamespace] = []
+        self._fees_by_poll = fees_by_poll
+        self.polls = 0
+
+    def list_orders(self) -> list[SimpleNamespace]:
+        return list(self._orders)
+
+    def get_account_snapshot(self) -> dict[str, object]:
+        return {"balances": dict(self._balances), "positions": dict(self._positions), "account_reconciliation": {}}
+
+    def submit_order(self, *, order_id: str, side: str, size: float, price: float, timestamp: datetime, symbol: str | None = None) -> ExecutionReport:
+        self._orders.append(SimpleNamespace(order_id=order_id, side=side, size=size, symbol=symbol, exchange="kraken", status="SUBMITTED",
+                                            filled_size=0.0, fill_price=None, fee=0.0, timestamp=timestamp))
+        return ExecutionReport(order_id=order_id, status="SUBMITTED", message="submitted to kraken")
+
+    def recover_execution_state(self, **_: object) -> dict[str, object]:
+        fee = self._fees_by_poll[min(self.polls, len(self._fees_by_poll) - 1)]
+        self.polls += 1
+        for order in self._orders:
+            if order.status == "SUBMITTED":
+                order.status, order.filled_size, order.fill_price = "FILLED", order.size, 68000.0
+                self._positions["BTC"] = order.size
+            order.fee = fee
+        return {}
+
+
+class _RecordingLogger:
+    def __init__(self) -> None:
+        self.trades: list[dict[str, object]] = []
+        self.events: list[dict[str, object]] = []
+
+    def log_event(self, **kwargs: object) -> int:
+        self.events.append(kwargs)
+        return 1
+
+    def log_trade(self, **kwargs: object) -> tuple[int, None]:
+        self.trades.append(kwargs)
+        return 1, None
+
+    def log_equity_snapshot(self, **_: object) -> int:
+        return 1
+
+
+def _run_cycles(engine: PaperTradingEngine, cycles: int) -> list[list[object]]:
+    bars = [
+        OHLCVBar(exchange="kraken", symbol="BTC/EUR", interval_seconds=60, timestamp=datetime(2024, 1, 1, 0, minute, tzinfo=timezone.utc),
+                 open=68000.0, high=68000.0, low=68000.0, close=68000.0, volume=10.0)
+        for minute in range(cycles)
+    ]
+    return [engine.run_exchange_cycle(bars[: index + 1], [1.0] * (index + 1)).trades for index in range(cycles)]
+
+
+def test_exchange_cycle_waits_for_the_fee_before_logging_a_reconciled_fill() -> None:
+    """Kraken can report `closed` before the fee settles: the fill is logged a cycle later, with the real fee."""
+    logger = _RecordingLogger()
+    adapter = _LateFeeAdapter(fees_by_poll=[0.0, 0.27])
+    engine = PaperTradingEngine(execution_adapter=adapter, exchange_name="kraken", trade_logger=logger)
+
+    trades = _run_cycles(engine, 3)
+
+    assert trades[0] == [] and trades[1] == []  # submitted; then filled but the fee isn't in yet
+    assert len(trades[2]) == 1 and trades[2][0].fee == pytest.approx(0.27)
+    assert [trade["fee"] for trade in logger.trades] == [pytest.approx(0.27)]
+    assert len(adapter.list_orders()) == 1  # the unlogged fill still counted as a position: no second buy
+
+
+def test_exchange_cycle_logs_a_fill_without_fee_after_the_wait_and_warns() -> None:
+    """A fee that never arrives doesn't hold the fill back forever: it is logged with a warning to check by hand."""
+    from src.execution.paper_trading import FEE_SETTLE_MAX_POLLS
+
+    logger = _RecordingLogger()
+    engine = PaperTradingEngine(execution_adapter=_LateFeeAdapter(fees_by_poll=[0.0]), exchange_name="kraken", trade_logger=logger)
+
+    trades = _run_cycles(engine, FEE_SETTLE_MAX_POLLS + 2)
+
+    assert sum(len(cycle) for cycle in trades) == 1
+    assert len(trades[FEE_SETTLE_MAX_POLLS]) == 1
+    assert [trade["fee"] for trade in logger.trades] == [0.0]
+    assert [event["event_type"] for event in logger.events if event["event_type"] == "exchange_fee_unsettled"] == ["exchange_fee_unsettled"]
+
+
+def test_exchange_cycle_logs_only_the_new_share_of_the_fee_for_a_partial_fill() -> None:
+    """The order's fee is cumulative; each partial fill's log gets only the fee added since the last one."""
+
+    class PartialAdapter(_LateFeeAdapter):
+        def recover_execution_state(self, **_: object) -> dict[str, object]:
+            self.polls += 1
+            order = self._orders[0]
+            order.fill_price = 68000.0
+            order.status, order.filled_size, order.fee = ("PARTIALLY_FILLED", order.size / 2, 0.1) if self.polls == 1 else ("FILLED", order.size, 0.2)
+            self._positions["BTC"] = order.filled_size
+            return {}
+
+    logger = _RecordingLogger()
+    engine = PaperTradingEngine(execution_adapter=PartialAdapter(fees_by_poll=[0.0]), exchange_name="kraken", trade_logger=logger)
+
+    _run_cycles(engine, 3)
+
+    assert [trade["fee"] for trade in logger.trades] == [pytest.approx(0.1), pytest.approx(0.1)]
+
+
 def test_exchange_cycle_closes_existing_long_on_sell_signal() -> None:
     """Exchange-backed runtime cycles should close an existing long when the strategy flips sell."""
 

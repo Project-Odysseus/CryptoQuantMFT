@@ -12,9 +12,11 @@ mirror them in `TODO.MD`.
   reconciliation state recovered from Kraken for the real 2026-09-18/25 trades
 - [ ] **Spot: kill-switch preview against a real open order** (the cancel target list, checked against Kraken's
   actual open orders)
-- [ ] **Spot: reconciled fills can record `fee=0`.** Kraken's `QueryOrders` can report `closed` before the fee
+- [x] **Spot: reconciled fills can record `fee=0`.** Kraken's `QueryOrders` can report `closed` before the fee
   settles, and reconciliation trusted the first answer. This corrupted tax rows once (backfilled by hand on
-  2026-09-25)
+  2026-09-25). Fixed 2026-09-26: a fill with no fee waits up to `FEE_SETTLE_MAX_POLLS` (3) cycles for it, then is
+  logged with an `exchange_fee_unsettled` warning. Partial fills now log only their share of the fee, and a
+  synchronous fill can't be logged a second time by reconciliation
 - [ ] **Futures (single-contract adapter): IOC write-off race.** It marks an order cancelled on the first check if
   `/fills` hasn't caught up yet, which can lose a real fill. The portfolio adapter already waits (several checks and
   a minimum age)

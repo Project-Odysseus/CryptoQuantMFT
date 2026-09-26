@@ -11,6 +11,10 @@ from src.risk.controls import CircuitBreaker, RiskManager, gate_reentry
 from src.risk.kill_switch import KillSwitchController
 from src.storage.trade_logger import TradeLogger
 
+# Kraken's QueryOrders can report an order `closed` before its fee settles. A reconciled fill with no fee waits up
+# to this many polls (one per cycle) for the real fee before it is logged anyway, with a warning event.
+FEE_SETTLE_MAX_POLLS = 3
+
 
 @dataclass(slots=True)
 class PaperOrder:
@@ -162,6 +166,10 @@ class PaperTradingEngine:
         # that happened between cycles rather than assume flat/no-fill.
         # Keyed by order id so a partial fill only logs its new delta.
         self._reconciled_fill_size_by_order_id: dict[str, float] = {}
+        # The order's cumulative fee already logged, so a later partial fill logs only its own share of the fee.
+        self._reconciled_fee_by_order_id: dict[str, float] = {}
+        # Polls a reconciled fill has waited for its fee (see FEE_SETTLE_MAX_POLLS).
+        self._fee_polls_by_order_id: dict[str, int] = {}
         # The position last seen (size, average entry). When it goes flat or flips, the round trip's return is
         # reported to the risk manager, whose Kelly sizer learns from the strategy's own trades.
         self._observed_position: tuple[float, float | None] = (0.0, None)
@@ -1073,6 +1081,9 @@ class PaperTradingEngine:
         fill_size = min(order.size, report.filled_size or order.size)
         execution_price = report.fill_price or price
         cost = report.fee
+        # Reconciliation must not log this fill again if another order later triggers a poll
+        self._reconciled_fill_size_by_order_id[order.id] = fill_size
+        self._reconciled_fee_by_order_id[order.id] = float(cost or 0.0)
         order.filled_size = fill_size
         order.avg_fill_price = execution_price
         order.fees += cost
@@ -1132,8 +1143,11 @@ class PaperTradingEngine:
         if not callable(list_orders) or not callable(recover):
             return []
 
-        pending_orders = [order for order in list_orders() if getattr(order, "status", None) not in {"FILLED", "CANCELED", "REJECTED", "NOT_FOUND"}]
-        if not pending_orders:
+        orders = list_orders()
+        pending_orders = [order for order in orders if getattr(order, "status", None) not in {"FILLED", "CANCELED", "REJECTED", "NOT_FOUND"}]
+        # A fill already seen without its fee keeps polling until the fee arrives (or the wait runs out)
+        awaiting_fee = [order for order in orders if order.order_id in self._fee_polls_by_order_id]
+        if not pending_orders and not awaiting_fee:
             return []
 
         try:
@@ -1159,10 +1173,29 @@ class PaperTradingEngine:
             new_fill_size = total_filled - already_logged
             if new_fill_size <= 0.0:
                 continue
+            total_fee = float(getattr(order, "fee", 0.0) or 0.0)
+            fee = max(total_fee - self._reconciled_fee_by_order_id.get(order.order_id, 0.0), 0.0)
+            if fee <= 0.0:
+                # A zero fee on a real fill usually means the exchange hasn't settled it yet. Logging it now would
+                # write fee=0 into the trade log and the tax ledger (this happened once on Kraken spot, 2026-09-25)
+                polls = self._fee_polls_by_order_id.get(order.order_id, 0) + 1
+                if polls < FEE_SETTLE_MAX_POLLS:
+                    self._fee_polls_by_order_id[order.order_id] = polls
+                    continue
+                if self.trade_logger is not None:
+                    self.trade_logger.log_event(
+                        timestamp=timestamp,
+                        level="WARNING",
+                        event_type="exchange_fee_unsettled",
+                        message=f"logging a fill with no fee after {polls} polls; check the fee against the exchange's history",
+                        source="paper_trading",
+                        metadata={"order_id": order.order_id, "symbol": getattr(order, "symbol", None), "size": new_fill_size},
+                    )
+            self._fee_polls_by_order_id.pop(order.order_id, None)
             self._reconciled_fill_size_by_order_id[order.order_id] = total_filled
+            self._reconciled_fee_by_order_id[order.order_id] = total_fee
 
             fill_price = float(getattr(order, "fill_price", None) or 0.0)
-            fee = float(getattr(order, "fee", 0.0) or 0.0)
             new_trades.append(
                 PaperTrade(
                     order_id=order.order_id,
