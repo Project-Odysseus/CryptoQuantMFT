@@ -155,7 +155,7 @@ flowchart TD
   - It runs startup checks, collects market data, builds signals, runs the paper trading engine, and records runtime health.
   - It now also updates the account-state tracker and exposes a health report with reconciliation data.
 
-### Portfolio layer (several strategies and instruments; not wired into `main.py --runtime` yet)
+### Portfolio layer (several strategies and instruments; `main.py --runtime paper --portfolio PATH`)
 
 Plan and status: `docs/portfolio_plan.md`.
 
@@ -168,6 +168,11 @@ Plan and status: `docs/portfolio_plan.md`.
   adapter per venue (`SandboxCrossMarginPerpAdapter` in `src/execution/cross_margin.py` for paper perps) -> book,
   then reconciliation, logging, Telegram and a checkpoint.
 - `src/portfolio/backtest.py` plus `scripts/research/portfolio_backtest.py`: the same core over history.
+- `src/portfolio/feed.py`: completed exchange candles per (instrument, interval) over REST, loaded concurrently in
+  threads, with each instrument failing on its own. `MockCandleFeed` supplies synthetic candles for smoke runs.
+- `src/portfolio/runtime.py`: `PortfolioRuntime`, the loop. It fetches, finds stale instruments, runs a cycle,
+  alerts once per problem, writes snapshots to SQLite (`portfolio_snapshots`), checks the kill switch and handles
+  SIGTERM.
 
 ## 4. How the pieces actually work together
 

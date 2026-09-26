@@ -43,13 +43,14 @@ from src.portfolio.allocation import Allocator
 from src.portfolio.book import PortfolioBook
 from src.portfolio.config import PortfolioConfig
 from src.portfolio.netting import net_targets
-from src.portfolio.orders import PlannedOrder, SkippedChange, plan_orders
+from src.portfolio.orders import FALLBACK_STEP, PlannedOrder, SkippedChange, plan_orders
 from src.portfolio.risk import RiskAction, apply_portfolio_risk
 from src.portfolio.sleeves import SleeveDecision, SleeveRunner, SleeveState, _Prefix
 from src.runtime.config import BAR_INTERVALS
 from src.utils.telegram import TradeAlert
 
 BarsByKey = Mapping[tuple[str, str], Sequence[Any]]  # (instrument id, interval) -> completed bars, oldest first
+SLEEVE_ERROR_LIMIT = 3  # consecutive failing cycles before a sleeve is disabled until restart
 
 
 @dataclass(slots=True)
@@ -69,6 +70,7 @@ class CycleReport:
     skipped: list[SkippedChange] = field(default_factory=list)
     mismatches: dict[str, dict[str, float]] = field(default_factory=dict)
     adapter_events: list[dict[str, Any]] = field(default_factory=list)
+    sleeve_errors: dict[str, str] = field(default_factory=dict)
 
 
 def build_paper_adapters(
@@ -163,6 +165,9 @@ class PortfolioEngine:
         self.last_sleeve_bar: dict[str, datetime] = {}
         self.last_grid_bar: datetime | None = None
         self.last_grid_close: dict[str, float] = {}
+        self.last_decisions: dict[str, dict[str, Any]] = {}  # sleeve id -> its latest decision, for the dashboard
+        self.sleeve_error_counts: dict[str, int] = {}
+        self.disabled_sleeves: set[str] = set()
         self.cycle = 0
         self.restored = self._load()
 
@@ -189,10 +194,16 @@ class PortfolioEngine:
             if not fresh:
                 continue
             runner = self.runners[sleeve_id]
-            signals = runner.signals(series)  # causal: element i only uses bars up to i, so one pass serves every new bar
-            for index in fresh:
-                self.states[sleeve_id], decision = runner.step(self.states[sleeve_id], _Prefix(series, index + 1), signals[index])
-                report.sleeve_decisions[sleeve_id] = decision
+            try:
+                signals = runner.signals(series)  # causal: element i only uses bars up to i, so one pass serves every new bar
+                for index in fresh:
+                    self.states[sleeve_id], decision = runner.step(self.states[sleeve_id], _Prefix(series, index + 1), signals[index])
+                    report.sleeve_decisions[sleeve_id] = decision
+                    if decision.action not in ("hold", "flat") or sleeve_id not in self.last_decisions:
+                        self.last_decisions[sleeve_id] = {"action": decision.action, "reason": decision.reason, "bar": series[index].timestamp.isoformat()}
+                self.sleeve_error_counts.pop(sleeve_id, None)
+            except Exception as exc:  # noqa: BLE001 - one broken sleeve must not stop the book
+                self._sleeve_failed(sleeve_id, exc, report, now)
             self.last_sleeve_bar[sleeve_id] = series[fresh[-1]].timestamp
 
         latest = max(series[-1].timestamp for series in grid.values())
@@ -222,6 +233,19 @@ class PortfolioEngine:
         self._save()
         return report
 
+    def _sleeve_failed(self, sleeve_id: str, exc: Exception, report: CycleReport, now: datetime) -> None:
+        """Hold the sleeve flat this cycle; after SLEEVE_ERROR_LIMIT failures in a row, disable it until restart."""
+        message = f"{type(exc).__name__}: {exc}"
+        self.states[sleeve_id] = SleeveState(trade_returns=list(self.states[sleeve_id].trade_returns))
+        report.sleeve_errors[sleeve_id] = message
+        count = self.sleeve_error_counts[sleeve_id] = self.sleeve_error_counts.get(sleeve_id, 0) + 1
+        self._event("ERROR", "portfolio_sleeve_error", f"sleeve {sleeve_id} failed ({count} in a row): {message}", {"sleeve": sleeve_id, "count": count}, now)
+        if count >= SLEEVE_ERROR_LIMIT and sleeve_id not in self.disabled_sleeves:
+            self.disabled_sleeves.add(sleeve_id)
+            if self.notifier is not None:
+                self.notifier.send_alert(event_type="portfolio_sleeve_disabled", message=f"Sleeve {sleeve_id} failed {count} cycles in a row and is held flat until restart.",
+                                         metadata={"sleeve": sleeve_id, "error": message})
+
     def _mark_adapters(self, prices: Mapping[str, float], now: datetime) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         for venue, adapter in self.adapters.items():
@@ -242,11 +266,21 @@ class PortfolioEngine:
         adapter = self.adapters[event["venue"]]
         for order in adapter.list_orders():
             if order.order_id.startswith("liquidation-") and order.symbol in event["closed"] and order.order_id not in self.book.liquidations_booked:
-                self.book.apply_fill(symbols[order.symbol], order.side, order.filled_size, order.fill_price, order.fee)
+                self.book.apply_fill(symbols[order.symbol], order.side, self._on_lot_grid(symbols[order.symbol], order.filled_size), order.fill_price, order.fee)
                 self.book.liquidations_booked.append(order.order_id)
 
+    def _on_lot_grid(self, instrument: str, units: float) -> Decimal:
+        """An exchange's float fill size as the exact multiple of the lot step it is (0.07840000000000001 -> 0.0784).
+
+        Without this, float noise accumulates in the Decimal book and a fully
+        closed position is left at 1e-17 instead of 0.
+        """
+        step = Decimal(str(self.config.instruments[instrument].lot_step)) or FALLBACK_STEP
+        return (Decimal(str(units)) / step).to_integral_value() * step
+
     def _decide_and_trade(self, report: CycleReport, *, scales: Mapping[str, float], prices: Mapping[str, float], stale: Sequence[str], now: datetime) -> None:
-        allocated = {sleeve_id: (spec.instrument, self.states[sleeve_id].weight * scales.get(sleeve_id, 0.0)) for sleeve_id, spec in self.sleeves.items()}
+        allocated = {sleeve_id: (spec.instrument, 0.0 if sleeve_id in self.disabled_sleeves else self.states[sleeve_id].weight * scales.get(sleeve_id, 0.0))
+                     for sleeve_id, spec in self.sleeves.items()}
         self.book.set_sleeve_targets(allocated)
         report.targets, attribution = net_targets(allocated)
         equity = float(self.book.equity())
@@ -273,7 +307,7 @@ class PortfolioEngine:
             report.rejected.append(rejection)
             self._event("WARNING", "portfolio_order_rejected", f"{order.side} {order.units} {order.instrument} rejected: {result.message}", rejection, now)
             return
-        self.book.apply_fill(order.instrument, order.side, result.filled_size, result.fill_price, result.fee)
+        self.book.apply_fill(order.instrument, order.side, self._on_lot_grid(order.instrument, result.filled_size), result.fill_price, result.fee)
         fill = {"order_id": order_id, "instrument": order.instrument, "side": order.side, "units": result.filled_size, "price": result.fill_price,
                 "fee": result.fee, "reason": order.reason, "reduce_only": order.reduce_only, "strategy_id": strategy_id, "sleeves": drivers}
         report.fills.append(fill)
@@ -302,6 +336,61 @@ class PortfolioEngine:
             avg_entry_price=float(position.avg_entry) if position and position.units else None, equity=equity,
             pnl=equity - float(self.book.initial_equity), drawdown_pct=max(0.0, 1.0 - equity / peak) if peak > 0 else 0.0, timestamp=now, notes=tuple(notes),
         )
+
+    def flatten(self, *, now: datetime, reason: str) -> CycleReport:
+        """Close every position on every venue with reduce-only orders at the latest marks (the kill switch path)."""
+        self.cycle += 1
+        report = CycleReport(timestamp=now, decided=True, equity=0.0)
+        prices = {instrument: float(price) for instrument, price in self.book.marks.items()}
+        plan = plan_orders(self.book.units(), {}, prices=prices, equity=float(self.book.equity()), instruments=self.config.instruments, band=0.0)
+        report.orders, report.skipped = plan.orders, plan.skipped
+        for number, order in enumerate(plan.orders):
+            self._execute(order, number=number, attribution={}, report=report, now=now)
+        report.mismatches = self.reconcile()
+        report.equity = float(self.book.equity())
+        self._event("WARNING", "portfolio_flattened", f"flattened {len(report.fills)} positions: {reason}", {"reason": reason, "fills": report.fills, "rejected": report.rejected}, now)
+        self._save()
+        return report
+
+    def snapshot(self, report: CycleReport | None = None) -> dict[str, Any]:
+        """What the book holds and why, for the dashboard: instruments, sleeves, risk usage and the last decision."""
+        equity = float(self.book.equity())
+        weights = self.book.weights()
+        attribution = self.book.attribution()
+        adjusted = report.adjusted if report is not None and report.decided else {}
+        instruments = {}
+        for instrument in sorted(self.config.instruments):
+            position = self.book.positions.get(instrument)
+            instruments[instrument] = {
+                "target": adjusted.get(instrument), "weight": weights.get(instrument, 0.0),
+                "units": float(position.units) if position else 0.0, "price": float(self.book.marks.get(instrument, 0)),
+                "realized_pnl": float(position.realized_pnl) if position else 0.0, "fees": float(position.fees) if position else 0.0,
+                "funding": float(position.funding) if position else 0.0,
+            }
+        sleeves = {}
+        for sleeve_id, spec in self.sleeves.items():
+            virtual = self.book.sleeves.get(sleeve_id)
+            price = float(self.book.marks.get(spec.instrument, 0))
+            decision = self.last_decisions.get(sleeve_id, {})
+            sleeves[sleeve_id] = {
+                "instrument": spec.instrument, "strategy": spec.strategy, "own_weight": self.states[sleeve_id].weight,
+                "allocated_weight": float(virtual.units) * price / equity if virtual and equity > 0 else 0.0,
+                "pnl": float(attribution.get(sleeve_id, 0)), "last_action": decision.get("action"), "last_reason": decision.get("reason"),
+                "last_action_bar": decision.get("bar"), "disabled": sleeve_id in self.disabled_sleeves,
+            }
+        gross = sum(abs(weight) for weight in weights.values())
+        peak = float(self.book.peak_equity)
+        risk = self.config.risk
+        return {
+            "portfolio": self.config.name, "cycle": self.cycle, "equity": equity, "initial_equity": float(self.book.initial_equity),
+            "peak_equity": peak, "drawdown": max(0.0, 1.0 - equity / peak) if peak > 0 else 0.0,
+            "day_start_equity": float(self.book.day_start_equity), "gross": gross, "net": sum(weights.values()),
+            "limits": {"max_gross_exposure": risk.max_gross_exposure, "max_net_exposure": risk.max_net_exposure,
+                       "max_instrument_weight": risk.max_instrument_weight, "max_drawdown": risk.max_drawdown, "daily_loss_limit": risk.daily_loss_limit},
+            "instruments": instruments, "sleeves": sleeves, "residual_pnl": float(attribution.get("residual", 0)),
+            "risk_actions": [vars_of(action) for action in (report.risk_actions if report is not None else [])],
+            "fills": len(report.fills) if report is not None else 0,
+        }
 
     # --- reconciliation, logging, checkpoints ---------------------------------------------------------------------
 
@@ -348,6 +437,8 @@ class PortfolioEngine:
             "last_sleeve_bar": {sleeve_id: stamp.isoformat() for sleeve_id, stamp in self.last_sleeve_bar.items()},
             "last_grid_bar": self.last_grid_bar.isoformat() if self.last_grid_bar else None,
             "last_grid_close": self.last_grid_close,
+            "disabled_sleeves": sorted(self.disabled_sleeves),
+            "last_decisions": self.last_decisions,
         }
 
     def _save(self) -> None:
@@ -371,7 +462,20 @@ class PortfolioEngine:
         self.last_sleeve_bar = {sleeve_id: datetime.fromisoformat(stamp) for sleeve_id, stamp in payload["last_sleeve_bar"].items()}
         self.last_grid_bar = datetime.fromisoformat(payload["last_grid_bar"]) if payload.get("last_grid_bar") else None
         self.last_grid_close = {instrument: float(close) for instrument, close in payload["last_grid_close"].items()}
+        self.last_decisions = dict(payload.get("last_decisions", {}))
         return True
+
+    def reset_peak(self, *, now: datetime) -> float:
+        """Restart the drawdown count from today's equity, e.g. after the max-drawdown kill; returns the old peak.
+
+        The kill never lifts by itself (a flat book can't recover its drawdown),
+        so re-arming the book is an explicit, logged operator action.
+        """
+        old = float(self.book.peak_equity)
+        self.book.peak_equity = self.book.equity()
+        self._event("WARNING", "portfolio_peak_reset", f"equity peak reset from {old:,.2f} to {float(self.book.peak_equity):,.2f}", {"old_peak": old}, now)
+        self._save()
+        return old
 
 
 def vars_of(item: Any) -> dict[str, Any]:

@@ -146,6 +146,21 @@ class TradeLogger:
                 )
                 """
             )
+            # One row per portfolio decision (and an hourly heartbeat row): the dashboard's source of truth.
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    portfolio TEXT NOT NULL,
+                    equity REAL NOT NULL,
+                    gross_exposure REAL NOT NULL,
+                    net_exposure REAL NOT NULL,
+                    drawdown REAL NOT NULL,
+                    payload TEXT NOT NULL
+                )
+                """
+            )
             connection.commit()
 
     def log_trade(
@@ -340,6 +355,32 @@ class TradeLogger:
             }
             for timestamp, source, equity, cash, position_size in rows
         ]
+
+    def log_portfolio_snapshot(self, *, timestamp: datetime, snapshot: dict[str, Any]) -> int:
+        """Persist one portfolio snapshot (`PortfolioEngine.snapshot()`): equity, exposure, instruments, sleeves, risk."""
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            cursor = connection.execute(
+                "INSERT INTO portfolio_snapshots (timestamp, portfolio, equity, gross_exposure, net_exposure, drawdown, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (timestamp.isoformat(), str(snapshot["portfolio"]), float(snapshot["equity"]), float(snapshot["gross"]), float(snapshot["net"]),
+                 float(snapshot["drawdown"]), self._serialize_json(snapshot)),
+            )
+            connection.commit()
+            return int(cursor.lastrowid)
+
+    def list_portfolio_snapshots(self, *, portfolio: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+        """Portfolio snapshots, newest first (optionally for one portfolio), with the full payload decoded."""
+        query = "SELECT timestamp, payload FROM portfolio_snapshots"
+        params: list[Any] = []
+        if portfolio is not None:
+            query += " WHERE portfolio = ?"
+            params.append(portfolio)
+        query += " ORDER BY id DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [{"timestamp": timestamp, **self._deserialize_json(payload)} for timestamp, payload in rows]
 
     def list_events(self, limit: int | None = None, *, event_types: Sequence[str] | None = None) -> list[dict[str, Any]]:
         """Return persisted operational events in reverse chronological order.

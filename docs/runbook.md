@@ -109,6 +109,39 @@ is sent once. After a restart, trades from the warmup history are not re-sent. M
 are summarised in a single line. Other runtime alerts (stale data, reconciliation, risk stops, heartbeat) arrive as
 `ALERT <event>` followed by readable lines.
 
+## Running a portfolio (several strategies and coins)
+
+A portfolio is one TOML file (`config/portfolio.example.toml`; every field is in `docs/portfolio_plan.md`, section 5).
+Check it, backtest it, then paper-run it:
+
+```bash
+python main.py --portfolio-check config/portfolio.example.toml
+python scripts/research/portfolio_backtest.py config/portfolio.example.toml
+python main.py --runtime paper --portfolio config/portfolio.example.toml --runtime-iterations 0 --runtime-interval 60
+python main.py --portfolio config/portfolio.example.toml --dashboard      # from another terminal, any time
+```
+
+- `--runtime-iterations 0` runs until Ctrl-C (or SIGTERM). The current cycle finishes and the checkpoint is written
+  before it exits, so restarting with the same command resumes the same positions and decisions.
+- **Market data:** completed Kraken candles over REST, the same cached series the research used, polled every
+  `--runtime-interval` seconds. Decisions happen only when a new grid bar completes (the shortest sleeve interval,
+  e.g. 4h). Other cycles only mark the book.
+- **Execution:** `paper` and `live_dry_run` both trade against sandbox accounts shaped like the venues: one
+  cross-margin account per perp venue, with fees, slippage, funding and liquidation. `--runtime live` is refused for
+  portfolios until phase 6.
+- **State:** `data/portfolio/<name>/engine.json` (book, sleeves, allocator) and `paper_<venue>.json` (the sandbox
+  account). Delete the folder to start fresh. `--use-mock-connector` uses synthetic candles in a fresh temp folder, so
+  it never touches the real paper state.
+- **Telegram:** one message per fill (which sleeves drove it and which risk limits acted). There are also alerts,
+  sent once when a problem starts and once when it clears, for: stale or failing market data per instrument, a risk
+  limit acting, rejected orders, reconciliation mismatches, a sleeve disabled after 3 failing cycles, and failed
+  cycles (the runtime stops itself after 5 in a row).
+- **Kill switch:** `python main.py --kill-switch` from any terminal. At its next cycle the portfolio closes every
+  position with reduce-only orders and stops.
+- **After the max-drawdown kill:** the book stays flat until you re-arm it with `--portfolio-reset-peak` (logged).
+- **Currency:** one currency per portfolio for now. USD perps are fine, but EUR spot mixed with USD perps is refused
+  until an FX feed exists.
+
 ## Daily operational checks
 
 After a run starts, verify the following:

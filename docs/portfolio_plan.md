@@ -4,9 +4,10 @@ A step-by-step plan for running several strategies on several coins and venues a
 that you, or any coding agent, can pick it up cold and continue. It doesn't depend on who wrote the earlier steps.
 Each step says which files to touch, what to build, how to test it, and how to tell it's done.
 
-Status as of 2026-09-26: Phases 0-3 are done: research, the pure core, and the stateful book with paper execution
-through a cross-margin sandbox, checkpoints and restarts. Phase 4 (wiring `--portfolio` into the runtime with live
-market data, reporting and alerts) is next (see the tracker in section 10).
+Status as of 2026-09-26: Phases 0-4 are done. A portfolio config runs in paper with
+`main.py --runtime paper --portfolio PATH --runtime-iterations 0`, on live Kraken candles, through a cross-margin
+sandbox, with snapshots, a dashboard and alerts. Phase 5 (a multi-day paper/dry-run soak, ideally on an always-on
+server) is next (see the tracker in section 10).
 
 ---
 
@@ -417,6 +418,15 @@ Python and need no network, so they are good hotspot work.
 - Tests: two instruments with different intervals produce the right completed bars; one failing connector marks
   only its instrument stale.
 
+- Findings and decision (2026-09-26): **REST candles, not a WebSocket feed.** The single-strategy runtime builds
+  bars from ticker polls. A 4h or daily bar built that way only sees prices at poll times, so its high and low are
+  too narrow (ATR-based rules then see different bars than research did), and a restart mid-bar leaves a gap. The
+  portfolio runtime instead reads the exchange's completed candles (`src/portfolio/feed.py`, on the same cached
+  series the research used). Polling once a minute sees a new 4h candle within a minute, a delay that is noise for
+  4h and daily decisions, and it costs a few requests a minute, far inside Kraken's public limits. A WebSocket feed
+  becomes worth it for intraday or order-book strategies, and for private fill updates in live trading. The
+  blocking HTTP calls run in worker threads, so the event loop never blocks.
+
 **4.2 `--portfolio` runtime**
 - Files: `main.py` (`--portfolio PATH` with `--runtime`), a new `PortfolioOrchestrator` or an extension of
   `RuntimeOrchestrator`.
@@ -526,8 +536,8 @@ Python and need no network, so they are good hotspot work.
 - **Validate a config:** `python main.py --portfolio-check config/portfolio.example.toml`.
 - **Backtest a config:** `python scripts/research/portfolio_backtest.py config/portfolio.example.toml`.
 - **Try a new signal as a sleeve:** `notebooks/signal_research.ipynb`, section 7 (`candidate_report`).
-- **Run in paper:** `python main.py --runtime paper --portfolio config/portfolio.example.toml --dashboard` (after
-  4.2).
+- **Run in paper:** `python main.py --runtime paper --portfolio config/portfolio.example.toml --runtime-iterations 0`
+  (until Ctrl-C). Then `python main.py --portfolio config/portfolio.example.toml --dashboard` shows it.
 - **Sizing options:** `python main.py --list-sizing`.
 - **Add a sleeve:**
   1. Copy a `[[sleeves]]` block, give it a new `id`, and change the instrument, strategy and params.
@@ -554,10 +564,10 @@ Python and need no network, so they are good hotspot work.
 - [x] 3.1 Portfolio book (2026-09-26): `src/portfolio/book.py` (`PortfolioBook`), tests in `tests/test_portfolio_book.py`. It covers spot and linear-perp accounting in `Decimal`, cash per venue in the venue's currency, FX to base, funding, the peak and UTC day start for the risk rules, virtual sleeve positions with the residual reported, and an exact JSON round trip.
 - [x] 3.2 Paper execution through sandbox adapters (2026-09-26): `src/portfolio/engine.py` (`PortfolioEngine`, `build_paper_adapters`), tests in `tests/test_portfolio_engine.py`. Perps go through the cross-margin sandbox and spot through the spot sandbox. Reduce-only orders pass through, and funding and liquidations are booked in the book the same way the exchange books them. The book is reconciled every cycle, and a mismatch is logged and alerted. Fills are logged with the driving sleeve (or `portfolio` when several net) as `strategy_id`, and each fill sends a Telegram message listing its sleeves and risk actions. Pre-risk targets match `run_book` bar by bar.
 - [x] 3.3 Checkpoint and restart (2026-09-26): the engine (book, sleeve states, allocator, last processed bars) and the cross-margin sandbox each write an atomic JSON file. A run killed mid-way and restarted gives the same fills and book as an uninterrupted run. Repeating a cycle decides nothing twice.
-- [ ] 4.1 Multi-instrument market data
-- [ ] 4.2 `--portfolio` runtime
-- [ ] 4.3 Persistence and reporting
-- [ ] 4.4 Alerts
+- [x] 4.1 Multi-instrument market data (2026-09-26): `CandleFeed` fetches completed Kraken candles per (instrument, interval) concurrently, in threads. A failing key keeps its last good bars and is reported; an instrument is stale when its fetch fails or its bar is older than `stale_after_bars`. See the REST decision under 4.1.
+- [x] 4.2 `--portfolio` runtime (2026-09-26): `main.py --runtime paper|live_dry_run --portfolio PATH` (live is refused) runs `PortfolioRuntime` (`src/portfolio/runtime.py`). `--runtime-iterations 0` runs until Ctrl-C/SIGTERM, with a clean checkpoint. The kill switch flattens everything and stops the loop. `--portfolio-reset-peak` re-arms the book after the drawdown kill. Mock runs use a temp state folder. Tests are in `tests/test_portfolio_runtime.py`.
+- [x] 4.3 Persistence and reporting (2026-09-26): a `portfolio_snapshots` table (on every decision, and hourly), decisions and fills as operational events, and `main.py --portfolio PATH --dashboard` (instruments' target vs actual, sleeves' own and allocated weight, P&L and last action, the residual, acting risk limits, recent alerts). A daily summary per sleeve is still to do.
+- [x] 4.4 Alerts (2026-09-26): stale or failing data per instrument, risk limits acting, rejected orders, reconciliation mismatches, sleeves disabled after 3 failing cycles, and repeated cycle errors. Each is sent once when it starts and once when it clears.
 - [ ] 5 `live_dry_run` soak
 - [ ] 6 Live readiness (user go-ahead)
 - [ ] 7 Enhancements

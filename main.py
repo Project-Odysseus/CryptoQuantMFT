@@ -1639,6 +1639,111 @@ def _run_kraken_close_submission(
     return submission
 
 
+PORTFOLIO_KILL_SWITCH_FILE = Path("data/kill_switch_state.json")  # the same file `--kill-switch` writes
+
+
+def run_portfolio_runtime(args: argparse.Namespace) -> int:
+    """Run a portfolio config on live Kraken candles (or mock candles) through paper sandbox exchanges.
+
+    Paper and live_dry_run both trade against sandbox accounts shaped like the
+    venues; live portfolio trading is not available yet (portfolio plan phase 6),
+    so it is refused here before anything starts.
+    """
+    import tempfile
+
+    from src.portfolio.book import VENUE_CURRENCY, PortfolioBook
+    from src.portfolio.config import PortfolioConfigError, load_portfolio_config
+    from src.portfolio.engine import PortfolioEngine, build_paper_adapters
+    from src.portfolio.feed import CandleFeed, MockCandleFeed
+    from src.portfolio.runtime import PortfolioRuntime
+    from src.utils.telegram import TelegramNotifier
+
+    if args.runtime == "live":
+        print("Live portfolio trading is not available yet (docs/portfolio_plan.md, phase 6). Use --runtime paper or live_dry_run.")
+        return 2
+    try:
+        config = load_portfolio_config(args.portfolio)
+    except PortfolioConfigError as exc:
+        print(f"Portfolio config is not valid.\n{exc}")
+        return 1
+    foreign = sorted({VENUE_CURRENCY.get(spec.venue, config.base_currency) for spec in config.instruments.values()} - {config.base_currency})
+    if foreign:
+        print(f"This portfolio has venues in {foreign} and base {config.base_currency}; the runtime has no live FX feed yet. Use one currency per portfolio for now.")
+        return 1
+    if args.runtime_iterations < 0:
+        print("--runtime-iterations must be 0 (run until Ctrl-C) or more")
+        return 1
+    mock = bool(args.use_mock_connector)
+    if args.portfolio_state_dir:
+        state_dir = Path(args.portfolio_state_dir)
+    elif mock:
+        state_dir = Path(tempfile.mkdtemp(prefix="portfolio-mock-"))  # mock candles must never touch the real paper state
+    else:
+        state_dir = Path("data/portfolio") / config.name
+    trade_logger = TradeLogger(database_path=settings.database_path)
+    notifier = TelegramNotifier()
+    book = PortfolioBook.from_config(config)
+    engine = PortfolioEngine(config, adapters=build_paper_adapters(config, book, state_dir=state_dir), book=book, trade_logger=trade_logger,
+                             notifier=notifier, mode=args.runtime, state_path=state_dir / "engine.json")
+    if args.portfolio_reset_peak:
+        old_peak = engine.reset_peak(now=datetime.now(timezone.utc))
+        print(f"Equity peak reset from {old_peak:,.2f} to {float(engine.book.peak_equity):,.2f}")
+    feed = MockCandleFeed(config.instruments, grid_interval=engine.grid_interval) if mock else CandleFeed(config.instruments)
+    runtime = PortfolioRuntime(engine, feed, interval_seconds=args.runtime_interval, trade_logger=trade_logger, notifier=notifier,
+                               kill_switch_file=PORTFOLIO_KILL_SWITCH_FILE)
+    print(f"Portfolio '{config.name}' ({args.runtime}{', mock candles' if mock else ''}): state in {state_dir}, "
+          f"{'running until Ctrl-C' if args.runtime_iterations == 0 else f'{args.runtime_iterations} cycles'}, every {args.runtime_interval:g}s"
+          f"{', resumed from checkpoint' if engine.restored else ''}")
+    reports = asyncio.run(runtime.run(iterations=args.runtime_iterations))
+    decided = [report for report in reports if report.decided]
+    fills = sum(len(report.fills) for report in reports)
+    print(f"Stopped after {len(reports)} cycles ({runtime.stop_reason or 'done'}): {len(decided)} decisions, {fills} fills, equity {float(engine.book.equity()):,.2f}")
+    if args.dashboard:
+        print_portfolio_dashboard(args.portfolio)
+    return 0
+
+
+def print_portfolio_dashboard(config_path: str) -> int:
+    """Print the latest portfolio snapshot from SQLite: what the book holds, why, and how each sleeve is doing."""
+    from src.portfolio.config import PortfolioConfigError, load_portfolio_config
+
+    try:
+        name = load_portfolio_config(config_path).name
+    except PortfolioConfigError as exc:
+        print(f"Portfolio config is not valid.\n{exc}")
+        return 1
+    trade_logger = TradeLogger(database_path=settings.database_path)
+    snapshots = trade_logger.list_portfolio_snapshots(portfolio=name, limit=1)
+    if not snapshots:
+        print(f"No snapshots for portfolio '{name}' yet: run it with --portfolio {config_path} --runtime paper.")
+        return 0
+    snap = snapshots[0]
+    limits = snap["limits"]
+    change = snap["equity"] / snap["initial_equity"] - 1.0 if snap["initial_equity"] else 0.0
+    print(f"Portfolio '{name}' at {snap['timestamp'][:16]} UTC (cycle {snap['cycle']})")
+    print(f"Equity {snap['equity']:,.2f} ({change:+.1%}), peak {snap['peak_equity']:,.2f}, drawdown {snap['drawdown']:.1%} (flatten at {limits['max_drawdown']:.0%})")
+    print(f"Exposure: gross {snap['gross']:.2f}x of {limits['max_gross_exposure']:g}x, net {snap['net']:+.2f}x of {limits['max_net_exposure']:g}x")
+    print("Instruments (target and actual as a share of equity):")
+    for instrument, row in snap["instruments"].items():
+        target = f"{row['target']:+.1%}" if row["target"] is not None else "  n/a"
+        print(f"  {instrument:<24} target {target:>7}  actual {row['weight']:+7.1%}  units {row['units']:+.6g} @ {row['price']:,.2f}  "
+              f"realized {row['realized_pnl']:+,.2f}  fees {row['fees']:,.2f}  funding {row['funding']:+,.2f}")
+    print("Sleeves (own target if alone; allocated share after scaling; P&L from its virtual position):")
+    for sleeve_id, row in snap["sleeves"].items():
+        last = (f"{row['last_action']}" + (f" ({row['last_reason']})" if row["last_reason"] else "") + (f" on {row['last_action_bar'][:16]}" if row.get("last_action_bar") else "")) if row["last_action"] else "-"
+        print(f"  {sleeve_id:<16} {row['instrument']:<24} {row['strategy']:<26} own {row['own_weight']:+6.1%}  allocated {row['allocated_weight']:+6.1%}  "
+              f"P&L {row['pnl']:+,.2f}  last {last}{'  [DISABLED]' if row['disabled'] else ''}")
+    print(f"Residual P&L (netting, band, rounding, fees, funding): {snap['residual_pnl']:+,.2f}")
+    if snap["risk_actions"]:
+        print("Risk limits acting at the last decision: " + "; ".join(f"{a['rule']} {a['instrument']} {a['before']:+.1%} -> {a['after']:+.1%}" for a in snap["risk_actions"]))
+    alerts = [event for event in trade_logger.list_events(limit=200, event_types=["portfolio_alert", "portfolio_alert_cleared"]) if event["source"] == "portfolio"][:5]
+    if alerts:
+        print("Recent alerts:")
+        for event in alerts:
+            print(f"  {event['timestamp'][:16]} {event['message']}")
+    return 0
+
+
 def telegram_test() -> int:
     """Send one sample trade message, marked TEST, so delivery and formatting can be checked end to end.
 
@@ -1719,6 +1824,9 @@ def main() -> None:
     parser.add_argument("--sizing-params", default="{}", help="JSON parameters for --sizing, e.g. '{\"target_annual_vol\": 0.5}' for vol_target or '{\"kelly_fraction\": 0.5, \"min_trades\": 20}' for kelly")
     parser.add_argument("--list-sizing", action="store_true", help="Print every sizing method with its parameters and defaults, then exit")
     parser.add_argument("--telegram-test", action="store_true", help="Send one sample trade message (marked TEST) to the Telegram chat in .env, to check delivery, then exit")
+    parser.add_argument("--portfolio", metavar="PATH", default=None, help="Run a portfolio config (several sleeves and instruments) with --runtime paper or live_dry_run; with --dashboard alone, show its latest snapshot. --runtime-iterations 0 runs until Ctrl-C")
+    parser.add_argument("--portfolio-state-dir", default=None, help="Where the portfolio checkpoint and paper exchange state live (default data/portfolio/<name>; a fresh temp dir with --use-mock-connector)")
+    parser.add_argument("--portfolio-reset-peak", action="store_true", help="Restart the portfolio's drawdown count from current equity before running (re-arms it after the max-drawdown kill); logged")
     parser.add_argument("--portfolio-check", metavar="PATH", default=None, help="Validate a portfolio TOML (sleeves, instruments, allocation, risk limits) and print the resolved plan, then exit. Touches no network or database")
     parser.add_argument("--target-annual-vol", type=float, default=None, help="Shorthand for --sizing vol_target --sizing-params '{\"target_annual_vol\": X}' (0.5 = 50%% a year; EWMA forecast, 10-day half-life)")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures trades perpetual futures: the in-process margin sandbox under live_dry_run, real Kraken Futures orders under live")
@@ -1790,6 +1898,12 @@ def main() -> None:
         raise SystemExit(portfolio_check(args.portfolio_check))
     if args.telegram_test:
         raise SystemExit(telegram_test())
+    if args.portfolio:
+        if args.runtime:
+            raise SystemExit(run_portfolio_runtime(args))
+        if args.dashboard:
+            raise SystemExit(print_portfolio_dashboard(args.portfolio))
+        parser.error("--portfolio needs --runtime paper|live_dry_run (to run it) or --dashboard (to show it)")
     try:
         runtime_config = build_runtime_config_from_args(args, argv=sys.argv[1:])
         if args.runtime:
