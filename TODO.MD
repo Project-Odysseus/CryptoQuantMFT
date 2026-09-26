@@ -25,7 +25,7 @@ Tick items here, and in those files, when they are done.
 - [ ] An always-on machine (section 3)
 - [ ] A paper soak of `config/portfolio.btc_live.toml` for 2-4 weeks (portfolio plan phase 5)
 - [ ] Run it live (runbook, "Live portfolio trading"). In the first week, check the dashboard, drift alerts and the tax queue daily
-- [ ] Trigger the kill switch once against a real open position at minimum size (`--kill-switch` while the live book holds a lot)
+- [x] Trigger the kill switch once against a real open position at minimum size (2026-09-26: `--kill-switch` now closes Kraken Futures positions and cancels orders on its own; verified live against a 0.0001 BTC long). In the first live week, trigger it once more while the book runs
 - [ ] Funding and fees from Kraken's account log. They are estimated from the public hourly rates and the taker rate for now; the equity-drift alert catches gaps
 - [ ] The open items in `todo_important.md`
 

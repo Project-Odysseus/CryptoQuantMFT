@@ -42,8 +42,12 @@ mirror them in `TODO.MD`.
   10%, and the hard stop is set to 10% (it had inherited 2%, which would have shut the runtime down routinely)
 - [x] **Paper `run()` can open a short from flat** (the sell used to be cancelled; fixed 2026-09-26 with a
   regression test)
-- [ ] **Futures: trigger the kill switch once against a real open position at minimum size** (mirrors `TODO.MD`
-  section 1)
+- [x] **Futures: trigger the kill switch once against a real open position at minimum size.** Done 2026-09-26: a
+  0.0001 BTC long on PF_XBTUSD (bought at 84,140) was closed by `--kill-switch` with a reduce-only market sell
+  about 1 s after it ran (84,136). Kraken was flat with no orders afterwards; P&L -0.0004 USD plus fees 0.0084 USD
+  matched the account's equity change (19.3562 -> 19.3474 USD) exactly; both legs are in the trade log, and
+  the realized P&L and both fees are in the tax ledger. Not yet seen live: the kill switch while a live portfolio is
+  running (its runtime also flattens; covered by tests, and reduce-only makes a double close harmless)
 
 Dropped: Kraken/Firi counterparty monitoring (all trading is on Kraken).
 
