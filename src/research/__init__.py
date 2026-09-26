@@ -13,12 +13,14 @@ from __future__ import annotations
 import pandas as pd
 
 from src.research.catalog import CATALOG, StrategySpec, build_strategy, get_spec
+from src.research.execution import FillModel, simulate_fills
 from src.research.engine import CostSettings, ResearchRun, compare, load_bars, run_strategy, segment_metrics, summarize, sweep
 from src.research.plots import plot_heatmap, plot_run, sweep_axes
 
 __all__ = [
     "CATALOG",
     "CostSettings",
+    "FillModel",
     "ResearchRun",
     "StrategySpec",
     "build_strategy",
@@ -30,6 +32,7 @@ __all__ = [
     "plot_run",
     "run_strategy",
     "segment_metrics",
+    "simulate_fills",
     "summarize",
     "sweep",
     "sweep_axes",

@@ -120,8 +120,13 @@ These choices are deliberate. They are what makes the numbers comparable and har
 - **Full size, no risk overlay.** Every trade uses 100% of equity with no leverage, stops or volatility sizing, so the
   numbers measure the signal. Sizing and stops are a separate layer that comes after a signal has earned it.
 - **Mark-to-market equity.** Equity is valued at every bar's close, so drawdowns inside open trades count.
-- **Trades execute at the close of the bar that produced the signal.** This is slightly optimistic. On 24/7 crypto
-  markets the next open is essentially the same price, but a few bps of slippage are built into the cost default.
+- **Trades execute at the close of the bar that produced the signal** (taker orders), unless you pass a fill model.
+  On 24/7 crypto markets the next open is essentially the same price, and a few bps of slippage are built into the
+  cost default. For limit orders use `fills=FillModel.maker(...)` (CLI: `--fills maker --max-wait-bars N
+  --on-timeout cancel|requote|taker`): orders fill only when a later bar trades through the limit, which captures
+  missed trades and adverse selection. Never judge a maker strategy with just a lower fee (`--maker`): that
+  shortcut assumes every limit order fills at the price you wanted, and it made a losing intraday strategy look
+  like Sharpe 1.
 - **An in-sample / holdout split in time.** The first 70% of bars is in-sample (IS) and the last 30% is holdout (HO).
   Both are measured on the same equity curve, so a position spanning the boundary is split correctly.
   **Choose parameters by IS numbers only.** HO exists to check whether that choice holds up on data it never saw.

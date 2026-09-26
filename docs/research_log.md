@@ -5,6 +5,34 @@ Dated findings from strategy research, newest first. Methodology and column mean
 
 ---
 
+## 2026-09-26 (latest): Realistic limit-order fills remove the intraday maker edge
+
+`src/research/execution.py` now simulates resting post-only limit orders: an order at the signal close fills only
+if a later bar trades through it by `through_bps` (1 bp by default), all-or-nothing at the limit price; unfilled
+orders are cancelled, re-quoted at the new close, or crossed as taker orders. Use `fills=FillModel.maker(...)` in
+the API or `--fills maker` on the research CLI; `scripts/research/intraday_study.py` compares all variants.
+
+**15m walk-forward forecast, 2021-2026, Sharpe** (thresholds in bps of forecast 4h return):
+
+| | zero cost | taker at close | maker fee, always filled (old shortcut) | maker, cancel after 1 bar | maker, requote | maker, then taker after 2 bars |
+| --- | --- | --- | --- | --- | --- | --- |
+| ETH 30, long/short | 1.31 | 0.07 | 1.07 | 0.14 | 0.35 | 0.33 |
+| ETH 20, long/short | 1.33 | -0.89 | 0.89 | -0.43 | -0.29 | -0.43 |
+| BTC 20, long/short | 0.79 | -0.98 | 0.44 | -0.91 | -0.40 | -0.49 |
+
+- **The old maker shortcut was a mirage.** Every realistic variant is far below it, and BTC is negative in all of
+  them.
+- **It isn't about missed fills alone.** 88-89% of orders fill even when giving up after one bar, and nearly all
+  with re-quoting. The damage is adverse selection: the orders that fill are the ones where price moved against the
+  new position first, and the trades that ran away were the good ones.
+- **Slow strategies don't care.** Daily long-only Keltner and MA crossover (2020-2026) have Sharpe within +/-0.05
+  of each other under every execution variant, because they trade a few times a year.
+
+**Consequence:** with OHLCV features, an intraday edge has to survive taker costs on its own. The next steps are
+better information (positioning, funding, order flow), not cheaper execution assumptions.
+
+---
+
 ## 2026-09-26 (later): Intraday, 15m and 1h bars, BTC and ETH perpetuals 2020-2026
 
 **Question:** is there an edge at holding periods of hours, net of costs? **Short answer: not from price and volume

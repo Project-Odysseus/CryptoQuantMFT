@@ -35,6 +35,7 @@ from src.backtest.simple_backtest import BacktestResult, SimpleBacktester, Strat
 from src.backtest.strategies import make_long_only, make_regime_gated
 from src.data.historical import load_ohlcv_csv, load_or_fetch_kraken_history
 from src.research.catalog import CATALOG, StrategySpec, build_strategy
+from src.research.execution import FillModel, simulate_fills
 
 INTERVALS: dict[str, int] = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400, "1w": 604800}
 KRAKEN_MAX_CANDLES = 720
@@ -77,11 +78,13 @@ class CostSettings:
     fee_pct: float = 0.40
     slippage_bps: float = 10.0
     funding_pct_per_day: float = 0.0
+    # Fee for resting limit orders, used by the fill simulator (`fills=FillModel.maker()`); None = same as fee_pct.
+    maker_fee_pct: float | None = None
 
     @classmethod
     def spot(cls, *, maker: bool = False) -> "CostSettings":
         """Kraken spot: 0.40% taker + 10 bps slippage, or 0.25% maker with no slippage assumed."""
-        return cls(fee_pct=0.25, slippage_bps=0.0) if maker else cls(fee_pct=0.40, slippage_bps=10.0)
+        return cls(fee_pct=0.25, slippage_bps=0.0, maker_fee_pct=0.25) if maker else cls(fee_pct=0.40, slippage_bps=10.0, maker_fee_pct=0.25)
 
     @classmethod
     def perp(cls, *, maker: bool = False, funding_pct_per_day: float = 0.01) -> "CostSettings":
@@ -94,7 +97,9 @@ class CostSettings:
         case and 0.10 is extreme. The 5 bps taker slippage is still an
         assumption.
         """
-        return cls(fee_pct=0.02, slippage_bps=0.0, funding_pct_per_day=funding_pct_per_day) if maker else cls(fee_pct=0.05, slippage_bps=5.0, funding_pct_per_day=funding_pct_per_day)
+        if maker:
+            return cls(fee_pct=0.02, slippage_bps=0.0, funding_pct_per_day=funding_pct_per_day, maker_fee_pct=0.02)
+        return cls(fee_pct=0.05, slippage_bps=5.0, funding_pct_per_day=funding_pct_per_day, maker_fee_pct=0.02)
 
     def cost_model(self) -> CostModel | None:
         """Build the backtester's cost model, or None when costs are switched off."""
@@ -178,6 +183,7 @@ class ResearchRun:
     measure_start: int
     split_index: int
     metrics: dict[str, dict[str, float]]
+    fill_stats: dict[str, float] | None = None
 
     def metrics_table(self) -> pd.DataFrame:
         """Metrics as a table: one row per metric, one column per segment."""
@@ -208,6 +214,7 @@ def run_strategy(
     holdout_fraction: float = 0.3,
     measure_start: int | None = None,
     label: str | None = None,
+    fills: FillModel | None = None,
 ) -> ResearchRun:
     """Backtest one strategy on one symbol and measure the in-sample and holdout segments.
 
@@ -218,6 +225,11 @@ def run_strategy(
         measure_start: First bar counted in the in-sample metrics. Defaults
             to the strategy's warmup; pass a shared value to line several
             runs up on the same dates.
+        fills: None keeps the classic backtester (every position change
+            fills at the signal close). A `FillModel` routes the strategy's
+            target positions through `simulate_fills` instead, e.g.
+            `FillModel.maker()` for resting limit orders that only fill when
+            the market trades through them.
     """
     resolved_bars = list(bars)
     resolved_params = dict(params or {})
@@ -239,9 +251,27 @@ def run_strategy(
             "Load more history, use a finer interval, or shrink the windows."
         )
 
-    result = SimpleBacktester(strategy=strategy_fn, initial_equity=1000.0, cost_model=resolved_costs.cost_model()).run(resolved_bars)
     interval_seconds = _infer_interval_seconds(resolved_bars)
-    result = apply_funding(result, resolved_costs.funding_pct_per_day, interval_seconds=interval_seconds)
+    fill_stats: dict[str, float] | None = None
+    if fills is None:
+        result = SimpleBacktester(strategy=strategy_fn, initial_equity=1000.0, cost_model=resolved_costs.cost_model()).run(resolved_bars)
+        result = apply_funding(result, resolved_costs.funding_pct_per_day, interval_seconds=interval_seconds)
+    else:
+        signal_series = getattr(strategy_fn, "signal_series", None)
+        if callable(signal_series):
+            targets = np.sign(np.asarray(signal_series(resolved_bars), dtype=float))
+        else:
+            targets = np.array([np.sign(float(strategy_fn(resolved_bars[: i + 1], i, bar) or 0)) for i, bar in enumerate(resolved_bars)])
+        result, stats = simulate_fills(
+            resolved_bars,
+            targets,
+            taker_fee_pct=resolved_costs.fee_pct,
+            maker_fee_pct=resolved_costs.fee_pct if resolved_costs.maker_fee_pct is None else resolved_costs.maker_fee_pct,
+            slippage_bps=resolved_costs.slippage_bps,
+            funding_pct_per_day=resolved_costs.funding_pct_per_day,
+            fills=fills,
+        )
+        fill_stats = stats.as_dict()
     metrics = {"in_sample": segment_metrics(result, resolved_bars, start, split, interval_seconds=interval_seconds)}
     if split < len(resolved_bars):
         metrics["holdout"] = segment_metrics(result, resolved_bars, split, len(resolved_bars), interval_seconds=interval_seconds)
@@ -257,6 +287,7 @@ def run_strategy(
         measure_start=start,
         split_index=split,
         metrics=metrics,
+        fill_stats=fill_stats,
     )
 
 
@@ -314,11 +345,12 @@ def compare(
     holdout_fraction: float = 0.3,
     measure_start: int | None = None,
     progress: bool = False,
+    fills: FillModel | None = None,
 ) -> pd.DataFrame:
     """Run each strategy at its catalog defaults on every symbol in `data` (symbol -> bars)."""
     names = list(strategies) if strategies is not None else list(CATALOG)
     jobs = [(name, _build_from_name(name), dict(CATALOG[name].defaults) if name in CATALOG else {}) for name in names]
-    return _run_jobs(data, jobs, long_only=long_only, costs=costs, holdout_fraction=holdout_fraction, measure_start=measure_start, progress=progress)
+    return _run_jobs(data, jobs, long_only=long_only, costs=costs, holdout_fraction=holdout_fraction, measure_start=measure_start, progress=progress, fills=fills)
 
 
 def sweep(
@@ -331,6 +363,7 @@ def sweep(
     holdout_fraction: float = 0.3,
     measure_start: int | None = None,
     progress: bool = False,
+    fills: FillModel | None = None,
 ) -> pd.DataFrame:
     """Run every parameter combination of a grid on every symbol in `data` (symbol -> bars).
 
@@ -356,7 +389,7 @@ def sweep(
         builder = _build_from_factory(strategy)
         name = strategy.__name__
     jobs = [(name, builder, combo) for combo in combos]
-    return _run_jobs(data, jobs, long_only=long_only, costs=costs, holdout_fraction=holdout_fraction, measure_start=measure_start, progress=progress)
+    return _run_jobs(data, jobs, long_only=long_only, costs=costs, holdout_fraction=holdout_fraction, measure_start=measure_start, progress=progress, fills=fills)
 
 
 def summarize(results: pd.DataFrame, metric: str = "sharpe") -> pd.DataFrame:
@@ -432,6 +465,7 @@ def _run_jobs(
     holdout_fraction: float,
     measure_start: int | None,
     progress: bool,
+    fills: FillModel | None = None,
 ) -> pd.DataFrame:
     modes = [long_only] if isinstance(long_only, bool) else list(long_only)
     resolved_costs = costs or CostSettings()
@@ -450,6 +484,7 @@ def _run_jobs(
                     holdout_fraction=holdout_fraction,
                     measure_start=start,
                     label=name,
+                    fills=fills,
                 )
                 rows.append(_result_row(run, symbol=symbol, long_only=mode))
         if progress:
@@ -476,6 +511,8 @@ def _result_row(run: ResearchRun, *, symbol: str, long_only: bool) -> dict[str, 
     for segment, prefix in (("in_sample", "is"), ("holdout", "ho")):
         for key in METRICS:
             row[f"{prefix}_{key}"] = run.metrics.get(segment, {}).get(key, float("nan"))
+    if run.fill_stats is not None:
+        row.update({f"fill_{key}": value for key, value in run.fill_stats.items()})
     return row
 
 

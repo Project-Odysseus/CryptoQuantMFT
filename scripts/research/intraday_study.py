@@ -6,7 +6,7 @@ Two parts, both on Kraken perpetual candles from 2020 (see load_bars(source="per
    return, how many years keep the same sign, and time-of-day seasonality.
 2. Combined forecast: a walk-forward ridge over all features (refit monthly on
    past data only), traded only when the forecast exceeds a threshold, at
-   taker, maker and zero cost.
+   taker fills, the old optimistic maker shortcut, and realistic resting limit orders.
 
 Usage:
     python scripts/research/intraday_study.py --interval 15m
@@ -31,12 +31,21 @@ import numpy as np
 import pandas as pd
 
 from src.backtest.indicators import rolling_max, rolling_min, rolling_std
-from src.backtest.simple_backtest import SimpleBacktester
-from src.research import CostSettings, load_bars
+from src.research import CostSettings, FillModel, load_bars, simulate_fills
 from src.research.features import bars_frame, bucket_table, forward_return, ic_by_year, information_coefficient, past_return, seasonality, volatility_scaled, zscore
 from src.research.forecast import threshold_positions, walk_forward_ridge
 
 BARS_PER_HOUR = {"15m": 4, "1h": 1}
+# How each position change is executed. "maker fee at close" is the old optimistic shortcut (maker fee, always
+# filled at the signal close); the realistic maker variants only fill when the market trades through the limit.
+EXECUTION_VARIANTS = {
+    "zero cost": (CostSettings(0.0, 0.0, 0.0, maker_fee_pct=0.0), FillModel()),
+    "taker at close": (CostSettings.perp(), FillModel()),
+    "maker fee at close": (CostSettings.perp(maker=True), FillModel()),
+    "maker, cancel after 1 bar": (CostSettings.perp(), FillModel.maker(max_wait_bars=1, on_timeout="cancel")),
+    "maker, requote": (CostSettings.perp(), FillModel.maker(max_wait_bars=1, on_timeout="requote")),
+    "maker, taker after 2 bars": (CostSettings.perp(), FillModel.maker(max_wait_bars=2, on_timeout="taker")),
+}
 
 
 def build_features(frame: pd.DataFrame, other: pd.DataFrame, bars_per_day: int) -> pd.DataFrame:
@@ -108,22 +117,22 @@ def main() -> None:
         span_years = (frame.index[-1] - frame.index[first]).days / 365.25
         for threshold in args.thresholds:
             for long_only in (False, True):
-                positions = threshold_positions(forecast, threshold, allow_short=not long_only)
-                positions[:first] = 0
-                strategy = lambda history, index, bar: 0  # noqa: E731 - positions are precomputed below
-                strategy.signal_series = lambda bars, p=positions: p
-                for cost_name, costs in (("taker", CostSettings.perp()), ("maker", CostSettings.perp(maker=True)), ("zero", CostSettings(0.0, 0.0, 0.0))):
-                    result = SimpleBacktester(strategy=strategy, cost_model=costs.cost_model()).run(raw[symbol])
-                    held = np.asarray(result.position_series)[first:]
+                positions = threshold_positions(forecast, threshold, allow_short=not long_only).astype(float)
+                positions[:first] = 0.0
+                for execution, (costs, fills) in EXECUTION_VARIANTS.items():
+                    result, stats = simulate_fills(
+                        raw[symbol], positions, taker_fee_pct=costs.fee_pct, maker_fee_pct=costs.maker_fee_pct or costs.fee_pct,
+                        slippage_bps=costs.slippage_bps, funding_pct_per_day=costs.funding_pct_per_day, fills=fills,
+                    )
                     returns = pd.Series(result.mtm_equity_series[first:]).pct_change().fillna(0.0).to_numpy()
-                    returns = returns - np.concatenate([[0.0], held[:-1]]) * costs.funding_pct_per_day / 100.0 / bars_per_day
                     equity = np.cumprod(1.0 + returns)
                     forecast_rows.append({
-                        "symbol": symbol, "threshold_bps": threshold, "side": "long" if long_only else "long/short", "costs": cost_name,
+                        "symbol": symbol, "threshold_bps": threshold, "side": "long" if long_only else "long/short", "execution": execution,
                         "cagr": equity[-1] ** (1 / span_years) - 1,
                         "sharpe": float(returns.mean() / returns.std() * np.sqrt(365 * bars_per_day)) if returns.std() > 0 else 0.0,
                         "max_drawdown": float(np.max(1 - equity / np.maximum.accumulate(equity))),
                         "trades_per_day": sum(1 for t in result.trade_records if t.timestamp >= frame.index[first]) / (span_years * 365),
+                        "fill_rate": stats.fill_rate,
                     })
 
     features_table = pd.DataFrame(feature_rows)
@@ -132,8 +141,10 @@ def main() -> None:
     forecast_table.to_csv(out / "forecast.csv", index=False)
     print("\nFeature information coefficients (forward", args.horizon_hours, "h):")
     print(features_table.pivot_table(index="feature", columns="symbol", values=["ic", "years_same_sign"]).round(4).to_string())
-    print("\nForecast strategy Sharpe by threshold and costs (maker assumes every limit order fills at the bar close):")
-    print(forecast_table.pivot_table(index=["symbol", "threshold_bps", "side"], columns="costs", values="sharpe").round(2).to_string())
+    print("\nForecast strategy Sharpe by threshold and execution:")
+    print(forecast_table.pivot_table(index=["symbol", "threshold_bps", "side"], columns="execution", values="sharpe").round(2)[list(EXECUTION_VARIANTS)].to_string())
+    print("\nFill rate of resting limit orders:")
+    print(forecast_table[forecast_table.execution.str.startswith("maker")].pivot_table(index=["symbol", "threshold_bps", "side"], columns="execution", values="fill_rate").round(2).to_string())
     print(f"\nWrote {out}")
 
 

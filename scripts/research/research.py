@@ -29,7 +29,7 @@ matplotlib.use("Agg")
 
 import pandas as pd
 
-from src.research import CATALOG, CostSettings, catalog_table, compare, load_bars, plot_heatmap, plot_run, run_strategy, summarize, sweep, sweep_axes
+from src.research import CATALOG, CostSettings, FillModel, catalog_table, compare, load_bars, plot_heatmap, plot_run, run_strategy, summarize, sweep, sweep_axes
 from src.research.engine import split_index, warmup_bars
 
 DEFAULT_SYMBOLS = ["BTC/EUR", "ETH/EUR", "SOL/EUR"]
@@ -87,13 +87,15 @@ def _cmd_backtest(args: argparse.Namespace) -> None:
     if args.long_only:
         params["long_only"] = True
     bars = load_bars(args.symbol, args.interval, lookback_days=args.lookback_days, refresh=args.refresh, csv_path=_csv_paths(args.csv).get(args.symbol), source=args.source)
-    run = run_strategy(bars, args.strategy, params=params, costs=_costs(args), holdout_fraction=args.holdout_fraction)
+    run = run_strategy(bars, args.strategy, params=params, costs=_costs(args), holdout_fraction=args.holdout_fraction, fills=_fills(args))
 
     print(f"\n{args.strategy} {params or '(defaults)'} on {args.symbol} {args.interval}, costs {_costs(args).round_trip_pct:.2f}% per round trip")
     print(f"in-sample {run.result.timestamps[run.measure_start]:%Y-%m-%d} -> {run.result.timestamps[run.split_index - 1]:%Y-%m-%d}", end="")
     if run.split_index < len(bars):
         print(f", holdout {run.result.timestamps[run.split_index]:%Y-%m-%d} -> {run.result.timestamps[-1]:%Y-%m-%d}")
     print("\n" + run.metrics_table().to_string(float_format=lambda value: f"{value:.4f}"))
+    if run.fill_stats is not None:
+        print("\nOrders: " + ", ".join(f"{key} {value:.2f}" for key, value in run.fill_stats.items()))
 
     if args.plot:
         output_dir = _output_dir(args, "backtest")
@@ -110,7 +112,7 @@ def _cmd_compare(args: argparse.Namespace) -> None:
         data = _load_symbols(args, interval)
         start = _common_start(data, [(name, CATALOG[name].defaults) for name in strategies], args.holdout_fraction)
         print(f"\n{interval}: comparing {len(strategies)} strategies on {', '.join(data)} (measuring from bar {start})")
-        frames.append(compare(data, strategies, long_only=_sides(args), costs=_costs(args), holdout_fraction=args.holdout_fraction, measure_start=start))
+        frames.append(compare(data, strategies, long_only=_sides(args), costs=_costs(args), holdout_fraction=args.holdout_fraction, measure_start=start, fills=_fills(args)))
     results = pd.concat(frames, ignore_index=True)
     _write_outputs(results, output_dir, args, heatmaps=False)
     table = results.groupby(["strategy", "interval", "long_only"], sort=False)[[c for c in COMPARE_COLUMNS if c.startswith(("is_", "ho_"))]].mean().reset_index()
@@ -134,7 +136,7 @@ def _cmd_sweep(args: argparse.Namespace) -> None:
         for name in strategies:
             started = time.perf_counter()
             frames.append(
-                sweep(data, name, grid_override or None, long_only=_sides(args), costs=_costs(args), holdout_fraction=args.holdout_fraction, measure_start=start)
+                sweep(data, name, grid_override or None, long_only=_sides(args), costs=_costs(args), holdout_fraction=args.holdout_fraction, measure_start=start, fills=_fills(args))
             )
             print(f"  {name}: done in {time.perf_counter() - started:.1f}s", flush=True)
     results = pd.concat(frames, ignore_index=True)
@@ -234,6 +236,11 @@ def _add_evaluation_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--slippage-bps", type=float, default=None, help="Override the preset slippage per fill, in basis points")
     parser.add_argument("--funding-pct-per-day", type=float, default=None, help="Override the preset funding rate; positive = longs pay, shorts receive")
     parser.add_argument("--holdout-fraction", type=float, default=0.3, help="Share of the most recent bars held out from parameter choice")
+    parser.add_argument("--fills", choices=["close", "maker"], default="close", help="close = fill at the signal close as a taker (default); maker = resting post-only limit orders that fill only when the market trades through them")
+    parser.add_argument("--max-wait-bars", type=int, default=1, help="With --fills maker: bars a limit order rests before --on-timeout applies")
+    parser.add_argument("--on-timeout", choices=["cancel", "requote", "taker"], default="cancel", help="With --fills maker: give up, re-quote at the new close, or cross the spread")
+    parser.add_argument("--through-bps", type=float, default=1.0, help="With --fills maker: how far a bar must trade past the limit to count as filled")
+    parser.add_argument("--limit-offset-bps", type=float, default=0.0, help="With --fills maker: place the limit this much better than the signal close")
     parser.add_argument("--metric", default="sharpe", choices=["sharpe", "return", "consistency"], help="Metric the summary ranks by")
 
 
@@ -243,6 +250,12 @@ def _add_side_argument(parser: argparse.ArgumentParser) -> None:
 
 def _sides(args: argparse.Namespace) -> tuple[bool, ...]:
     return {"both": (False, True), "long": (True,), "long-short": (False,)}[args.sides]
+
+
+def _fills(args: argparse.Namespace) -> FillModel | None:
+    if getattr(args, "fills", "close") == "close":
+        return None
+    return FillModel.maker(max_wait_bars=args.max_wait_bars, on_timeout=args.on_timeout, through_bps=args.through_bps, limit_offset_bps=args.limit_offset_bps)
 
 
 def _costs(args: argparse.Namespace) -> CostSettings:
