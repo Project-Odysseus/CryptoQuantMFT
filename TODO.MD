@@ -286,6 +286,13 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [ ] HAR in the runtime (needs 1h bars and a year of history at startup); EWMA is used for now
   - [ ] **Calendar/event features**: US macro releases (CPI, FOMC), options expiries, CME weekend gaps
   - [ ] **Multiple-testing control**: we have now run thousands of configurations; add a deflated Sharpe or reality-check test and keep a never-touched final holdout
+- [ ] **Portfolio, multi-strategy, multi-asset** (plan: `docs/portfolio_plan.md`; follow its steps in order, and tick them there and here)
+  - [x] Phase 0: sizing contract (share of equity, `src/risk/sizing.py`) and the research portfolio backtester
+  - [ ] Phase 1: research. Sleeve targets, any bar interval, allocation, `scripts/research/portfolio_backtest.py` and a study
+  - [ ] Phase 2: pure core. Config and `--portfolio-check`, sleeve runner, netting, portfolio risk overlay, order planner, parity test
+  - [ ] Phase 3: stateful book, paper execution through sandbox adapters, checkpoint and restart
+  - [ ] Phase 4: runtime `--portfolio`, multi-instrument data, reporting, alerts
+  - [ ] Phase 5-6: `live_dry_run` soak, then live readiness (user go-ahead)
 - [ ] **Needs exchange API keys (Binance / Bybit / OKX / Deribit)**: collected here so research never waits on keys. Everything so far used public data. Put keys in `.env` only, read-only first, with no withdrawal permission, and never print them. Check first that each venue offers derivatives to a Norwegian account.
   - [ ] Read-only keys: the fee tier each account actually gets (maker/taker, VIP level), to replace the assumed fees in carry and cross-sectional backtests
   - [ ] Trading keys and an execution adapter per venue: only after a strategy has passed paper and dry-run on that venue
