@@ -68,7 +68,7 @@ Tick items here, and in those files, when they are done.
 - [ ] A never-touched final holdout for strategy selection (the deflated Sharpe is done)
 - [ ] Maker-first execution (post-only limits, then taker after a timeout): the lever most likely to make intraday edges tradable
 - [ ] A live performance review script: equity vs BTC buy-and-hold, trade durations, slippage vs expected price, alpha decay, cost-adjusted P&L
-- [ ] Strategy design notes for options, options + perps and spot: `docs/options_plan.md`, section 8
+- [x] Strategy design notes for options, options + perps and spot: `docs/options_plan.md`, section 8 (2026-09-26). Next from it: the tail-hedge vs lower-scale study and the spot-vs-perp venue rule for long holds
 
 ## 6. Options (plan: `docs/options_plan.md`)
 

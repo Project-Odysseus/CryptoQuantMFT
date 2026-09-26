@@ -10,7 +10,8 @@ Status 2026-09-26:
   storage and loading (`deribit.py`, `--option-chain-snapshot` / `--record-option-chains`), the exposure layer and
   scenario grid for perps, spot and options (`src/portfolio/exposure.py`), and `notebooks/options_research.ipynb`.
 - **Next:** start recording chains on an always-on machine; exposure limits in the risk overlay and on the dashboard;
-  option instruments and sleeves in the portfolio, with a Deribit testnet adapter for paper trading.
+  option instruments and sleeves in the portfolio, with a Deribit testnet adapter for paper trading. Strategy ideas
+  (options, options + perps, spot) and what they need first are in section 8.
 
 ---
 
@@ -148,7 +149,90 @@ same checks found these issues, all reproducible:
 - **Settlement:** BTC-settled inverse options (the deepest market; collateral and P&L in BTC, so the book needs a
   BTC venue currency) or USDC-settled linear options (simpler accounting, less liquid). Default: start with the
   inverse contracts for data and research; decide before O7.
-- **Which strategy first:** protective structures (covered calls and tail hedges on the trend book) are the easiest
-  to reason about and to size by exposure. Volatility selling needs O4's premium study first.
+- **Which strategy first:** protective structures on the trend book (tail hedges, trend through calls) are the
+  easiest to reason about and to size by exposure; covered calls likely fight the trend book (section 8.2 A).
+  Volatility selling needs O4's premium study first.
 - **Data:** record from now (free, starts from zero), or buy history (e.g. Tardis.dev) for an immediate multi-year
   backtest.
+
+## 8. Strategy design notes: options, options + perps, spot (ideas to test, not built)
+
+A record of how to design these strategies and which to try first. Nothing here is built or tested yet. Every
+idea goes through the same path as the trend sleeves: a hypothesis, a study with costs and a holdout, the
+deflated Sharpe over every variant tried, then paper.
+
+### 8.1 How to design one
+
+1. **Say what pays you, and why it should last.** Trend is paid by slow-moving flows. Selling volatility is paid by
+   hedgers who overpay for insurance (the variance risk premium). Carry is paid by leveraged longs. Hedges cost
+   money and pay in crashes. A structure with no named payer is a bet on the model, and goes last (8.2 D).
+2. **Specify it as exposures, not contracts:** a delta, vega and gamma target per underlying, and a maximum loss in
+   the scenario grid (`src/portfolio/exposure.py`), e.g. "vega -0.5% of equity per vol point, delta within +-5%,
+   at most 10% of equity lost at -30% / +20 vol points". The planner picks the contracts. Limits are set from the
+   drawdown budget (30% at today's capital, 20% later).
+3. **Attribute every P&L** to delta, gamma, vega, theta and residual. A vol-selling strategy that makes its money
+   from delta is a trend strategy with extra costs.
+4. **Price the costs honestly.** Options trade at bid and ask; the fee is 0.03% of the underlying, capped at 12.5%
+   of the option price (about 0.25 USD per 0.01 BTC contract). Hedges on Kraken perps pay 0.05% plus slippage per
+   trade, so a daily delta hedge adds up. Kraken spot costs 0.40% a side.
+5. **Size for the scenario, not the Sharpe.** Short options earn small amounts often and lose large amounts
+   rarely. Six years of history hold about two real crashes, so the scenario grid limit binds before any
+   backtest statistic does.
+
+### 8.2 Candidates, easiest and best-supported first
+
+**A. Options on top of the trend book (options + perps).** These are the easiest to reason about, since they change
+the shape of an exposure the book already takes.
+- *Tail hedge:* buy about 10-delta puts 30-60 days out, sized so the -30% scenario loss fits the budget. The test:
+  does the put's yearly cost buy more drawdown reduction than lowering `[portfolio] scale` by the same cost? A
+  30-day 10-delta put costs about 6.7 USD per 0.01 BTC at 55% vol.
+- *Trend through options:* when the trend signal is long and implied vol is low, hold a call or call spread
+  instead of part of the perp. The upside is kept, the loss is capped at the premium, and there's no funding. The
+  test: net of theta, does it beat the perp in the trend regimes?
+- *Collar instead of an exit* when the trend weakens: keep the position with a bought put and a sold call.
+- *Covered calls on trend longs:* expected to fail. The stop study showed trend profits come from the few trades
+  held longest (the right tail), and a sold call gives that tail away. Test it once to confirm, then drop it.
+
+**B. The volatility premium (options, hedged with perps).** This needs study O4 (implied vs realised vol) first.
+- *Delta-hedged short strangle or straddle* when implied vol minus the forecast realised vol (EWMA/HAR in
+  `src/research/volatility.py`) is above a threshold. Size by vega, and cap short gamma and the scenario loss. The
+  hedge delta nets against the trend sleeves' perp position, so part of the hedge is free.
+- *Term structure:* the first chain fit ran from 17.5% (2 days) to 40% (1 year) at the money. Calendar spreads
+  when the curve is unusually steep or inverted, measured against history (needs recorded chains).
+- *Skew:* risk reversals when put skew is extreme against its own history (needs recorded chains).
+- *Events:* vol around CPI, FOMC and quarterly expiries (calendar features, `TODO.MD` section 5).
+
+**C. Spot and perps together.**
+- *Venue choice for long holds:* a perp long pays funding (about 0.01% a day on average, 0.05-0.1% in bull
+  markets). A spot round trip costs about 0.7 points more than a perp round trip. So a long held more than roughly
+  70 days at average funding, or about 10 days in a bull market, is cheaper in spot. A "core" long sleeve could
+  hold spot while the tactical trend sleeves use perps. Spot can't be shorted on Kraken, so shorts stay on perps.
+- *Cash-and-carry* (long spot, short perp): the carry study found it only pays in bull markets (1-3% a year in the
+  last 12 months). Keep it as a manual regime trade for when funding runs above 15-20% a year. It also needs the
+  spot leg to live on the same account as the tax FIFO.
+- *Options-implied forward vs perp:* compare Deribit's forward with the perp price for a basis signal, not an
+  arbitrage (the costs are larger than the gap at our size).
+
+**D. Model-driven (last).** Trade the gap between a validated model (section 4) and the market surface, only after
+the model passes the trading test on recorded chains. The first live fit (research log) showed the richer models
+don't yet beat simple ones out of sample.
+
+### 8.3 What the framework needs first
+
+- **Recorded chains** (O1): every idea past A needs real bid/ask history. Until then, a synthetic surface (ATM from
+  DVOL history, smile shape from the recorded SVI fits) is enough for the first A and B studies.
+- **An option backtester:** marks at the fitted surface, trades at bid/ask, applies fees, hedges delta on the perp,
+  handles expiry and rolls, and attributes P&L by greek. `run_book` stays the model for this: one function shared
+  with the runtime.
+- **Option instruments in the portfolio config** (`kind = "option"`, a structure spec: target delta, tenor, roll
+  days), a planner that picks listed contracts, `[risk.exposure]` limits, and an exposure section on the dashboard
+  (O3b).
+- **Two venues in one book:** options on Deribit and hedges on Kraken Futures mean collateral on both, transfers
+  between them, and per-venue caps. `PortfolioBook` already keeps venue equity separate. BTC-settled (inverse)
+  options make the collateral itself a BTC delta, and the exposure layer must count it.
+- **Capital:** buying options caps the loss at the premium, so a few USD per 0.01 BTC contract could fit even
+  today's capital (after a Deribit account, Norway eligibility and USDC collateral). Selling options needs margin
+  of roughly 10-20% of the underlying per contract (about 80-170 USD per 0.01 BTC), several times today's capital.
+  Short-vol ideas stay research-only until the capital grows.
+- **Tax:** confirm how Skatteetaten treats option premiums, expiries and exercise before the first option trade
+  (as for perp P&L, `TODO.MD` section 4).
