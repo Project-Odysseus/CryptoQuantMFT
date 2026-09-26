@@ -236,3 +236,37 @@ def test_the_runtime_path_bar_by_bar_matches_the_research_backtest(method: str) 
     assert len(runtime_frame) == len(research)
     np.testing.assert_allclose(runtime_frame.to_numpy(), research.to_numpy(), rtol=1e-9, atol=1e-12)
     assert (research.abs().sum(axis=1) > 0).mean() > 0.3  # the books actually hold positions
+
+
+def test_drawdown_stats_match_hand_calculation() -> None:
+    from src.portfolio.risk_budget import drawdown_stats
+
+    days = pd.date_range("2024-01-01", periods=7, freq="D", tz="UTC")
+    stats = drawdown_stats(pd.Series([100, 110, 99, 88, 110, 121, 115.0], index=days))
+    assert stats["max_drawdown"] == pytest.approx(0.2)  # 110 -> 88
+    assert stats["longest_underwater_days"] == pytest.approx(2.0)  # below 110 from Jan 3 until Jan 5
+    assert stats["current_drawdown"] == pytest.approx(1 - 115 / 121)
+
+
+def test_the_scale_knob_sizes_the_whole_book_and_the_risk_budget_finds_it() -> None:
+    from dataclasses import replace as replace_config
+
+    from src.portfolio.risk_budget import risk_report, scale_for_max_drawdown
+
+    config = _config()
+    inputs = prepare_inputs(config, bar_loader=synthetic_loader)
+    full = run_book(config, inputs, risk_overlay=False, funding_pct_per_day=0.0)
+    half = run_book(replace_config(config, scale=0.5), inputs, risk_overlay=False, funding_pct_per_day=0.0)
+    np.testing.assert_allclose(half.targets.to_numpy(), full.targets.to_numpy() * 0.5)
+
+    report = risk_report(config, inputs, capital=20_000, scale=1.0, funding_pct_per_day=0.0)
+    assert report["max_drawdown_money"] == pytest.approx(report["max_drawdown"] * 20_000)
+    assert report["var_99_day"] >= report["var_95_day"] > 0 and report["es_99_day"] >= report["var_99_day"]
+    assert report["max_margin_share"] > 0 and report["worst_month"] >= report["worst_week"] * 0.5
+
+    target = 0.5 * report["max_drawdown"]
+    scale = scale_for_max_drawdown(config, inputs, target, safety=1.0, funding_pct_per_day=0.0, tolerance=0.01)
+    at_scale = risk_report(config, inputs, capital=20_000, scale=scale, funding_pct_per_day=0.0)
+    assert 0.3 < scale < 1.0 and at_scale["max_drawdown"] <= target + 1e-9
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        scale_for_max_drawdown(config, inputs, 1.5)

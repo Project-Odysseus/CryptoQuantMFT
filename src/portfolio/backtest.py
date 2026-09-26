@@ -188,6 +188,7 @@ def run_book(
         lookback=max(2, round(config.allocation_lookback_days * per_day)),
         refit_every=max(1, round(config.allocation_refit_days * per_day)),
     )
+    allocated = allocated * config.scale
     targets = net_history(allocated, inputs.sleeve_instrument).reindex(columns=inputs.prices.columns, fill_value=0.0)
 
     instruments = list(inputs.prices.columns)

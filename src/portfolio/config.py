@@ -88,6 +88,7 @@ class PortfolioConfig:
     base_currency: str = "USD"
     initial_equity: float = 10_000.0
     rebalance_band: float = 0.02
+    scale: float = 1.0  # multiplies every allocated target: the one knob that sizes the whole book (see risk_budget.py)
     allocation: str = "equal"
     allocation_lookback_days: int = 90
     allocation_refit_days: int = 30
@@ -112,7 +113,7 @@ class PortfolioConfig:
         return {instrument_id: spec.can_short for instrument_id, spec in self.instruments.items()}
 
 
-_PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "allocation", "allocation_lookback_days", "allocation_refit_days"}
+_PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "scale", "allocation", "allocation_lookback_days", "allocation_refit_days"}
 _TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves"}
 
 
@@ -149,6 +150,9 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
     rebalance_band = _number(portfolio, "rebalance_band", 0.02, "[portfolio]", errors)
     if rebalance_band is not None and not 0 <= rebalance_band < 1:
         errors.append("[portfolio] rebalance_band must be between 0 and 1 (0.02 = 2% of equity)")
+    scale = _number(portfolio, "scale", 1.0, "[portfolio]", errors)
+    if scale is not None and not 0 < scale <= 10:
+        errors.append("[portfolio] scale must be above 0 and at most 10 (0.5 = half the size the sleeves ask for)")
     for key, default in (("allocation_lookback_days", 90), ("allocation_refit_days", 30)):
         value = portfolio.get(key, default)
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -241,6 +245,7 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         base_currency=str(portfolio.get("base_currency", "USD")),
         initial_equity=float(portfolio.get("initial_equity", 10_000.0)),
         rebalance_band=float(portfolio.get("rebalance_band", 0.02)),
+        scale=float(portfolio.get("scale", 1.0)),
         allocation=str(portfolio.get("allocation", "equal")),
         allocation_lookback_days=int(portfolio.get("allocation_lookback_days", 90)),
         allocation_refit_days=int(portfolio.get("allocation_refit_days", 30)),
@@ -266,7 +271,7 @@ def describe(config: PortfolioConfig) -> str:
     from src.portfolio.allocation import sleeve_scales
 
     lines = [f"Portfolio '{config.name}' ({config.path or 'in memory'}): base {config.base_currency}, initial equity {config.initial_equity:,.0f}, "
-             f"allocation {config.allocation}, rebalance band {config.rebalance_band:.1%}"]
+             f"allocation {config.allocation}, rebalance band {config.rebalance_band:.1%}" + (f", scale {config.scale:g}" if config.scale != 1.0 else "")]
     lines.append("Instruments:")
     for spec in config.instruments.values():
         lines.append(f"  {spec.id:<28} {spec.kind:<4} short={'yes' if spec.can_short else 'no':<3} max leverage {spec.max_leverage:g}x, fee {spec.taker_fee_pct:.2f}%, slippage {spec.slippage_bps:g} bps")

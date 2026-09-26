@@ -6,6 +6,37 @@ accident.
 
 ---
 
+## 2026-09-26: Risk budget of the example portfolio (how big should the book be?)
+
+**Question:** what does the example book (`config/portfolio.example.toml`, 5 trend sleeves on the BTC and ETH perps)
+risk in money, and what size fits a given drawdown limit? Reproduce with
+`python scripts/research/risk_budget.py config/portfolio.example.toml --capital 10000 --max-drawdown 0.2` (module
+`src/portfolio/risk_budget.py`; the size knob is `[portfolio] scale`, which research and the runtime both apply).
+The period is 2020-09 to 2026-09, with perp costs, funding at 0.01%/day, and the config's risk limits.
+
+| Scale | CAGR | Vol | Sharpe | Max DD | Longest under water | Worst day | Worst week | Worst month | Max gross |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.25 | 13.9% | 9.6% | 1.41 | 9.0% | 422 days | 3.8% | 4.5% | 3.6% | 0.42x |
+| 0.38 | 21.6% | 14.6% | 1.41 | 13.3% | 421 days | 5.3% | 6.3% | 5.7% | 0.63x |
+| 0.50 | 28.2% | 19.0% | 1.40 | 17.4% | 422 days | 6.8% | 8.2% | 7.5% | 0.81x |
+| 1.00 | 53.4% | 34.7% | 1.41 | 31.3% | 508 days | 13.3% | 15.7% | 14.1% | 1.12x |
+
+**Findings**
+1. **Size changes risk, not quality.** Sharpe is about 1.4 at every scale; the drawdown and the worst days scale
+   almost linearly. The choice is only how much loss you will sit through.
+2. **The hard part is time, not depth.** At every scale the book spent over a year below a previous peak, and half of
+   all months lost money. That is what makes people switch a system off at the worst moment, so plan for it.
+3. **For a 20% drawdown limit with a 1.5x safety margin** (future drawdowns are usually deeper than past ones), the
+   scale is 0.38: about 22% a year historically, with a 13% max drawdown and a 5% worst day. Full size (1.0) means
+   living with a 31% drawdown and a 13% day.
+4. **Margin is not the constraint.** Even at full size the book needs at most 80% of equity as initial margin at 2x,
+   and 31% at scale 0.38.
+
+**Before live:** pick the capital and the drawdown you can live with, set `scale` and `initial_equity`, and start
+smaller than the table suggests until the paper and dry-run soak agree with the backtest.
+
+---
+
 ## 2026-09-26: Cross-sectional features across Binance USDT perpetuals, 2020-2026 (current and delisted coins)
 
 **Question:** do any of the 8 ranking features in `scripts/research/cross_sectional_study.py` make a market-neutral

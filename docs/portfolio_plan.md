@@ -579,6 +579,9 @@ Python and need no network, so they are good hotspot work.
   `fixed_fraction`.
 - Portfolio base currency: USD (perps) or EUR (spot, tax). Default: USD, with EUR conversion for tax and reports.
 - Starting sleeves and budgets: from the Phase 1 study. Default until then: the example config.
+- Size and capital: `[portfolio] scale` sizes the whole book, and `scripts/research/risk_budget.py` shows the
+  money risk per scale and the scale for a drawdown limit (research log, 2026-09-26). A 20% limit with a 1.5x margin
+  gives scale 0.38 for the example book. Default: the user picks the capital and the limit.
 - Portfolio kill level and de-risking: the study (1.4) supports a 40% drawdown kill and no de-risking for the
   example book. That is a lot of drawdown for a first live book, so a smaller live allocation may suit better
   than a tighter kill.

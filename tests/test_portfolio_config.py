@@ -152,3 +152,9 @@ def test_the_portfolio_check_flag_exits_with_the_check_result(monkeypatch, capsy
     with pytest.raises(SystemExit) as exited:
         main.main()
     assert exited.value.code == 0 and "OK: the config is valid." in capsys.readouterr().out
+
+
+def test_the_portfolio_scale_is_validated_and_described() -> None:
+    assert _parse(portfolio={"scale": 0.5}).scale == 0.5 and _parse().scale == 1.0
+    assert "scale must be above 0 and at most 10" in _problems(portfolio={"scale": 0})
+    assert "scale 0.5" in describe(_parse(portfolio={"scale": 0.5})).splitlines()[0]

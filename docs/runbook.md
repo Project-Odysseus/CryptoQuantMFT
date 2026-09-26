@@ -93,6 +93,18 @@ python main.py \
 
 This submits a **real Kraken market sell** for the full currently held base-asset size after validate-only checks pass.
 
+## Choosing capital and size (portfolio)
+
+```bash
+python scripts/research/risk_budget.py config/portfolio.example.toml --capital 10000 --max-drawdown 0.2
+```
+
+This prints, for your capital, what the book did historically at several sizes: the worst day, week and month, one-day
+VaR and expected shortfall, the deepest drawdown, the longest time under water, and the margin used. It also gives
+the largest `scale` whose drawdown times a safety factor (default 1.5) fits your limit. Put the choice in the config
+(`[portfolio] scale` and `initial_equity`). Research and the runtime both apply it, and `--portfolio-check` shows
+it. See the 2026-09-26 risk-budget entry in `docs/research_log.md`.
+
 ## Telegram messages
 
 Every fill the runtime records sends one message: the mode (`[PAPER]`, `[DRY RUN]` or `[LIVE]`), side, size, symbol

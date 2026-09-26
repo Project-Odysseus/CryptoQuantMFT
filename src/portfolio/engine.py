@@ -351,7 +351,7 @@ class PortfolioEngine:
         return (Decimal(str(units)) / step).to_integral_value() * step
 
     def _decide_and_trade(self, report: CycleReport, *, scales: Mapping[str, float], prices: Mapping[str, float], stale: Sequence[str], now: datetime) -> None:
-        allocated = {sleeve_id: (spec.instrument, 0.0 if sleeve_id in self.disabled_sleeves else self.states[sleeve_id].weight * scales.get(sleeve_id, 0.0))
+        allocated = {sleeve_id: (spec.instrument, 0.0 if sleeve_id in self.disabled_sleeves else self.states[sleeve_id].weight * scales.get(sleeve_id, 0.0) * self.config.scale)
                      for sleeve_id, spec in self.sleeves.items()}
         self.book.set_sleeve_targets(allocated)
         report.targets, attribution = net_targets(allocated)
