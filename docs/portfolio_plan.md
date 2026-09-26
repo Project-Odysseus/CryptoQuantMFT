@@ -539,7 +539,7 @@ Python and need no network, so they are good hotspot work.
 - [ ] 2.3 Allocation (runtime form)
 - [x] 2.4 Netting and attribution (2026-09-26): `src/portfolio/netting.py`, tests in `tests/test_portfolio_allocation.py`.
 - [x] 2.5 Portfolio risk overlay (2026-09-26): `src/portfolio/risk.py` (`apply_portfolio_risk`, `drawdown_multiplier`, `array_overlay` for research), tests in `tests/test_portfolio_risk.py`. The config also rejects a non-positive daily-loss limit, venue cap or `stale_after_bars`.
-- [ ] 2.6 Order planner
+- [x] 2.6 Order planner (2026-09-26): `src/portfolio/orders.py` (`plan_orders`, `OrderPlan`, `PlannedOrder`), tests in `tests/test_portfolio_orders.py`. The band matches `simulate_portfolio`'s. Held instruments without a target are closed. Every skip has a reason (`within_band`, `below_min_size`, `below_lot_step`, `no_price`, `no_short`).
 - [ ] 2.7 Parity test
 - [ ] 3.1 Portfolio book
 - [ ] 3.2 Paper execution through sandbox adapters
