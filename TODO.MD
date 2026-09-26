@@ -274,7 +274,8 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [ ] Optional: move it to an always-on machine (a small VPS) so laptop sleep doesn't leave gaps
   - [ ] **Cross-sectional strategies across many perps** (Kraken lists hundreds): rank coins by recent return, funding or volume and hold the top vs bottom, market-neutral; needs the multi-asset portfolio backtester
   - [ ] **Funding/basis carry** (long spot, short perp when funding is paid): measure net carry after fees across coins and exchanges before building; Kraken BTC/ETH funding averaged only ~3%/yr over the last year
-  - [ ] **Volatility forecasting (HAR/GARCH)** for position sizing: not an edge by itself, but it lifts the risk-adjusted return of every strategy
+  - [x] **Volatility forecasting for position sizing** (2026-09-26, `src/research/volatility.py`, `scripts/research/volatility_study.py`). HAR-RV is the most accurate forecast and EWMA is close; the runtime's 10-bar window is the worst and under-forecasts by ~1.8x. Sizing at entry to a volatility target lifts MA crossover and long/short Keltner beyond a shuffled-forecast placebo (Sharpe +0.07 to +0.36), not Keltner long-only or Donchian; resizing open positions and vol-timing buy-and-hold don't help. GARCH was skipped: HAR on intraday data is the stronger standard
+    - [ ] HAR in the runtime (needs 1h bars and a year of history at startup); EWMA is used for now
   - [ ] **Calendar/event features**: US macro releases (CPI, FOMC), options expiries, CME weekend gaps
   - [ ] **Multiple-testing control**: we have now run thousands of configurations; add a deflated Sharpe or reality-check test and keep a never-touched final holdout
 

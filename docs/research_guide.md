@@ -243,6 +243,26 @@ positioning = load_positioning("BTC", closes)     # every source, aligned so eac
 - `scripts/research/positioning_study.py` runs the study (feature ICs at 4/24/72h, deciles, a walk-forward ridge,
   and an unfitted crowding composite, traded with taker and resting limit-order fills).
 
+### Volatility forecasts and vol-scaled sizing
+
+`src/research/volatility.py` forecasts annualised volatility at each bar's close and scales positions by it:
+
+```python
+from src.research.volatility import daily_realized_variance, har_forecast, ewma_vol, log_returns, daily_forecast_to_bars, vol_scaled_positions
+
+hourly = load_bars("BTC/USD", "1h", source="perp")
+rv = daily_realized_variance([b.timestamp for b in hourly], [b.close for b in hourly])   # per UTC day
+har_vol = (har_forecast(rv, horizon_days=1) * 365) ** 0.5                                # annualised, walk-forward
+ewma = ewma_vol(log_returns(close), halflife=10 * bars_per_day, periods_per_year=365 * bars_per_day)
+positions = vol_scaled_positions(targets, ewma, target_vol=0.5, max_leverage=2.0, entry_only=True)
+result, stats = simulate_fills(bars, positions, taker_fee_pct=0.05, maker_fee_pct=0.02)   # fractional sizes are supported
+```
+
+- Judge a sizing by Sharpe, and by its drawdown against the full-size strategy levered to the same volatility.
+  Smaller positions always have smaller drawdowns.
+- A shuffled-forecast placebo (in `scripts/research/volatility_study.py`) separates real timing from the noise of
+  varying the size at all.
+
 ### Recorded order flow (only from when the recorder started)
 
 `python main.py --record-market-data` (see `runbook.md`) records trades, order-book samples, perp tickers and

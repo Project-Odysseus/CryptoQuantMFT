@@ -5,6 +5,74 @@ Dated findings from strategy research, newest first. Methodology and column mean
 
 ---
 
+## 2026-09-26 (newest): Volatility forecasts and volatility-scaled sizing, BTC and ETH perpetuals 2021-2026
+
+**Question:** which volatility forecast is most accurate, and does sizing positions by it improve the strategies that
+held up on the full history? Reproduce with `python scripts/research/volatility_study.py` (module:
+`src/research/volatility.py`). Everything is measured from 2021-03-01, when HAR's first walk-forward fit is
+available.
+
+**Forecast accuracy** (daily forecasts scored against realized variance from 1h bars; QLIKE is lower-is-better; mean
+ratio is realized / forecast, where 1 is unbiased):
+
+| Forecast | QLIKE next day (BTC / ETH) | QLIKE next 7 days | log R², 7 days | Mean ratio, 7 days |
+| --- | --- | --- | --- | --- |
+| Rolling std of the last 10 daily returns (what the runtime uses) | 0.69 / 0.69 | 0.57 / 0.64 | 0.35 / 0.32 | 1.77 / 1.80 |
+| Rolling std, 30 days | 0.53 / 0.54 | 0.31 / 0.35 | 0.33 / 0.29 | 1.27 / 1.26 |
+| EWMA of daily returns, 10-day half-life | 0.46 / 0.45 | 0.25 / 0.27 | 0.40 / 0.38 | 1.16 / 1.13 |
+| EWMA of daily realized variance, 5-day half-life | 0.45 / 0.44 | 0.25 / 0.26 | 0.43 / 0.43 | 1.17 / 1.18 |
+| HAR-RV, walk-forward | **0.41 / 0.40** | **0.20 / 0.21** | **0.46 / 0.46** | 0.92 / 0.96 |
+
+- HAR is the most accurate at both horizons and the only unbiased one, as the literature says. EWMA is close and
+  needs no fitting.
+- **The runtime's 10-bar window is the worst**, and it runs low. The next week's realized variance was on average
+  1.8x its forecast, because ten days of returns usually miss the spikes.
+
+**Sizing.** Each strategy's long/flat/short targets are scaled to 50% annualised volatility (the size is 0.5 / the
+forecast, capped at 2x equity), with taker fills and perp costs. "Entry-only" sizes a position when it opens and
+never resizes it, as the runtime does. "Rebalanced" resizes when the ideal size moves more than 25%. A lower drawdown
+alone proves nothing when the average size changes, so the fair checks are:
+- Sharpe;
+- the drawdown of the full-size strategy levered to the same volatility;
+- a placebo: 200 runs with the forecast shuffled in time (same sizes, no timing), where "beaten" is the share of
+  placebos with a lower Sharpe.
+
+| Sharpe (placebos beaten) | Full size | Runtime 10-bar, entry-only | EWMA, entry-only | HAR, entry-only |
+| --- | --- | --- | --- | --- |
+| BTC `moving_average_crossover(4, 48)` 1d long-only | 0.65 | 0.85 | 0.85 (94%) | 0.86 (95%) |
+| BTC `moving_average_crossover(8, 96)` 4h long-only | 0.54 | 0.65 | 0.85 (100%) | 0.90 (100%) |
+| BTC `keltner_breakout(40, 2)` 1d long/short | 0.56 | 0.68 | 0.71 (88%) | 0.73 (90%) |
+| BTC `keltner_breakout(40, 2)` 1d long-only | 0.71 | 0.83 | 0.80 (76%) | 0.74 (66%) |
+| BTC `donchian_breakout(40, 10)` 1d long-only | 0.26 | 0.30 | 0.22 (40%) | 0.10 (6%) |
+| ETH `moving_average_crossover(4, 48)` 1d long-only | 0.71 | 0.85 | 0.78 (86%) | 0.85 (98%) |
+| ETH `moving_average_crossover(8, 96)` 4h long-only | 0.54 | 0.58 | 0.66 (90%) | 0.81 (98%) |
+| ETH `keltner_breakout(40, 2)` 1d long/short | 0.63 | 0.70 | 0.70 (86%) | 0.76 (92%) |
+| ETH `keltner_breakout(40, 2)` 1d long-only | 0.61 | 0.60 | 0.58 (54%) | 0.59 (60%) |
+| ETH `donchian_breakout(40, 10)` 1d long-only | 0.32 | 0.30 | 0.28 (40%) | 0.24 (36%) |
+
+- **Sizing at entry helps MA crossover and long/short Keltner beyond chance.** On both coins, these beat 86-100% of
+  placebos. Their drawdown also falls against full size at the same volatility. BTC MA crossover goes from 64% to
+  57% (EWMA) or 55% (HAR), and BTC 4h MA crossover from 51% to 42%.
+- **It doesn't help Keltner long-only or Donchian.** Those are within placebo noise or worse. Breakout rules enter
+  when volatility has just jumped, so vol-scaling shrinks exactly the trades they live on.
+- **The forecast matters on 4h bars, not on daily.** On daily bars, the runtime's 10-bar window sizes entries about
+  as well as EWMA or HAR. On 4h bars, 10 bars is only 40 hours, and HAR or EWMA add 0.1-0.25 Sharpe over it.
+- **Resizing open positions mostly hurts.** Rebalanced was worse than entry-only in 9 of 10 cases with HAR and 6 of
+  10 with EWMA, and tripled the orders. Crypto volatility rises during strong rallies too, so resizing cuts the
+  trend trades that pay.
+- **Don't vol-time buy-and-hold.** Rebalanced buy-and-hold was 0.42 vs 0.41 (BTC, EWMA) and 0.30 with HAR. The
+  noisiest forecast happened to do best on ETH, which says it's noise.
+
+**Caveats.** One 5.5-year period. The ten strategy-coin pairs are correlated (two coins, overlapping rules). The
+strategies and parameters were chosen earlier on this same history, and the target and band were fixed before
+looking. Only the ranking between sizings is tested here, not the strategies themselves.
+
+**What this changes.** Size entries by an EWMA (or HAR) volatility forecast with an annualised target, don't resize
+open positions, and prefer MA crossover and long/short Keltner as the rules to run with it. The runtime gains an
+opt-in `--target-annual-vol` for this (see `runbook.md`).
+
+---
+
 ## 2026-09-26 (latest): Positioning data (funding, open interest, trader ratios, implied vol), BTC and ETH
 
 **Question:** does derivatives positioning predict BTC/ETH returns over hours to days, net of costs? **Short answer:
