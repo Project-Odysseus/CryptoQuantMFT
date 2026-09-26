@@ -294,6 +294,15 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] Phase 3: stateful book, paper execution through sandbox adapters, checkpoint and restart (2026-09-26)
   - [ ] Phase 4: runtime `--portfolio`, multi-instrument data, reporting, alerts
   - [ ] Phase 5-6: `live_dry_run` soak, then live readiness (user go-ahead)
+- [ ] **Run 24/7 without the MacBook** (raised 2026-09-26). Recommended: a small EU cloud server (for example Hetzner CX22, 2 vCPU / 4 GB, about 5 EUR a month) running the runtime as a service that restarts itself. Daily and 4h strategies need no low latency. A Raspberry Pi or mini PC at home works too, but depends on home power and internet. Keeping the Mac awake (`caffeinate`, a launchd agent) is fine for a paper soak, not for live. Code needed first:
+  - [ ] Run-forever mode: `--runtime-iterations 0` runs until stopped, and SIGTERM/SIGINT finish the cycle, checkpoint and exit cleanly. Today `run_loop` needs a finite count (default 3)
+  - [ ] Bounded memory and CPU: `RuntimeOrchestrator.history` keeps every cycle, and paper `run()` replays the whole bar history each cycle; cap both (the portfolio engine is already incremental)
+  - [ ] The portfolio runtime (`--portfolio`, portfolio plan phase 4) is what should run there
+  - [ ] Deployment kit in `deploy/`: a Dockerfile or conda setup, a systemd unit (or docker compose) with `Restart=always`, `.env` with `chmod 600`, and log rotation
+  - [ ] Dead-man's switch: ping an external monitor (e.g. healthchecks.io) every cycle, so a dead server alerts even though the bot can't send Telegram messages. Add a daily "still alive" Telegram summary
+  - [ ] Nightly backups of `data/cryptoquant.db` (the SQLite `.backup` command) and the checkpoints, kept off the server (the tax ledger lives there)
+  - [ ] Live keys: allow API access only from the server's IP, with no withdrawal permission
+  - [ ] The order-flow recorder streams several GB a day: it needs a bigger disk, compression, or object storage before it runs there
 - [ ] **Needs exchange API keys (Binance / Bybit / OKX / Deribit)**: collected here so research never waits on keys. Everything so far used public data. Put keys in `.env` only, read-only first, with no withdrawal permission, and never print them. Check first that each venue offers derivatives to a Norwegian account.
   - [ ] Read-only keys: the fee tier each account actually gets (maker/taker, VIP level), to replace the assumed fees in carry and cross-sectional backtests
   - [ ] Trading keys and an execution adapter per venue: only after a strategy has passed paper and dry-run on that venue
