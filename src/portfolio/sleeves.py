@@ -121,6 +121,8 @@ class _Prefix(Sequence):
     def __getitem__(self, key: Any) -> Any:
         if isinstance(key, slice):
             start, stop, step = key.indices(self._end)
+            if step < 0:  # indices() gives stop=-1 for "down to 0", which a list would read as its last item
+                return [self._items[index] for index in range(start, stop, step)]
             return self._items[start:stop:step]
         if key < 0:
             key += self._end
