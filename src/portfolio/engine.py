@@ -137,11 +137,17 @@ class PortfolioEngine:
         strategies: Mapping[str, Any] | None = None,
         mode: str = "paper",
         state_path: str | Path | None = None,
+        record_tax: bool = False,
     ) -> None:
         """Wire the sleeves, allocator and book; restore the checkpoint at `state_path` if there is one.
 
         Raises when a venue in the config has no adapter, so a wiring mistake
         fails at startup rather than at the first order.
+
+        `record_tax` writes every realized P&L, fee and funding flow (perps)
+        and every spot fill (FIFO lots) to the Norwegian tax ledger at the
+        moment it happens. It is for live trading only, so paper runs never
+        mix simulated flows into the real ledger.
         """
         missing = sorted({spec.venue for spec in config.instruments.values()} - set(adapters))
         if missing:
@@ -166,6 +172,8 @@ class PortfolioEngine:
         self.last_grid_bar: datetime | None = None
         self.last_grid_close: dict[str, float] = {}
         self.last_decisions: dict[str, dict[str, Any]] = {}  # sleeve id -> its latest decision, for the dashboard
+        self.record_tax = record_tax
+        self.pending_tax: list[dict[str, Any]] = []  # flows the ledger couldn't take yet (e.g. no FX rate); retried each cycle
         self.sleeve_error_counts: dict[str, int] = {}
         self.disabled_sleeves: set[str] = set()
         self.cycle = 0
@@ -183,8 +191,10 @@ class PortfolioEngine:
             raise ValueError(f"no {self.grid_interval} bars for {empty}")
         prices = {instrument: float(series[-1].close) for instrument, series in grid.items()}
         report = CycleReport(timestamp=now, decided=False, equity=0.0)
+        self._flush_tax(now)
 
         report.adapter_events = self._mark_adapters(prices, now)
+        self._flush_tax(now)  # funding booked while marking
         self.book.mark(prices, fx=fx, now=now)
 
         for sleeve_id, spec in self.sleeves.items():
@@ -256,18 +266,80 @@ class PortfolioEngine:
                     if event["type"] == "funding":
                         event["instrument"] = symbols[event["symbol"]]
                         self.book.book_funding(event["instrument"], event["payment"])
+                        self._tax_derivative(event["instrument"], "FUNDING_FEE", -float(event["payment"]), now, {"kind": "funding"})
                     elif event["type"] == "liquidation":
-                        self._book_liquidation(event, symbols)
+                        self._book_liquidation(event, symbols, now)
                     events.append(event)
         return events
 
-    def _book_liquidation(self, event: dict[str, Any], symbols: Mapping[str, str]) -> None:
+    def _book_liquidation(self, event: dict[str, Any], symbols: Mapping[str, str], now: datetime) -> None:
         """A sandbox liquidation closed positions on the exchange; close them in the book at the same fills."""
         adapter = self.adapters[event["venue"]]
         for order in adapter.list_orders():
             if order.order_id.startswith("liquidation-") and order.symbol in event["closed"] and order.order_id not in self.book.liquidations_booked:
-                self.book.apply_fill(symbols[order.symbol], order.side, self._on_lot_grid(symbols[order.symbol], order.filled_size), order.fill_price, order.fee)
+                instrument = symbols[order.symbol]
+                realized = self.book.apply_fill(instrument, order.side, self._on_lot_grid(instrument, order.filled_size), order.fill_price, order.fee)
                 self.book.liquidations_booked.append(order.order_id)
+                self._tax_fill(instrument, order.side, float(order.filled_size), float(order.fill_price), float(order.fee), float(realized), order.timestamp or now, order.order_id)
+
+    # --- tax ledger ------------------------------------------------------------------------------------------------
+
+    def _tax_fill(self, instrument: str, side: str, units: float, price: float, fee: float, realized: float, now: datetime, order_id: str) -> None:
+        """Queue the tax records one fill creates: realized P&L and the fee for a perp; the trade itself for spot (FIFO lots)."""
+        if not self.record_tax:
+            return
+        spec = self.config.instruments[instrument]
+        if spec.kind == "perp":
+            if realized:
+                self._tax_derivative(instrument, "REALIZED_PNL", realized, now, {"order_id": order_id})
+            if fee:
+                self._tax_derivative(instrument, "TRADING_FEE", -fee, now, {"order_id": order_id})
+        else:
+            self.pending_tax.append({"kind": "spot_trade", "timestamp": now.isoformat(), "exchange": spec.venue, "pair": spec.symbol, "side": side,
+                                     "price": price, "size": units, "fee": fee, "order_id": order_id})
+        self._flush_tax(now)
+
+    def _tax_derivative(self, instrument: str, transaction_type: str, amount: float, now: datetime, metadata: dict[str, Any]) -> None:
+        if not self.record_tax or not amount:
+            return
+        spec = self.config.instruments[instrument]
+        try:
+            from src.data.kraken_futures import venue_symbol_for
+
+            venue_symbol = venue_symbol_for(spec.symbol) if spec.venue == "kraken_futures" else spec.symbol
+        except ValueError:
+            venue_symbol = spec.symbol
+        currency = "EUR" if spec.venue == "kraken" else "USD"
+        self.pending_tax.append({"kind": "derivative", "timestamp": now.isoformat(), "venue_symbol": venue_symbol, "transaction_type": transaction_type,
+                                 "amount": amount, "currency": currency, "metadata": {"instrument": instrument, "portfolio": self.config.name, **metadata}})
+
+    def _flush_tax(self, now: datetime) -> None:
+        """Write queued tax records; anything that fails stays queued (and in the checkpoint) and is retried next cycle."""
+        if not self.pending_tax or self.trade_logger is None:
+            return
+        remaining = []
+        for record in self.pending_tax:
+            try:
+                stamp = datetime.fromisoformat(record["timestamp"])
+                if record["kind"] == "derivative":
+                    self.trade_logger.log_derivative_event(timestamp=stamp, venue_symbol=record["venue_symbol"], transaction_type=record["transaction_type"],
+                                                           amount=record["amount"], currency=record["currency"], source="portfolio", metadata=record["metadata"])
+                else:
+                    _trade_id, error = self.trade_logger.log_trade(timestamp=stamp, source="portfolio_tax", exchange=record["exchange"], pair=record["pair"],
+                                                                   side=record["side"], price=record["price"], size=record["size"], fee=record["fee"],
+                                                                   record_tax_event=True, strategy_id="portfolio")
+                    if error:  # log_trade reports a failed tax write instead of raising
+                        raise RuntimeError(error)
+            except Exception as exc:  # noqa: BLE001 - keep the record and retry rather than lose a tax flow
+                remaining.append({**record, "last_error": f"{type(exc).__name__}: {exc}"})
+        new_failures = [record for record in remaining if not record.get("alerted")]
+        if new_failures:  # alert once per record, not every cycle it stays queued
+            self._event("ERROR", "portfolio_tax_record_failed", f"{len(new_failures)} tax records could not be written yet; retrying each cycle",
+                        {"first_error": new_failures[0]["last_error"], "queued": len(remaining)}, now)
+            if self.notifier is not None:
+                self.notifier.send_alert(event_type="tax_record_failed", message=f"{len(remaining)} tax records are queued and retried each cycle.",
+                                         metadata={"error": new_failures[0]["last_error"]})
+        self.pending_tax = [{**record, "alerted": True} for record in remaining]
 
     def _on_lot_grid(self, instrument: str, units: float) -> Decimal:
         """An exchange's float fill size as the exact multiple of the lot step it is (0.07840000000000001 -> 0.0784).
@@ -307,7 +379,8 @@ class PortfolioEngine:
             report.rejected.append(rejection)
             self._event("WARNING", "portfolio_order_rejected", f"{order.side} {order.units} {order.instrument} rejected: {result.message}", rejection, now)
             return
-        self.book.apply_fill(order.instrument, order.side, self._on_lot_grid(order.instrument, result.filled_size), result.fill_price, result.fee)
+        realized = self.book.apply_fill(order.instrument, order.side, self._on_lot_grid(order.instrument, result.filled_size), result.fill_price, result.fee)
+        self._tax_fill(order.instrument, order.side, float(result.filled_size), float(result.fill_price), float(result.fee), float(realized), now, order_id)
         fill = {"order_id": order_id, "instrument": order.instrument, "side": order.side, "units": result.filled_size, "price": result.fill_price,
                 "fee": result.fee, "reason": order.reason, "reduce_only": order.reduce_only, "strategy_id": strategy_id, "sleeves": drivers}
         report.fills.append(fill)
@@ -439,6 +512,7 @@ class PortfolioEngine:
             "last_grid_close": self.last_grid_close,
             "disabled_sleeves": sorted(self.disabled_sleeves),
             "last_decisions": self.last_decisions,
+            "pending_tax": self.pending_tax,
         }
 
     def _save(self) -> None:
@@ -463,6 +537,7 @@ class PortfolioEngine:
         self.last_grid_bar = datetime.fromisoformat(payload["last_grid_bar"]) if payload.get("last_grid_bar") else None
         self.last_grid_close = {instrument: float(close) for instrument, close in payload["last_grid_close"].items()}
         self.last_decisions = dict(payload.get("last_decisions", {}))
+        self.pending_tax = list(payload.get("pending_tax", []))
         return True
 
     def reset_peak(self, *, now: datetime) -> float:

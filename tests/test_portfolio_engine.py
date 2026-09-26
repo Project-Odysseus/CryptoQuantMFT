@@ -205,3 +205,53 @@ def test_the_engine_refuses_to_start_without_an_adapter_per_venue() -> None:
     config = _config()
     with pytest.raises(ValueError, match="no execution adapter for venue"):
         PortfolioEngine(config, adapters={}, book=PortfolioBook.from_config(config))
+
+
+class FixedRates:
+    """Norges Bank stand-in: fixed daily rates, or down when `fail` is set."""
+
+    def __init__(self) -> None:
+        self.fail = False
+
+    def get_rate(self, pair: str = "EUR/NOK", at: Any = None) -> float:
+        if self.fail:
+            raise ConnectionError("Norges Bank unreachable")
+        return {"EUR/NOK": 11.5, "USD/NOK": 10.5}[pair]
+
+
+def test_live_tax_records_every_realized_pnl_fee_and_funding_flow_and_retries_failures(tmp_path) -> None:
+    config = _config()
+    logger = TradeLogger(tmp_path / "trades.db")
+    logger.fx_rate_collector = FixedRates()
+    engine = _engine(config, logger=logger)
+    engine.record_tax = True
+    for index in range(FIRST, 300):
+        engine.run_cycle(bars_until(index), now=_now(index))
+    logger.fx_rate_collector.fail = True  # the ledger can't value flows for a while
+    for index in range(300, 330):
+        engine.run_cycle(bars_until(index), now=_now(index))
+    queued = len(engine.pending_tax)
+    assert queued > 0 and any(event["event_type"] == "portfolio_tax_record_failed" for event in logger.list_events(limit=500))
+    logger.fx_rate_collector.fail = False
+    for index in range(330, LAST):
+        engine.run_cycle(bars_until(index), now=_now(index))
+    assert engine.pending_tax == []
+
+    events = [event for event in logger.list_tax_events() if event["metadata"].get("portfolio") == "engine-test"]
+    totals: dict[str, float] = {}
+    for event in events:
+        totals[event["transaction_type"]] = totals.get(event["transaction_type"], 0.0) + event["metadata"]["amount"]
+    realized = sum(float(position.realized_pnl) for position in engine.book.positions.values())
+    fees = sum(float(position.fees) for position in engine.book.positions.values())
+    funding = sum(float(position.funding) for position in engine.book.positions.values())
+    assert totals["REALIZED_PNL"] == pytest.approx(realized) and totals["TRADING_FEE"] == pytest.approx(-fees) and totals["FUNDING_FEE"] == pytest.approx(-funding)
+    assert {event["symbol"] for event in events} == {"PF_XBTUSD", "PF_ETHUSD"}
+    assert all(event["amount_nok"] == pytest.approx(event["metadata"]["amount"] * 10.5) for event in events)
+
+
+def test_paper_runs_never_write_the_tax_ledger(tmp_path) -> None:
+    logger = TradeLogger(tmp_path / "trades.db")
+    engine = _engine(_config(), logger=logger)
+    for index in range(FIRST, 260):
+        engine.run_cycle(bars_until(index), now=_now(index))
+    assert logger.list_tax_events() == [] and engine.pending_tax == []

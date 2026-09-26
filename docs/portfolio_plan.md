@@ -462,7 +462,9 @@ Python and need no network, so they are good hotspot work.
 - Minimum order sizes and lot steps per instrument come from exchange metadata (Kraken `AssetPairs`, Kraken Futures
   instruments).
 - Tax: spot fills per asset feed the existing FIFO ledger, and perps feed the derivative ledger per symbol. Netting
-  must not bypass either one.
+  must not bypass either one. **Done 2026-09-26** (`PortfolioEngine(record_tax=True)`, live only): each realized
+  P&L, fee and funding flow is recorded as it happens, and spot fills go through FIFO lots. Failed writes are queued
+  in the checkpoint and retried. The tests check that the ledger totals equal the book's.
 - Live gates as today (`--enable-live-trading`, the confirmation token, an explicit exchange), plus a
   portfolio-level `max_live_notional`.
 - Promotion checklist in `docs/runbook.md`.

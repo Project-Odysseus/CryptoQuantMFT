@@ -141,6 +141,11 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
 - **After the max-drawdown kill:** the book stays flat until you re-arm it with `--portfolio-reset-peak` (logged).
 - **Currency:** one currency per portfolio for now. USD perps are fine, but EUR spot mixed with USD perps is refused
   until an FX feed exists.
+- **Tax records (live only):** every perp realized P&L, fee and funding payment is written to the tax ledger as it
+  happens, under the contract name (e.g. `PF_XBTUSD`) and valued in NOK at Norges Bank's rate. Spot fills go through
+  the FIFO lots, which need your EUR deposits logged first (`--tax-log-fiat-eur`). A record that can't be written
+  (e.g. Norges Bank is down) is queued in the checkpoint, alerted once, and retried every cycle. Paper and dry-run
+  never write the ledger.
 
 ## Daily operational checks
 

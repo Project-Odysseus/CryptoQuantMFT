@@ -223,3 +223,30 @@ def test_the_cli_refuses_live_and_runs_a_mock_portfolio(tmp_path, monkeypatch, c
     with pytest.raises(SystemExit) as exited:
         main.main()
     assert exited.value.code == 0 and "Instruments (target and actual" in capsys.readouterr().out
+
+
+def test_live_spot_fills_go_through_the_fifo_tax_ledger(tmp_path) -> None:
+    config = parse_portfolio_config({
+        "portfolio": {"name": "spot-tax", "base_currency": "EUR", "initial_equity": 5_000},
+        "risk": {"max_drawdown": 0.9, "daily_loss_limit": 0.5},
+        "instruments": {"kraken:BTC/EUR": {"kind": "spot", "lot_step": 0.00001, "min_order_size": 0.0001}},
+        "sleeves": [{"id": "btc_spot", "instrument": "kraken:BTC/EUR", "interval": "4h", "strategy": "moving_average_crossover",
+                     "params": {"short_window": 6, "long_window": 36}, "long_only": True, "warmup_bars": 40,
+                     "sizing": "fixed_fraction", "sizing_params": {"fraction": 0.5}}],
+    })
+
+    class FixedRates:
+        def get_rate(self, pair: str = "EUR/NOK", at: Any = None) -> float:
+            return 11.5
+
+    book = PortfolioBook.from_config(config)
+    logger = TradeLogger(tmp_path / "trades.db")
+    logger.fx_rate_collector = FixedRates()
+    logger.log_fiat_conversion(timestamp=datetime(2022, 12, 1, tzinfo=timezone.utc), amount_eur=5_000.0, fx_rate=11.5, source="test", reference="deposit")  # EUR bought with NOK first
+    engine = PortfolioEngine(config, adapters=build_paper_adapters(config, book), book=book, trade_logger=logger, record_tax=True)
+    runtime = PortfolioRuntime(engine, MockCandleFeed(config.instruments, grid_interval="4h", history_days=60, total_days=120), interval_seconds=0, trade_logger=logger)
+    reports = asyncio.run(runtime.run(iterations=120))
+    sells = [fill for report in reports for fill in report.fills if fill["side"] == "sell"]
+    assert sells, "the test needs a closed round trip"
+    types = {event["transaction_type"] for event in logger.list_tax_events()}
+    assert {"FIAT_CONVERSION", "REALIZED_PNL"} <= types and engine.pending_tax == []
