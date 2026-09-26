@@ -6,6 +6,61 @@ accident.
 
 ---
 
+## 2026-09-26: Cross-sectional features across Binance USDT perpetuals, 2020-2026 (current and delisted coins)
+
+**Question:** do any of the 8 ranking features in `scripts/research/cross_sectional_study.py` make a market-neutral
+long/short book (long the top 20% of the 50 most traded coins, short the bottom 20%) that survives costs and funding?
+And does that hold on the coins Kraken Futures lists? **Short answer:** one candidate, the taker-buy share. It is
+positive in both periods on both universes, with a low drawdown and no BTC correlation, but it is modest and about
+half of it is funding received. The strongest effect in the data, "high-volatility coins underperform", isn't
+tradable as a plain long/short: shorting those coins pays 25-60% a year in funding. Reproduce with
+`python scripts/research/cross_sectional_study.py` (add `--kraken-only`). The data is Binance's public archive
+(daily klines and funding for 859 symbols, delisted ones included, so there is no survivorship bias), cached in
+`data/historical_cache/binance_um/`. In-sample 2020-06 to 2023, holdout 2024 to 2026-08. Costs are 0.05% taker
+plus slippage by liquidity tier (3-25 bps). Signs were fixed in-sample.
+
+**Information coefficient** (rank correlation with the next 7 days' return, holdout, t-stat on non-overlapping weeks):
+
+| Feature | Full universe | Kraken-listed | Years with the same sign |
+| --- | --- | --- | --- |
+| vol_30d (30-day volatility) | -0.21 (t -9.8) | -0.19 (t -7.5) | 7/7 |
+| max_ret_30d (best day in 30) | -0.18 (t -9.7) | -0.16 (t -7.4) | 7/7 |
+| mom_30d | -0.04 (t -1.9) | -0.05 (t -2.0) | 6/7 |
+| taker_buy_share_7d | 0.00 (t 0.3) | 0.03 (t 1.7) | 6/7 |
+| funding_7d, mom_7d, ret_1d, volume_trend | about 0 | about 0 | 2-5/7 |
+
+**Long/short books, weekly rebalance** (Sharpe IS / HO, max drawdown HO):
+
+| Feature | Full universe | Kraken-listed | Where the holdout money comes from (Kraken-listed, % of equity a year) |
+| --- | --- | --- | --- |
+| taker_buy_share_7d (+) | 0.96 / 0.90, DD 29% | 1.11 / 0.97, DD 22% | price legs +26, funding +9.5, costs -10 |
+| vol_30d (-) | -0.54 / -0.40 | -0.56 / 1.18 | price legs +71, funding -23, costs -5 |
+| funding_7d (-, i.e. carry) | 1.24 / -0.70 | 1.19 / 0.42 | funding +28, price legs -5 |
+| composite of the IS-significant features | -0.29 / -0.88 | 0.08 / 1.40 | |
+| short-term reversal (mom_7d, ret_1d; daily) | -2.8 to -3.2 IS | similar | turnover 230-550x a year: costs 37-88% a year |
+
+**Findings**
+1. **The volatility (lottery) effect is real, and it is priced through funding.** High-volatility coins underperform
+   every year (IC -0.09 in-sample, -0.2 holdout). But they are the coins with deeply negative funding, so the short
+   leg pays 25-60% a year and the book loses in-sample on both universes. The Kraken holdout (1.18) disagrees with
+   its in-sample (-0.56), which is not something to trade.
+2. **Taker-buy share over 7 days** (coins whose volume is taker buying, going long) is the only feature positive in
+   both periods on both universes, with 22-29% holdout drawdowns and a BTC correlation of about -0.05. Its IC is
+   small (t 1.7-2.9), and a good part of the return is funding received (the long leg tends to hold coins where
+   shorts pay). Eight features were tested on two universes, so a t of 2-3 is weak evidence on its own.
+3. **Carry (short high-funding coins, long low-funding ones) decayed:** 1.2 Sharpe in-sample, -0.7 to 0.4 in the
+   holdout, the same decay the BTC/ETH carry study found.
+4. **Short-term reversal exists in the IC** (1-day IC -0.03 to -0.04, t -5), but daily rebalancing turns the book
+   over 230-550 times a year, and costs are far larger than the edge.
+
+**Next:** taker-buy share is a candidate for a cross-sectional sleeve (portfolio plan 7.4), not for trading yet. The
+steps: a finer test (the rebalance interval, and the universe size around 30-50), its correlation with the trend
+book, and a multiple-testing adjustment (the TODO's deflated-Sharpe item). Live, it needs Binance's public daily
+klines for the taker-buy volume (no API keys) and would trade the Kraken-listed perps. The altcoin carry study can
+run once the `premium_1d` download (started 2026-09-26) has finished.
+
+---
+
 ## 2026-09-26: Multi-sleeve portfolio of trend rules on the BTC and ETH perpetuals
 
 **Question:** does a book of the trend rules that held up (MA crossover and Keltner, daily and 4h, BTC and ETH) beat
