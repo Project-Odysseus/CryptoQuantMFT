@@ -6,6 +6,45 @@ accident.
 
 ---
 
+## 2026-09-27: EMA x VWAP (an Instagram day-trading rule) on BTC and ETH perpetuals, 15m and 1h
+
+**Question:** the rule enters long when a candle closes up through the VWAP and exits when a candle closes back
+below an EMA (posted for 3-minute candles, long only). Does it pay, and does a mirrored short side help? Strategy
+`ema_vwap` (src/backtest/strategies.py): session VWAP reset at 00:00 UTC or rolling 96 bars, EMA 9/20/50, an
+optional "EMA above VWAP" trend filter, optionally flat at the end of each UTC day. 24 combos x long-only and
+long/short x taker and maker costs, Kraken perp candles 2020-02 to 2026-09, last 30% as holdout. Reproduce with
+`python scripts/research/ema_vwap_study.py`.
+
+| Costs | Interval | Side | Positive combos (IS) | Median Sharpe IS / HO | Best combo IS / HO | Buy and hold IS / HO |
+| --- | --- | --- | --- | --- | --- | --- |
+| Taker | 15m | long only | 0% | -3.41 / -4.67 | -1.93 / -1.30 | 0.99 / 0.49 |
+| Taker | 15m | long/short | 0% | -5.02 / -6.13 | -2.76 / -2.42 | 0.99 / 0.49 |
+| Taker | 1h | long only | 38% | -0.25 / -0.99 | 0.36 / -0.35 | 1.01 / 0.49 |
+| Taker | 1h | long/short | 4% | -0.79 / -1.81 | 0.01 / -0.24 | 1.01 / 0.49 |
+| Maker (optimistic) | 15m | long only | 17% | -0.55 / -0.63 | 0.34 / -0.60 | 0.99 / 0.49 |
+| Maker (optimistic) | 1h | long only | 100% | 0.68 / 0.18 | 1.00 / 0.74 | 1.01 / 0.49 |
+| Maker (optimistic) | 1h | long/short | 83% | 0.41 / -0.08 | 0.68 / 0.37 | 1.01 / 0.49 |
+
+**Findings**
+1. **Costs decide it, and the signal barely covers them.** The typical trade makes about 0.15% before costs at 1h
+   and almost nothing at 15m; a taker round trip costs about 0.20%. At 15m every combination loses after taker
+   costs (600-1,700 trades a year per coin), and at 1h the typical one does.
+2. **Even with optimistic maker fills it doesn't beat holding.** The best case (1h, long only, maker, every limit
+   order filled at the close) has a median holdout Sharpe of 0.18 against 0.49 for buy-and-hold, and most of its
+   return is the long bias of a rising market.
+3. **The short side makes it worse everywhere** (lower Sharpe in every cell). On BTC and ETH, closes through the VWAP
+   downwards are followed less reliably than upwards ones, and shorting pays for every false break. The original long-only
+   version is the better one; don't add the short leg.
+4. **The in-sample ranking "carries over" (rank correlation 0.8-0.96 with taker costs) only because fewer trades
+   lose less.** The best combos are the slowest ones (EMA 50, rolling VWAP, trend filter on), not the most skilful.
+5. **3-minute candles, as posted, would trade 5x more often than 15m on smaller moves.** With 15m already losing
+   ~0.02% a trade after optimistic maker costs, 3m is very unlikely to pay unless fills are both maker and better
+   than the close. Not tested yet: it needs 1-minute candles (a download, `--intervals 3m --allow-download`).
+
+Same conclusion as the earlier intraday study: short-horizon price rules on BTC and ETH don't clear Kraken's costs.
+
+---
+
 ## 2026-09-27: Does Kraken's minimum lot break the live BTC book at small capital?
 
 **Question:** the research simulator trades continuous weights, but on Kraken Futures the book can only hold whole

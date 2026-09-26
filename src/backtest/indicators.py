@@ -142,3 +142,49 @@ def linreg_tstat(values: np.ndarray, window: int) -> np.ndarray:
         tstat = np.where(standard_error > 0.0, slope / standard_error, np.sign(slope) * np.inf)
     out[window - 1 :] = tstat
     return out
+
+
+def ema(values: np.ndarray, span: int) -> np.ndarray:
+    """Exponential moving average with smoothing 2 / (span + 1), seeded with the first value (causal)."""
+    if span < 1:
+        raise ValueError("span must be at least 1")
+    values = np.asarray(values, dtype=float)
+    out = np.empty_like(values)
+    if len(values) == 0:
+        return out
+    alpha = 2.0 / (span + 1.0)
+    out[0] = values[0]
+    for index in range(1, len(values)):
+        out[index] = out[index - 1] + alpha * (values[index] - out[index - 1])
+    return out
+
+
+def vwap(high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray, *, epoch_seconds: np.ndarray | None = None,
+         window: int = 0, session_seconds: int = 86_400) -> np.ndarray:
+    """Volume-weighted average of the typical price (high + low + close) / 3, up to and including each bar.
+
+    `window = 0` gives the session VWAP that day traders watch: it restarts at
+    each session boundary (00:00 UTC for crypto), so it needs `epoch_seconds`
+    (each bar's open time). `window > 0` gives a rolling VWAP over the last
+    `window` bars instead. Where no volume traded yet, the typical price is used.
+    """
+    typical = (np.asarray(high, float) + np.asarray(low, float) + np.asarray(close, float)) / 3.0
+    volume = np.nan_to_num(np.asarray(volume, float))
+    weighted = typical * volume
+    if window > 0:
+        kernel = np.ones(window)
+        price_volume = np.convolve(weighted, kernel)[: len(weighted)]
+        total_volume = np.convolve(volume, kernel)[: len(volume)]
+    else:
+        if epoch_seconds is None:
+            raise ValueError("a session VWAP needs each bar's time (epoch_seconds)")
+        session = (np.asarray(epoch_seconds, float) // session_seconds).astype(np.int64)
+        starts = np.r_[True, session[1:] != session[:-1]]
+        group = np.cumsum(starts) - 1
+        cumulative_pv, cumulative_v = np.cumsum(weighted), np.cumsum(volume)
+        first = np.flatnonzero(starts)
+        offset_pv = np.r_[0.0, cumulative_pv][first][group]
+        offset_v = np.r_[0.0, cumulative_v][first][group]
+        price_volume, total_volume = cumulative_pv - offset_pv, cumulative_v - offset_v
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(total_volume > 0, price_volume / np.where(total_volume > 0, total_volume, 1.0), typical)

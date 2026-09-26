@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from src.backtest.indicators import atr, linreg_tstat, rolling_max, rolling_mean, rolling_min, rolling_quantile, rolling_std, rsi, series, shift
+from src.backtest.indicators import atr, ema, linreg_tstat, rolling_max, rolling_mean, rolling_min, rolling_quantile, rolling_std, rsi, series, shift, vwap
 from src.backtest.simple_backtest import StrategyFn, _get_close, _get_volume, _normalize_signal
 
 
@@ -419,6 +419,60 @@ def trend_pullback_strategy(
     return _latched_strategy(rules, warmup=max(trend_window, rsi_window) + 1)
 
 
+def ema_vwap_strategy(
+    ema_window: int = 20,
+    vwap_window: int = 0,
+    trend_filter: bool = True,
+    session_exit: bool = False,
+    allow_short: bool = True,
+) -> StrategyFn:
+    """Enter when a candle closes through the VWAP, exit when a candle closes back through the EMA.
+
+    A day-trading rule (seen on Instagram, 2026-09-27, long only, on 3-minute
+    candles): the VWAP is where the day's volume traded on average, so a close
+    breaking above it signals buyers taking control; the faster EMA then trails
+    the move, and a close back below it ends the trade. The short side mirrors
+    it: a close breaking below the VWAP, exit on a close back above the EMA.
+
+    Args:
+        ema_window: The trailing EMA's span, in bars.
+        vwap_window: 0 = the session VWAP, reset at 00:00 UTC; N = a rolling
+            VWAP over the last N bars.
+        trend_filter: Only go long while the EMA is above the VWAP (short while
+            below), the "EMA x VWAP cross" part of the rule.
+        session_exit: Be flat at the end of each UTC day, as a day trader is.
+    """
+
+    def rules(bars: "_BarArrays") -> tuple:
+        close = bars.close
+        trail = ema(close, ema_window)
+        epoch = bars.epoch
+        level = vwap(bars.high, bars.low, close, bars.volume, epoch_seconds=epoch, window=vwap_window)
+        previous_close, previous_level = shift(close), shift(level)
+        broke_up = (previous_close <= previous_level) & (close > level)
+        broke_down = (previous_close >= previous_level) & (close < level)
+        # The close must also be on the right side of the EMA, or the exit would undo the entry on the same bar
+        long_entry = broke_up & (close > trail)
+        short_entry = broke_down & (close < trail)
+        if trend_filter:
+            long_entry &= trail > level
+            short_entry &= trail < level
+        long_exit, short_exit = close < trail, close > trail
+        if session_exit and len(epoch) > 1:
+            step = float(np.median(np.diff(epoch)))
+            last_of_day = ((epoch + step) % 86_400) < 1e-6  # the bar that closes at 00:00 UTC
+            long_entry, short_entry = long_entry & ~last_of_day, short_entry & ~last_of_day
+            long_exit, short_exit = long_exit | last_of_day, short_exit | last_of_day
+        return long_entry, long_exit, (short_entry if allow_short else None), (short_exit if allow_short else None)
+
+    return _latched_strategy(rules, warmup=max(3 * ema_window, vwap_window + 1, 2))
+
+
+def _bar_epoch(bar: Any) -> float:
+    stamp = bar["timestamp"] if isinstance(bar, dict) else bar.timestamp
+    return stamp.timestamp() if hasattr(stamp, "timestamp") else float(stamp)
+
+
 class _BarArrays:
     """OHLCV arrays for a list of bars, extracted only when a rule asks for them."""
 
@@ -433,6 +487,13 @@ class _BarArrays:
 
     close = property(lambda self: self._get("close"))
     high = property(lambda self: self._get("high"))
+
+    @property
+    def epoch(self) -> np.ndarray:
+        """Each bar's open time in seconds since 1970 (UTC), for session-based indicators."""
+        if "epoch" not in self._cache:
+            self._cache["epoch"] = np.array([_bar_epoch(bar) for bar in self._bars], dtype=float)
+        return self._cache["epoch"]
     low = property(lambda self: self._get("low"))
     volume = property(lambda self: self._get("volume"))
 

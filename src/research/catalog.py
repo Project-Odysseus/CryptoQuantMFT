@@ -129,6 +129,13 @@ CATALOG: dict[str, StrategySpec] = {
             grid={"window": [10, 20, 40], "atr_multiplier": [1.0, 1.5, 2.0, 3.0]},
         ),
         StrategySpec(
+            name="ema_vwap",
+            family="intraday_trend",
+            hypothesis="A close through the session VWAP means buyers (or sellers) took control of the day; ride it until a close back through a trailing EMA.",
+            defaults={"ema_window": 20, "vwap_window": 0, "trend_filter": True, "session_exit": False},
+            grid={"ema_window": [9, 20, 50], "vwap_window": [0, 96], "trend_filter": [True, False], "session_exit": [False, True]},
+        ),
+        StrategySpec(
             name="trend_tstat",
             family="trend",
             hypothesis="Only trends that are steep relative to their own noise persist; choppy drifts don't.",

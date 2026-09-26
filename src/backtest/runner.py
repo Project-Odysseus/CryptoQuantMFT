@@ -10,6 +10,7 @@ from src.backtest.simple_backtest import BacktestResult, SimpleBacktester
 from src.backtest.strategies import (
     band_reversion_strategy,
     donchian_breakout_strategy,
+    ema_vwap_strategy,
     keltner_breakout_strategy,
     momentum_breakout_strategy,
     moving_average_crossover_strategy,
@@ -74,6 +75,7 @@ class StrategyRegistry:
             "volatility_squeeze": volatility_squeeze_strategy,
             "rsi_reversion": rsi_reversion_strategy,
             "trend_pullback": trend_pullback_strategy,
+            "ema_vwap": ema_vwap_strategy,
         }
         # Whether each strategy can emit a short (-1) signal at all. This is
         # about the signal itself, not whether a given runtime mode is
@@ -94,6 +96,7 @@ class StrategyRegistry:
             "volatility_squeeze": True,
             "rsi_reversion": True,
             "trend_pullback": True,
+            "ema_vwap": True,
         }
 
     def register(self, name: str, strategy: Any, *, can_short: bool = True) -> None:
