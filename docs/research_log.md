@@ -1,11 +1,64 @@
 # Research log
 
-Dated findings from strategy research, newest first. Methodology and column meanings are in
-[`research_guide.md`](research_guide.md). Record failures too, so they don't get re-tested by accident.
+Dated findings from strategy research, newest first (entries from the same day too). Methodology and column
+meanings are in [`research_guide.md`](research_guide.md). Record failures too, so they don't get re-tested by
+accident.
 
 ---
 
-## 2026-09-26 (newest): Volatility forecasts and volatility-scaled sizing, BTC and ETH perpetuals 2021-2026
+## 2026-09-26: Funding carry on BTC and ETH, per venue (long spot, short perp)
+
+**Question:** what does the classic carry trade earn after fees? It holds long spot and short perp, so the price
+risk cancels and the position collects funding when longs pay. **Short answer:** 11-14% a year on notional over
+2019-2026 on Binance and Bybit, but almost all of it came in bull markets. In the last 12 months it netted about
+1-3% a year, less than cash. Not worth building for BTC and ETH now. Reproduce with `python scripts/research/carry_study.py`
+(module `src/research/carry.py`; cached funding plus one small Kraken API call).
+
+**Funding level** (mean, % a year that a short receives):
+
+| | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 | All | Negative days |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| BTC Binance | 17.2 | 30.6 | 4.2 | 7.9 | 11.9 | 5.1 | 2.9 | 11.6 | 12% |
+| ETH Binance | 27.4 | 37.5 | 0.8 | 8.3 | 12.9 | 4.9 | 1.9 | 13.8 | 12% |
+| BTC Deribit | 9.1 | 16.4 | -2.3 | 6.8 | 10.2 | 5.4 | 2.0 | 7.5 | 27% |
+| BTC / ETH Kraken (last 12 months only) | | | | | | | | 3.2 / 3.1 | 26% |
+
+Bybit averages close to Binance (BTC 12.8, ETH 14.0 a year) but ran higher in 2021 (BTC 38.3, ETH 43.0).
+
+**Net carry after fees.** Round trips (both legs, in and out, taker plus 2 bps slippage per leg) are 0.38% on
+Binance, Bybit and Deribit, and 0.98% on Kraken, whose spot fee is 0.40%. Returns are % of notional a year, and on
+capital at 2x perp leverage (1.5 units of capital per unit of notional):
+
+| | Always on, full history | Filter (in above 10%/yr, out below 0) | Always on, last 12 months |
+| --- | --- | --- | --- |
+| BTC Binance | 11.5 (7.7 on capital), worst 30 days -1.3% | 9.5, ~2 entries a year | 3.0 (2.0) |
+| ETH Binance | 13.7 (9.2), worst 30 days -1.8% | 12.4 | 2.1 (1.4) |
+| BTC Bybit | 12.7 (8.5) | 11.0 | 2.4 (1.6) |
+| BTC Deribit | 7.4 (5.0), worst 30 days -3.5% | 6.4 | 2.3 (1.5) |
+| BTC Kraken | | | 2.2 (1.4) |
+
+- **It's a bull-market trade.** In 2020-21 Binance and Bybit paid 17-38% a year on BTC and 27-43% on ETH, then about
+  zero in 2022 and 2-5% in 2025-26. The full-history
+  average is mostly those bull years.
+- **Switching off in bad times doesn't help.** Funding is persistent, so the filter pays twice a year in switching
+  costs and misses funding while it waits to re-enter. It was below always-on everywhere except ETH on Deribit. In
+  the last 12 months funding rarely reached 10%, so the filter barely traded.
+- **The venue matters.** Deribit's inverse perps pay 35-60% less funding, with two to three times as many negative
+  days.
+  Kraken's funding has recently matched Binance's, but its spot fee triples the round trip.
+- **The downside is small but not zero.** The worst 30 days held continuously lost 1.3-4.5% of notional, when
+  funding turned negative in sell-offs.
+- **Not modelled:** the basis at entry and exit, moving collateral between the legs after big moves (the short
+  perp needs margin top-ups in rallies), and exchange risk (FTX).
+
+**What this points to.** For BTC and ETH, keep carry as a regime trade: switch it on by hand when funding runs above
+~15-20% a year, as in 2021 or early 2024. The open question is altcoins, where funding is higher and more
+dispersed. That needs the Binance archive (on wifi) and its premium index for the basis. Funding is already one of
+the features in the cross-sectional study.
+
+---
+
+## 2026-09-26: Volatility forecasts and volatility-scaled sizing, BTC and ETH perpetuals 2021-2026
 
 **Question:** which volatility forecast is most accurate, and does sizing positions by it improve the strategies that
 held up on the full history? Reproduce with `python scripts/research/volatility_study.py` (module:
@@ -73,7 +126,7 @@ opt-in `--target-annual-vol` for this (see `runbook.md`).
 
 ---
 
-## 2026-09-26 (latest): Positioning data (funding, open interest, trader ratios, implied vol), BTC and ETH
+## 2026-09-26: Positioning data (funding, open interest, trader ratios, implied vol), BTC and ETH
 
 **Question:** does derivatives positioning predict BTC/ETH returns over hours to days, net of costs? **Short answer:
 crowding does, modestly and contrarian, at 1-3 days. It is not a standalone strategy yet, but it is the first
@@ -150,7 +203,7 @@ Record liquidations live (item 3) if cascades are to be tested.
 
 ---
 
-## 2026-09-26 (later still): Realistic limit-order fills remove the intraday maker edge
+## 2026-09-26: Realistic limit-order fills remove the intraday maker edge
 
 `src/research/execution.py` now simulates resting post-only limit orders: an order at the signal close fills only
 if a later bar trades through it by `through_bps` (1 bp by default), all-or-nothing at the limit price; unfilled
@@ -178,7 +231,7 @@ better information (positioning, funding, order flow), not cheaper execution ass
 
 ---
 
-## 2026-09-26 (later): Intraday, 15m and 1h bars, BTC and ETH perpetuals 2020-2026
+## 2026-09-26: Intraday, 15m and 1h bars, BTC and ETH perpetuals 2020-2026
 
 **Question:** is there an edge at holding periods of hours, net of costs? **Short answer: not from price and volume
 features alone at our fee tier.** Reproduce with `python scripts/research/intraday_study.py --interval 15m` (or
@@ -278,7 +331,7 @@ Funding is a flat assumption before 2025. The inverse-contract prices stand in f
 
 ---
 
-## 2026-09-25 (latest): Perp assumptions checked against Kraken Futures' public data
+## 2026-09-25: Perp assumptions checked against Kraken Futures' public data
 
 Checked with `python main.py --futures-venue-check --futures-symbol BTC/USD` (public endpoints, no credentials):
 
@@ -298,7 +351,7 @@ Checked with `python main.py --futures-venue-check --futures-symbol BTC/USD` (pu
   (100%), `keltner_breakout` 0.59 / 0.67 (92%), `donchian_breakout` 0.25 / 0.35 (100%). The conclusions are the
   same as below and the improvement is a bit larger; 4h buy-and-hold (2.21 / 4.64) is still above every long-only row.
 
-## 2026-09-25 (later): Same sweep under perpetual-futures costs
+## 2026-09-25: Same sweep under perpetual-futures costs
 
 **Assumptions used for this table:** 0.05% taker + 5 bps slippage per fill (~0.2% round trip), 0.02% maker, funding
 0.03%/day (stress: 0.10%/day) charged on the position, positive = longs pay. The fees were later confirmed and the

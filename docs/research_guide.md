@@ -291,6 +291,14 @@ result.metrics("2024-01-01")                                                   #
 signs fixed in-sample (to 2023) and a 2024+ holdout. `--kraken-only` restricts the universe to coins Kraken
 Futures lists today.
 
+### Funding carry (long spot, short perp)
+
+`src/research/carry.py` turns funding settlements into daily funding (`daily_funding`, with midnight settlements
+counted in the day that ended) and backtests holding the carry always, or only while trailing funding is high
+(`carry_backtest`). Results are per unit of notional. Divide by the capital per notional (1.5 at 2x perp leverage)
+for the return on capital. `scripts/research/carry_study.py` compares venues for BTC and ETH. The basis at entry
+and exit is not modelled yet.
+
 ### Recorded order flow (only from when the recorder started)
 
 `python main.py --record-market-data` (see `runbook.md`) records trades, order-book samples, perp tickers and
