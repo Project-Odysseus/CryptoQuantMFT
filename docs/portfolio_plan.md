@@ -458,7 +458,10 @@ Python and need no network, so they are good hotspot work.
 - Record the findings in `todo_important.md`.
 
 ### Phase 6: Live readiness (user go-ahead required at every step)
-Status 2026-09-26: built and tested against a fake Kraken, never run against the real API.
+Status 2026-09-26: built and tested against a fake Kraken. **First real round trip done 2026-09-26** (`--futures-live-test`:
+0.0001 BTC bought at 84,022 and sold at 84,021 on PF_XBTUSD; real fills carry `cliOrdId`, so the settle path works
+against the live API; equity 19.3647 -> 19.3562 USD, exactly the price move plus the estimated fees; trade log and tax
+ledger written).
 - Done: `KrakenFuturesCrossMarginAdapter` (several perps in one account; IOC market orders; reduce-only closes;
   deterministic client ids, so a restart settles in-flight orders from `/fills` instead of re-sending; positions and
   margin from Kraken). The engine settles asynchronous fills, skips instruments with an order in flight, allows only
@@ -466,7 +469,7 @@ Status 2026-09-26: built and tested against a fake Kraken, never run against the
   `--portfolio-adopt-exchange`, books funding from Kraken's hourly rates, alerts on equity drift, and records tax.
   The kill switch cancels all orders and closes everything reduce-only. Contract rules (lot step, minimum,
   taker fee) are read from Kraken at startup. The live gates and `[risk] max_gross_notional` are required.
-- Left: a first real run at minimum size (credentials, permissions, the exact response shapes); funding from
+- Left: running the portfolio loop itself live (`config/portfolio.btc_live.toml`); funding from
   Kraken's account log instead of the public rates if the drift check shows a gap; minimum order sizes for small
   books; the same "don't write an IOC order off before `/fills` catches up" fix in the single-contract adapter.
 - The kill switch flattens every instrument on every venue and cancels all orders; test it against sandboxes.
