@@ -1461,7 +1461,17 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             "ETH/USD": "ETH/USD",
         }
         normalized = str(symbol).strip().upper()
-        return mapping.get(normalized, normalized)
+        if normalized in mapping:
+            return mapping[normalized]
+        if "/" in normalized:
+            base, quote = normalized.split("/", 1)
+            return f"{'BTC' if base == 'XBT' else base}/{quote}"
+        # Order history (`descr.pair`) uses the pair's altname, e.g. XBTEUR or SOLEUR
+        for quote in ("USDT", "USDC", "EUR", "USD", "GBP"):
+            if normalized.endswith(quote) and len(normalized) > len(quote):
+                base = normalized[: -len(quote)]
+                return f"{'BTC' if base == 'XBT' else base}/{quote}"
+        return normalized
 
     def _normalize_balance_snapshot_payload(self, payload: dict[str, Any] | None) -> dict[str, Any] | None:
         if payload is None:

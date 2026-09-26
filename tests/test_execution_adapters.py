@@ -546,6 +546,20 @@ def test_kraken_adapter_recover_execution_state_normalizes_kraken_payloads(monke
     assert adapter._orders["kraken-recovery"].status == "FILLED"
 
 
+@pytest.mark.parametrize(
+    ("kraken_pair", "symbol"),
+    [("XXBTZEUR", "BTC/EUR"), ("XBTEUR", "BTC/EUR"), ("XBTUSD", "BTC/USD"), ("ETHEUR", "ETH/EUR"), ("SOLEUR", "SOL/EUR"), ("XBT/EUR", "BTC/EUR"), ("SOLUSDT", "SOL/USDT")],
+)
+def test_kraken_order_history_pairs_map_back_to_runtime_symbols(kraken_pair: str, symbol: str) -> None:
+    """Kraken's closed orders name the pair by its altname (XBTEUR, seen live 2026-09-26); recovered orders must say BTC/EUR."""
+    adapter = KrakenExecutionAdapter(api_key="", api_secret="")
+    recovered = adapter._normalize_remote_orders_payload(
+        {"error": [], "result": {"closed": {"OABC12-XYZ": {"status": "closed", "vol": "0.0001", "vol_exec": "0.0001", "price": "70000", "fee": "0.03",
+                                                        "descr": {"pair": kraken_pair, "type": "buy"}}}}}
+    )
+    assert recovered[0]["symbol"] == symbol
+
+
 def test_kraken_adapter_handles_missing_credentials_non_destructively(monkeypatch: pytest.MonkeyPatch) -> None:
     """Submit, status, and cancel should stay local when Kraken credentials are missing."""
     adapter = KrakenExecutionAdapter(api_key="", api_secret="")

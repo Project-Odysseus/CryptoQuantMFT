@@ -8,8 +8,13 @@ mirror them in `TODO.MD`.
 - [ ] **Spot: partial fills and resting orders against real Kraken state.** Async full fills are validated live
   (2026-09-25). A resting order (placed, not yet filled) and a genuine partial fill have not been exercised against
   the real exchange
-- [ ] **Spot: re-run the verification against populated exchange data.** Confirm the order IDs, symbol mapping and
-  reconciliation state recovered from Kraken for the real 2026-09-18/25 trades
+- [x] **Spot: re-run the verification against populated exchange data.** Done 2026-09-26: `--kraken-verify-dry-run`
+  passes all 7 checks, and Kraken's 7 closed orders match the 7 real trades in the database on side, size, price and
+  fee. It found one bug, fixed: order history names the pair by its altname (`XBTEUR`), which recovered as
+  `XBTEUR` instead of `BTC/EUR`
+- [ ] **`live_dry_run` fills look like real fills in `trades`** (exchange `kraken`, source `paper_trading`; e.g.
+  trades 23594-23597 on 2026-09-25). The tax ledger is unaffected (checked), but reports and dashboards can't tell
+  sandbox fills from real ones. Tag them (exchange `kraken_sandbox` or a mode column)
 - [ ] **Spot: kill-switch preview against a real open order** (the cancel target list, checked against Kraken's
   actual open orders)
 - [x] **Spot: reconciled fills can record `fee=0`.** Kraken's `QueryOrders` can report `closed` before the fee
