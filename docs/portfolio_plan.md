@@ -4,8 +4,9 @@ A step-by-step plan for running several strategies on several coins and venues a
 that you, or any coding agent, can pick it up cold and continue. It doesn't depend on who wrote the earlier steps.
 Each step says which files to touch, what to build, how to test it, and how to tell it's done.
 
-Status as of 2026-09-26: Phases 0 and 1 are done. Steps 2.1, 2.2, 2.4 and 2.5 are done and tested. 2.3 and
-2.6-2.7 are next (see the tracker in section 10).
+Status as of 2026-09-26: Phases 0-2 are done: research, and the pure core (config, sleeves, allocation, netting,
+risk overlay, order planner, parity). Phase 3 (the stateful book and paper execution) is next (see the tracker in
+section 10).
 
 ---
 
@@ -536,11 +537,11 @@ Python and need no network, so they are good hotspot work.
 - [x] 1.4 Research script, example config, study and log entry (2026-09-26): `scripts/research/portfolio_backtest.py` over `src/portfolio/backtest.py`, tests in `tests/test_portfolio_backtest.py`, findings in `docs/research_log.md`.
 - [x] 2.1 Config and validation, `--portfolio-check` (2026-09-26): `src/portfolio/config.py` (`load_portfolio_config`, `describe`, all rules, every error reported at once, non-numeric values reported instead of crashing), `main.py --portfolio-check PATH` (exit code 1 on a bad config), tests in `tests/test_portfolio_config.py`.
 - [x] 2.2 Sleeve runner with state (2026-09-26, the same module as 1.1): stepping one bar at a time with a JSON restart every bar matches `run_sleeve`; stops flatten the sleeve and block re-entry until the signal resets. `SleeveState` keeps `bars_held` instead of an entry time.
-- [ ] 2.3 Allocation (runtime form)
+- [x] 2.3 Allocation (runtime form) (2026-09-26): `Allocator` in `src/portfolio/allocation.py` steps once per grid bar, refits on the same schedule from past returns only, and checkpoints to JSON. It matches `allocate_history` bar by bar.
 - [x] 2.4 Netting and attribution (2026-09-26): `src/portfolio/netting.py`, tests in `tests/test_portfolio_allocation.py`.
 - [x] 2.5 Portfolio risk overlay (2026-09-26): `src/portfolio/risk.py` (`apply_portfolio_risk`, `drawdown_multiplier`, `array_overlay` for research), tests in `tests/test_portfolio_risk.py`. The config also rejects a non-positive daily-loss limit, venue cap or `stale_after_bars`.
 - [x] 2.6 Order planner (2026-09-26): `src/portfolio/orders.py` (`plan_orders`, `OrderPlan`, `PlannedOrder`), tests in `tests/test_portfolio_orders.py`. The band matches `simulate_portfolio`'s. Held instruments without a target are closed. Every skip has a reason (`within_band`, `below_min_size`, `below_lot_step`, `no_price`, `no_short`).
-- [ ] 2.7 Parity test
+- [x] 2.7 Parity test (2026-09-26): `test_the_runtime_path_bar_by_bar_matches_the_research_backtest`. It steps each sleeve as its bars complete, steps the allocator per 4h grid bar and nets, with a JSON checkpoint every bar. The result equals `run_book`'s targets under all three allocation methods. Delaying a decision by one bar fails it. The risk overlay is the same pure function in both paths (`array_overlay` wraps `apply_portfolio_risk`); its inputs (equity, current weights) come from the book in Phase 3.
 - [ ] 3.1 Portfolio book
 - [ ] 3.2 Paper execution through sandbox adapters
 - [ ] 3.3 Checkpoint and restart

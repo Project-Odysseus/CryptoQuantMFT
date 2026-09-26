@@ -92,3 +92,25 @@ def test_net_history_sums_sleeve_columns_into_instrument_columns() -> None:
     assert instruments["BTC"].tolist() == pytest.approx([0.2, -0.2, 0.5])
     assert instruments["ETH"].tolist() == pytest.approx([0.4, 0.4, 0.4])
     assert instruments.sum(axis=1).tolist() == pytest.approx(sleeves.sum(axis=1).tolist())
+
+
+def test_the_runtime_allocator_matches_allocate_history_bar_by_bar_and_survives_a_restart() -> None:
+    import json
+
+    from src.portfolio.allocation import Allocator
+
+    returns = _returns(seed=7)
+    returns.iloc[0] = np.nan  # the first bar has no return, as in run_book
+    weights = pd.DataFrame(1.0, index=DAYS, columns=["calm", "wild"])
+    budgets = {"calm": 1.0, "wild": 2.0}
+    for method in ("equal", "fixed", "inverse_vol"):
+        expected = allocate_history(weights, budgets, method, instrument_returns=returns, lookback=40, refit_every=15)
+        allocator = Allocator(budgets, method, lookback=40, refit_every=15)
+        rows = []
+        for _, row in returns.iterrows():
+            rows.append(allocator.step(row.to_dict()))
+            allocator = Allocator.from_dict(json.loads(json.dumps(allocator.to_dict())))
+        np.testing.assert_allclose(pd.DataFrame(rows, index=DAYS)[["calm", "wild"]].to_numpy(), expected.to_numpy(), rtol=1e-9)
+
+    with pytest.raises(ValueError, match="unknown allocation"):
+        Allocator(budgets, "risk_parity")

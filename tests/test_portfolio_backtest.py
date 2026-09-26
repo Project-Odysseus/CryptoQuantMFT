@@ -181,3 +181,58 @@ def test_a_prebuilt_strategy_replaces_the_registry_and_keeps_long_only() -> None
     both_sides = run_sleeve(spec, bars, strategy=strategy).weights
     long_only = run_sleeve(replace(spec, long_only=True), bars, strategy=strategy).weights
     assert (both_sides < 0).any() and (long_only >= 0).all() and (long_only > 0).any()
+
+
+@pytest.mark.parametrize("method", ["equal", "fixed", "inverse_vol"])
+def test_the_runtime_path_bar_by_bar_matches_the_research_backtest(method: str) -> None:
+    """Portfolio plan step 2.7: the same bars through the runtime core give the research targets at every grid bar.
+
+    The runtime path sees bars as they complete. Each sleeve steps when one of its own bars closes (a daily sleeve
+    once a day, on the day's last 4h bar), the allocator steps once per grid bar, and netting combines them. Every
+    sleeve state and the allocator go through a JSON checkpoint on every bar, as a restart would.
+    """
+    import json
+
+    from src.portfolio.allocation import Allocator
+    from src.portfolio.netting import net_targets
+    from src.portfolio.sleeves import SleeveRunner, SleeveState
+
+    config = _config(allocation_lookback_days=20, allocation_refit_days=5)
+    inputs = prepare_inputs(config, bar_loader=synthetic_loader)
+    research = run_book(config, inputs, allocation=method, risk_overlay=False).targets
+
+    grid_step = pd.Timedelta(hours=4)
+    grid = pd.DatetimeIndex([bar.timestamp for bar in synthetic_loader(config.instruments["kraken_futures:BTC/USD"], "4h")])
+    closes = {instrument: pd.Series([bar.close for bar in synthetic_loader(config.instruments[instrument], "4h")], index=grid) for instrument in config.instruments}
+    sleeves = {}
+    for spec in config.enabled_sleeves:
+        bars = synthetic_loader(config.instruments[spec.instrument], spec.interval)
+        lands_on = [pd.Timestamp(bar.timestamp) + pd.Timedelta(seconds=bar.interval_seconds) - grid_step for bar in bars]
+        sleeves[spec.id] = {"spec": spec, "runner": SleeveRunner(spec), "bars": bars, "lands_on": lands_on, "done": 0, "state": SleeveState()}
+
+    per_day = inputs.bars_per_day
+    allocator = Allocator(config.budgets() if method != "fixed" else {k: v / 1.4 for k, v in config.budgets().items()}, method,
+                          lookback=round(config.allocation_lookback_days * per_day), refit_every=round(config.allocation_refit_days * per_day))
+    runtime: dict[pd.Timestamp, dict[str, float]] = {}
+    previous_close: dict[str, float] | None = None
+    for stamp in grid:
+        for sleeve in sleeves.values():
+            while sleeve["done"] < len(sleeve["bars"]) and sleeve["lands_on"][sleeve["done"]] <= stamp:
+                history = sleeve["bars"][: sleeve["done"] + 1]
+                state, _ = sleeve["runner"].step(sleeve["state"], history, sleeve["runner"].signals(history)[-1])
+                sleeve["state"] = SleeveState.from_dict(json.loads(json.dumps(state.to_dict())))
+                sleeve["done"] += 1
+        if stamp < inputs.measure_start:
+            continue
+        returns = {sleeve_id: (closes[s["spec"].instrument][stamp] / previous_close[s["spec"].instrument] - 1.0) if previous_close else float("nan")
+                   for sleeve_id, s in sleeves.items()}
+        scales = allocator.step(returns)
+        allocator = Allocator.from_dict(json.loads(json.dumps(allocator.to_dict())))
+        net, _ = net_targets({sleeve_id: (s["spec"].instrument, s["state"].weight * scales[sleeve_id]) for sleeve_id, s in sleeves.items()})
+        runtime[stamp] = net
+        previous_close = {instrument: series[stamp] for instrument, series in closes.items()}
+
+    runtime_frame = pd.DataFrame.from_dict(runtime, orient="index").reindex(columns=research.columns)
+    assert len(runtime_frame) == len(research)
+    np.testing.assert_allclose(runtime_frame.to_numpy(), research.to_numpy(), rtol=1e-9, atol=1e-12)
+    assert (research.abs().sum(axis=1) > 0).mean() > 0.3  # the books actually hold positions
