@@ -1094,3 +1094,20 @@ def test_paper_run_opens_and_closes_a_short_from_flat_when_shorts_are_allowed() 
     long_only = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=5).run(bars, signals)
     assert [(order.side, order.status) for order in long_only.orders][:1] == [("sell", "CANCELED")]
     assert long_only.portfolio_history[-1].equity == pytest.approx(1000.0)
+
+
+def test_logged_trades_carry_the_runtime_mode_as_their_source() -> None:
+    """A live_dry_run sandbox fill must not look like a real exchange fill in the trade log."""
+    from src.execution.adapters import SandboxExecutionAdapter
+
+    logger = _RecordingLogger()
+    adapter = SandboxExecutionAdapter(exchange_name="kraken")
+    adapter._balances = {"EUR": 1000.0}
+    adapter._base_currency = "EUR"
+    engine = PaperTradingEngine(execution_adapter=adapter, exchange_name="kraken", trade_logger=logger, trade_source="live_dry_run")
+    bars = [OHLCVBar(exchange="kraken", symbol="BTC/EUR", interval_seconds=60, timestamp=datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+                     open=68000.0, high=68000.0, low=68000.0, close=68000.0, volume=10.0)]
+
+    engine.run_exchange_cycle(bars, [1.0])
+
+    assert logger.trades and {trade["source"] for trade in logger.trades} == {"live_dry_run"}

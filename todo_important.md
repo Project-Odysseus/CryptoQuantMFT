@@ -5,18 +5,24 @@ mirror them in `TODO.MD`.
 
 ## Open
 
-- [ ] **Spot: partial fills and resting orders against real Kraken state.** Async full fills are validated live
+- [x] **Spot: partial fills and resting orders against real Kraken state.** Async full fills are validated live
   (2026-09-25). **Resting order validated 2026-09-26:** a 0.00005 BTC limit buy 15% under the bid
   (`OQS5AR-Y7MBP-M7EQMA`) went through `submit_order`, Kraken listed it open as `BTC/EUR`, status and recovery read
-  it as `OPEN` with nothing filled, and the engine's reconciliation kept it pending and logged no trade. Still open:
-  a genuine partial fill, which can't be forced at minimum size (it needs an order larger than the trades that hit it)
+  it as `OPEN` with nothing filled, and the engine's reconciliation kept it pending and logged no trade.
+  **Partial fills fixed 2026-09-26 (in code, not seen live):** Kraken has no "partial" status. A partial fill is an
+  `open` order with `vol_exec` > 0, which we read as `OPEN` and ignored; a partly filled order that was then
+  cancelled read as `CANCELED` and its fill was never booked; and `expired` fell through to `SUBMITTED` forever.
+  Now `open` + `vol_exec` reads `PARTIALLY_FILLED`, `expired` reads `CANCELED`, and a cancelled order's fill is
+  booked, each new fill logged once with its share of the fee. Tested with Kraken-shaped `QueryOrders` answers. A
+  live partial fill can't be forced at minimum size; the first one seen live is worth checking against Kraken's history
 - [x] **Spot: re-run the verification against populated exchange data.** Done 2026-09-26: `--kraken-verify-dry-run`
   passes all 7 checks, and Kraken's 7 closed orders match the 7 real trades in the database on side, size, price and
   fee. It found one bug, fixed: order history names the pair by its altname (`XBTEUR`), which recovered as
   `XBTEUR` instead of `BTC/EUR`
-- [ ] **`live_dry_run` fills look like real fills in `trades`** (exchange `kraken`, source `paper_trading`; e.g.
-  trades 23594-23597 on 2026-09-25). The tax ledger is unaffected (checked), but reports and dashboards can't tell
-  sandbox fills from real ones. Tag them (exchange `kraken_sandbox` or a mode column)
+- [x] **`live_dry_run` fills look like real fills in `trades`.** Fixed 2026-09-26: the runtime now logs each
+  trade's `source` as its mode (`paper_trading`, `live_dry_run` or `live`). The tax ledger was never affected.
+  Still to do by hand (a database edit, left for you): retag the old rows, 23594-23597 and 23606 as `live_dry_run`,
+  and the real fills 23601-23605 as `live`
 - [x] **Spot: kill-switch preview against a real open order** (the cancel target list, checked against Kraken's
   actual open orders). Done 2026-09-26, together with a real activation. The test found that `--kill-switch` on its
   own cancelled nothing on the exchange (it only wrote the state file), and that the single-strategy runtime never

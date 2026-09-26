@@ -205,6 +205,8 @@ def build_runtime_orchestrator(
         enable_tax_logging=(runtime_config.mode == "live" and not is_perp),
         record_derivative_ledger=(runtime_config.mode == "live" and is_perp),
         strategy_id=runtime_config.strategy_name,
+        # Tag trades with the mode: live_dry_run fills are sandbox fills shaped like the exchange's, not real ones
+        trade_source="paper_trading" if runtime_config.mode == "paper" else runtime_config.mode,
         # PaperTradingEngine.run() (used by "paper") has always allowed
         # shorting unconditionally, regardless of this flag - it only gates
         # the exchange-backed run_exchange_cycle() path (live_dry_run/live).

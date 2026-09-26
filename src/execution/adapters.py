@@ -133,7 +133,8 @@ class ExecutionAdapter:
                 previous_fill_size=previous_fill_size,
                 previous_fee=previous_fee,
             )
-        elif remote_status in {"FILLED", "PARTIALLY_FILLED"}:
+        elif remote_status in {"FILLED", "PARTIALLY_FILLED"} or (remote_status == "CANCELED" and (remote_filled_size or 0.0) > previous_fill_size):
+            # The CANCELED case: an order cancelled or expired after filling in part still has that fill to book
             filled_delta = (remote_filled_size or 0.0) - previous_fill_size
             fee_delta = (remote_fee or 0.0) - previous_fee
             if filled_delta > 0.0 or fee_delta > 0.0:
@@ -1540,14 +1541,15 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
             side = str(descr.get("type", side) or side)
 
         local_order_id = self._resolve_local_order_id(remote_order_id)
+        filled_size = self._coerce_float(payload.get("vol_exec")) or self._coerce_float(payload.get("filled_size")) or 0.0
         return {
             "order_id": local_order_id,
             "remote_order_id": remote_order_id,
             "side": side,
             "size": self._coerce_float(payload.get("vol")) or self._coerce_float(payload.get("volume")) or 0.0,
             "symbol": order_symbol,
-            "status": self._normalize_order_status(payload.get("status")),
-            "filled_size": self._coerce_float(payload.get("vol_exec")) or self._coerce_float(payload.get("filled_size")) or 0.0,
+            "status": self._normalize_order_status(payload.get("status"), filled_size=filled_size),
+            "filled_size": filled_size,
             "fill_price": self._coerce_float(payload.get("price")) or self._coerce_float(payload.get("avg_price")),
             "fee": self._coerce_float(payload.get("fee")) or 0.0,
         }
@@ -1558,15 +1560,18 @@ class KrakenExecutionAdapter(ExchangeExecutionAdapter):
                 return local_order_id
         return remote_order_id
 
-    def _normalize_order_status(self, status: Any) -> str:
+    def _normalize_order_status(self, status: Any, filled_size: float = 0.0) -> str:
+        """Map Kraken's order status to ours. Kraken has no "partial" status: a partial fill is an `open` order
+        with `vol_exec` above zero, so the executed volume decides."""
         normalized = str(status or "").strip().lower()
         if normalized in {"closed", "filled"}:
             return "FILLED"
         if normalized in {"open"}:
-            return "OPEN"
+            return "PARTIALLY_FILLED" if filled_size > 0.0 else "OPEN"
         if normalized in {"pending"}:
             return "SUBMITTED"
-        if normalized in {"canceled", "cancelled"}:
+        if normalized in {"canceled", "cancelled", "expired"}:
+            # A cancelled or expired order may still have filled in part; reconciliation books that fill
             return "CANCELED"
         if normalized in {"partial", "partially_filled", "partially-filled"}:
             return "PARTIALLY_FILLED"

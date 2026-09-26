@@ -115,6 +115,7 @@ class PaperTradingEngine:
         strategy_id: str | None = None,
         allow_short: bool = False,
         record_derivative_ledger: bool = False,
+        trade_source: str = "paper_trading",
     ) -> None:
         """Initialize the object with its runtime state."""
         if initial_cash <= 0:
@@ -139,6 +140,9 @@ class PaperTradingEngine:
         self.exchange_name = exchange_name or getattr(execution_adapter, "exchange_name", None) or getattr(execution_adapter, "name", None) or "paper"
         self.enable_tax_logging = enable_tax_logging
         self.strategy_id = strategy_id
+        # The `source` on logged trades. The runtime sets its mode (paper_trading / live_dry_run / live), so a
+        # sandbox fill shaped like a Kraken fill can't be mistaken for a real one in reports.
+        self.trade_source = trade_source
         # Only meaningful for run_exchange_cycle() (live_dry_run/live): whether
         # a flat position may be opened short. Real Kraken spot has no margin
         # support, so this must stay False for --runtime live; it exists so
@@ -304,7 +308,7 @@ class PaperTradingEngine:
                     if self.trade_logger is not None:
                         self.trade_logger.log_trade(
                             timestamp=timestamp,
-                            source="paper_trading",
+                            source=self.trade_source,
                             exchange=order.exchange or _get_exchange(bar) or self.exchange_name,
                             pair=order.symbol or _get_symbol(bar) or "unknown",
                             side=order.side,
@@ -1028,7 +1032,7 @@ class PaperTradingEngine:
         if self.trade_logger is not None:
             self.trade_logger.log_trade(
                 timestamp=timestamp,
-                source="paper_trading",
+                source=self.trade_source,
                 exchange=order.exchange or getattr(self.execution_adapter, "exchange_name", None) or self.execution_adapter.name,
                 pair=order.symbol or "unknown",
                 side=order.side,
@@ -1100,7 +1104,7 @@ class PaperTradingEngine:
         if self.trade_logger is not None:
             self.trade_logger.log_trade(
                 timestamp=timestamp,
-                source="paper_trading",
+                source=self.trade_source,
                 exchange=order.exchange or getattr(self.execution_adapter, "exchange_name", None) or self.execution_adapter.name,
                 pair=order.symbol or "unknown",
                 side=order.side,
@@ -1166,7 +1170,9 @@ class PaperTradingEngine:
 
         new_trades: list[PaperTrade] = []
         for order in list_orders():
-            if getattr(order, "status", None) not in {"FILLED", "PARTIALLY_FILLED"}:
+            status = getattr(order, "status", None)
+            # A cancelled or expired order can still have filled in part before it ended
+            if status not in {"FILLED", "PARTIALLY_FILLED"} and not (status == "CANCELED" and float(getattr(order, "filled_size", 0.0) or 0.0) > 0.0):
                 continue
             total_filled = float(getattr(order, "filled_size", 0.0) or 0.0)
             already_logged = self._reconciled_fill_size_by_order_id.get(order.order_id, 0.0)
@@ -1213,7 +1219,7 @@ class PaperTradingEngine:
             if self.trade_logger is not None:
                 self.trade_logger.log_trade(
                     timestamp=timestamp,
-                    source="paper_trading",
+                    source=self.trade_source,
                     exchange=getattr(order, "exchange", None) or self.exchange_name,
                     pair=getattr(order, "symbol", None) or "unknown",
                     side=order.side,

@@ -1418,3 +1418,72 @@ def test_firi_adapter_uses_rest_endpoints_for_submit_and_status(monkeypatch) -> 
     assert calls[0][0] == "POST"
     assert status_report.status == "FILLED"
     assert status_report.filled_size == 0.50
+
+
+@pytest.mark.parametrize(
+    ("status", "vol_exec", "expected"),
+    [("open", "0", "OPEN"), ("open", "0.00002", "PARTIALLY_FILLED"), ("closed", "0.00005", "FILLED"), ("canceled", "0.00002", "CANCELED"),
+     ("expired", "0", "CANCELED"), ("pending", "0", "SUBMITTED")],
+)
+def test_kraken_status_uses_executed_volume_since_kraken_has_no_partial_status(status: str, vol_exec: str, expected: str) -> None:
+    """Kraken reports a partial fill as an `open` order with vol_exec > 0, and `expired` is final."""
+    adapter = KrakenExecutionAdapter(api_key="", api_secret="")
+    recovered = adapter._normalize_remote_orders_payload(
+        {"error": [], "result": {"OTX": {"status": status, "vol": "0.00005", "vol_exec": vol_exec, "price": "70000", "fee": "0", "descr": {"pair": "XBTEUR", "type": "buy"}}}}
+    )
+    assert recovered[0]["status"] == expected
+
+
+def test_a_resting_kraken_order_that_fills_in_part_and_is_then_cancelled_books_every_fill_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Open -> partly filled -> cancelled with more filled: each new fill is logged once, with its share of the fee."""
+    from src.execution import PaperTradingEngine
+
+    answers = iter([
+        ("open", "0", "0"),
+        ("open", "0.00002", "0.0056"),
+        ("canceled", "0.00003", "0.0084"),
+    ])
+    calls: list[str] = []
+
+    def fake_private_request(self: KrakenExecutionAdapter, *, endpoint: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append(endpoint)
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZEUR": "15.99"}}
+        if endpoint == "AddOrder":
+            return {"error": [], "result": {"txid": ["OPARTIAL"]}}
+        if endpoint == "QueryOrders":
+            status, vol_exec, fee = next(answers)
+            return {"error": [], "result": {"OPARTIAL": {"status": status, "vol": "0.00005", "vol_exec": vol_exec, "price": "70000.0" if vol_exec != "0" else "0",
+                                                           "fee": fee, "descr": {"pair": "XBTEUR", "type": "buy"}}}}
+        raise AssertionError(endpoint)
+
+    class Logger:
+        def __init__(self) -> None:
+            self.trades: list[dict[str, object]] = []
+
+        def log_trade(self, **kwargs: object) -> tuple[int, None]:
+            self.trades.append(kwargs)
+            return 1, None
+
+        def log_event(self, **_: object) -> int:
+            return 1
+
+    monkeypatch.setattr(KrakenExecutionAdapter, "_request_json", lambda self, *a, **k: _permissive_pair_metadata_response("XXBTZEUR"))
+    monkeypatch.setattr(KrakenExecutionAdapter, "_private_request", fake_private_request)
+    adapter = KrakenExecutionAdapter(api_key="key", api_secret="secret")
+    logger = Logger()
+    engine = PaperTradingEngine(execution_adapter=adapter, exchange_name="kraken", trade_logger=logger)
+    assert adapter.submit_order(order_id="rest-1", side="buy", size=0.00005, price=70000.0, timestamp=datetime(2026, 9, 26), symbol="BTC/EUR").status == "SUBMITTED"
+
+    now = datetime(2026, 9, 26, 12)
+    assert engine._reconcile_exchange_fills(timestamp=now) == []  # resting, nothing filled
+    first = engine._reconcile_exchange_fills(timestamp=now)  # 0.00002 filled while still open
+    assert adapter._orders["rest-1"].status == "PARTIALLY_FILLED"
+    assert [(trade.size, trade.fee) for trade in first] == [(pytest.approx(0.00002), pytest.approx(0.0056))]
+    second = engine._reconcile_exchange_fills(timestamp=now)  # cancelled after 0.00003 in total
+    assert adapter._orders["rest-1"].status == "CANCELED"
+    assert [(trade.size, trade.fee) for trade in second] == [(pytest.approx(0.00001), pytest.approx(0.0028))]
+    assert adapter.get_account_snapshot()["positions"]["BTC"] == pytest.approx(0.00003)
+    assert len(logger.trades) == 2
+    queries = calls.count("QueryOrders")
+    assert engine._reconcile_exchange_fills(timestamp=now) == [] and calls.count("QueryOrders") == queries  # nothing pending: no more polling
