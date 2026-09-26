@@ -225,6 +225,8 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
 
         current = self.position_size(symbol)
         after = current + rounded if side == "buy" else current - rounded
+        if abs(after) < contract.size_step / 2.0:
+            after = 0.0  # float residue of a full close (e.g. 1e-17), not a flip
         grows = abs(after) > abs(current) + _EPSILON or (current != 0.0 and after != 0.0 and (after > 0) != (current > 0))
         if reduce_only and grows:
             return self._reject(order_id, f"reduce_only: {side} {rounded} would grow or flip the {symbol} position of {current}")

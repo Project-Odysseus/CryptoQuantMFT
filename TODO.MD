@@ -291,7 +291,7 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [x] Phase 0: sizing contract (share of equity, `src/risk/sizing.py`) and the research portfolio backtester
   - [x] Phase 1: research. Sleeve targets, any bar interval, allocation, `scripts/research/portfolio_backtest.py` and a study (2026-09-26; findings in `docs/research_log.md`: equal allocation, 40% kill, no de-risking)
   - [x] Phase 2: pure core. Config and `--portfolio-check`, sleeve runner, netting, portfolio risk overlay, order planner, parity test (2026-09-26)
-  - [ ] Phase 3: stateful book, paper execution through sandbox adapters, checkpoint and restart
+  - [x] Phase 3: stateful book, paper execution through sandbox adapters, checkpoint and restart (2026-09-26)
   - [ ] Phase 4: runtime `--portfolio`, multi-instrument data, reporting, alerts
   - [ ] Phase 5-6: `live_dry_run` soak, then live readiness (user go-ahead)
 - [ ] **Needs exchange API keys (Binance / Bybit / OKX / Deribit)**: collected here so research never waits on keys. Everything so far used public data. Put keys in `.env` only, read-only first, with no withdrawal permission, and never print them. Check first that each venue offers derivatives to a Norwegian account.

@@ -80,6 +80,7 @@ class PortfolioBook:
     day_start_equity: Decimal = ZERO
     day: date | None = None
     last_update: datetime | None = None
+    liquidations_booked: list[str] = field(default_factory=list)  # exchange liquidation order ids already in the book
 
     def __post_init__(self) -> None:
         """Fill in venue currencies and a starting equity."""
@@ -164,6 +165,13 @@ class PortfolioBook:
         self.cash[spec.venue] -= paid
         position.funding += paid
         return paid
+
+    def book_funding(self, instrument: str, amount: Decimal | float) -> None:
+        """Book a funding payment the exchange computed (positive = paid), so book and exchange stay equal to the cent."""
+        spec = self._spec(instrument)
+        paid = _d(amount)
+        self.cash[spec.venue] -= paid
+        self.positions.setdefault(instrument, BookPosition()).funding += paid
 
     def mark(self, prices: Mapping[str, Decimal | float], *, fx: Mapping[str, Decimal | float] | None = None, now: datetime | None = None) -> Decimal:
         """Take new prices (and FX rates), update sleeve P&L, the equity peak and the UTC day start; returns equity in base.
@@ -270,6 +278,7 @@ class PortfolioBook:
             "day_start_equity": str(self.day_start_equity),
             "day": self.day.isoformat() if self.day else None,
             "last_update": self.last_update.isoformat() if self.last_update else None,
+            "liquidations_booked": list(self.liquidations_booked),
         }
 
     @classmethod
@@ -289,5 +298,6 @@ class PortfolioBook:
             day_start_equity=Decimal(payload["day_start_equity"]),
             day=date.fromisoformat(payload["day"]) if payload.get("day") else None,
             last_update=datetime.fromisoformat(payload["last_update"]) if payload.get("last_update") else None,
+            liquidations_booked=list(payload.get("liquidations_booked", [])),
         )
         return book

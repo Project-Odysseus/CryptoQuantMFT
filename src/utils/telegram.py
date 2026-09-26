@@ -87,6 +87,13 @@ TRADE_REASONS = {
     "drawdown_limit": "risk stop: account drawdown limit",
     "daily_loss_limit": "risk stop: daily loss limit",
     "circuit_breaker": "risk stop: circuit breaker",
+    # Portfolio orders trade the netted target of all sleeves on an instrument (src/portfolio/orders.py)
+    "open": "portfolio: the net target opened a position",
+    "increase": "portfolio: the net target grew",
+    "reduce": "portfolio: the net target shrank",
+    "close": "portfolio: the net target went to zero",
+    "flip_close": "portfolio: closing before flipping to the other side",
+    "flip_open": "portfolio: opening the other side after a flip",
 }
 
 
@@ -117,6 +124,7 @@ class TradeAlert:
     pnl_last_hour: float | None = None
     drawdown_pct: float | None = None
     timestamp: datetime | None = None
+    notes: tuple[str, ...] = ()  # extra lines after "Why", e.g. which portfolio sleeves drove the trade
 
 
 def format_trade_alert(alert: TradeAlert) -> str:
@@ -126,7 +134,8 @@ def format_trade_alert(alert: TradeAlert) -> str:
     lines = [f"[{mode}] {alert.side.upper()} {alert.size:.8g} {symbol} @ {alert.price:,.2f}"]
     why = TRADE_REASONS.get(alert.intent or "", alert.intent or "not recorded")
     signal = "n/a" if alert.signal is None else "0" if alert.signal == 0 else f"{alert.signal:+g}"
-    lines.append(f"Why: {why} ({alert.strategy_name} signal {signal})")
+    lines.append(f"Why: {why}" + (f" ({alert.strategy_name} signal {signal})" if alert.signal is not None or not alert.notes else ""))
+    lines.extend(alert.notes)
     params = ", ".join(f"{key}={value}" for key, value in alert.strategy_params.items())
     lines.append(f"Strategy: {alert.strategy_name}" + (f" ({params})" if params else ""))
     if alert.position_size:

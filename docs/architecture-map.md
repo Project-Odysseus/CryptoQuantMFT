@@ -155,6 +155,20 @@ flowchart TD
   - It runs startup checks, collects market data, builds signals, runs the paper trading engine, and records runtime health.
   - It now also updates the account-state tracker and exposes a health report with reconciliation data.
 
+### Portfolio layer (several strategies and instruments; not wired into `main.py --runtime` yet)
+
+Plan and status: `docs/portfolio_plan.md`.
+
+- `src/portfolio/config.py`: the TOML portfolio config and its validation (`main.py --portfolio-check`).
+- `src/portfolio/sleeves.py`: one strategy on one instrument, turned into a target weight bar by bar.
+- `src/portfolio/allocation.py`, `netting.py`, `risk.py`, `orders.py`: the pure core. It allocates sleeves, nets
+  them per instrument, applies the portfolio risk limits, and plans the orders.
+- `src/portfolio/book.py`: positions, cash per venue, FX, funding and per-sleeve attribution, in `Decimal`.
+- `src/portfolio/engine.py`: `PortfolioEngine.run_cycle`, which runs bars -> sleeves -> targets -> orders -> one
+  adapter per venue (`SandboxCrossMarginPerpAdapter` in `src/execution/cross_margin.py` for paper perps) -> book,
+  then reconciliation, logging, Telegram and a checkpoint.
+- `src/portfolio/backtest.py` plus `scripts/research/portfolio_backtest.py`: the same core over history.
+
 ## 4. How the pieces actually work together
 
 ### A. Market data -> bars -> signals

@@ -127,3 +127,11 @@ def test_a_restarted_account_continues_from_its_state_file(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="doesn't match this account"):
         SandboxCrossMarginPerpAdapter(contracts=[assumed_perp_contract(BTC)], state_path=path)
+
+
+def test_closing_a_position_that_accumulated_float_residue_is_not_a_flip() -> None:
+    account = _account()
+    _order(account, "1", BTC, "sell", 0.1037, 50_000.0)
+    account._positions["BTC"] = -0.10369999999999999  # what a series of float fills left behind (seen in a paper run)
+    report = _order(account, "close", BTC, "buy", 0.1037, 50_000.0, reduce_only=True)
+    assert report.status == "FILLED" and account.positions() == {}

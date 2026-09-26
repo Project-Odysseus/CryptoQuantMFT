@@ -4,9 +4,9 @@ A step-by-step plan for running several strategies on several coins and venues a
 that you, or any coding agent, can pick it up cold and continue. It doesn't depend on who wrote the earlier steps.
 Each step says which files to touch, what to build, how to test it, and how to tell it's done.
 
-Status as of 2026-09-26: Phases 0-2 are done: research, and the pure core (config, sleeves, allocation, netting,
-risk overlay, order planner, parity). Phase 3 (the stateful book and paper execution) is next (see the tracker in
-section 10).
+Status as of 2026-09-26: Phases 0-3 are done: research, the pure core, and the stateful book with paper execution
+through a cross-margin sandbox, checkpoints and restarts. Phase 4 (wiring `--portfolio` into the runtime with live
+market data, reporting and alerts) is next (see the tracker in section 10).
 
 ---
 
@@ -552,8 +552,8 @@ Python and need no network, so they are good hotspot work.
 - [x] 2.6 Order planner (2026-09-26): `src/portfolio/orders.py` (`plan_orders`, `OrderPlan`, `PlannedOrder`), tests in `tests/test_portfolio_orders.py`. The band matches `simulate_portfolio`'s. Held instruments without a target are closed. Every skip has a reason (`within_band`, `below_min_size`, `below_lot_step`, `no_price`, `no_short`).
 - [x] 2.7 Parity test (2026-09-26): `test_the_runtime_path_bar_by_bar_matches_the_research_backtest`. It steps each sleeve as its bars complete, steps the allocator per 4h grid bar and nets, with a JSON checkpoint every bar. The result equals `run_book`'s targets under all three allocation methods. Delaying a decision by one bar fails it. The risk overlay is the same pure function in both paths (`array_overlay` wraps `apply_portfolio_risk`); its inputs (equity, current weights) come from the book in Phase 3.
 - [x] 3.1 Portfolio book (2026-09-26): `src/portfolio/book.py` (`PortfolioBook`), tests in `tests/test_portfolio_book.py`. It covers spot and linear-perp accounting in `Decimal`, cash per venue in the venue's currency, FX to base, funding, the peak and UTC day start for the risk rules, virtual sleeve positions with the residual reported, and an exact JSON round trip.
-- [ ] 3.2 Paper execution through sandbox adapters
-- [ ] 3.3 Checkpoint and restart
+- [x] 3.2 Paper execution through sandbox adapters (2026-09-26): `src/portfolio/engine.py` (`PortfolioEngine`, `build_paper_adapters`), tests in `tests/test_portfolio_engine.py`. Perps go through the cross-margin sandbox and spot through the spot sandbox. Reduce-only orders pass through, and funding and liquidations are booked in the book the same way the exchange books them. The book is reconciled every cycle, and a mismatch is logged and alerted. Fills are logged with the driving sleeve (or `portfolio` when several net) as `strategy_id`, and each fill sends a Telegram message listing its sleeves and risk actions. Pre-risk targets match `run_book` bar by bar.
+- [x] 3.3 Checkpoint and restart (2026-09-26): the engine (book, sleeve states, allocator, last processed bars) and the cross-margin sandbox each write an atomic JSON file. A run killed mid-way and restarted gives the same fills and book as an uninterrupted run. Repeating a cycle decides nothing twice.
 - [ ] 4.1 Multi-instrument market data
 - [ ] 4.2 `--portfolio` runtime
 - [ ] 4.3 Persistence and reporting
