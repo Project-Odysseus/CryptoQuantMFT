@@ -6,8 +6,10 @@ mirror them in `TODO.MD`.
 ## Open
 
 - [ ] **Spot: partial fills and resting orders against real Kraken state.** Async full fills are validated live
-  (2026-09-25). A resting order (placed, not yet filled) and a genuine partial fill have not been exercised against
-  the real exchange
+  (2026-09-25). **Resting order validated 2026-09-26:** a 0.00005 BTC limit buy 15% under the bid
+  (`OQS5AR-Y7MBP-M7EQMA`) went through `submit_order`, Kraken listed it open as `BTC/EUR`, status and recovery read
+  it as `OPEN` with nothing filled, and the engine's reconciliation kept it pending and logged no trade. Still open:
+  a genuine partial fill, which can't be forced at minimum size (it needs an order larger than the trades that hit it)
 - [x] **Spot: re-run the verification against populated exchange data.** Done 2026-09-26: `--kraken-verify-dry-run`
   passes all 7 checks, and Kraken's 7 closed orders match the 7 real trades in the database on side, size, price and
   fee. It found one bug, fixed: order history names the pair by its altname (`XBTEUR`), which recovered as
