@@ -22,8 +22,9 @@ from typing import Any
 from src.portfolio.allocation import ALLOCATION_METHODS
 from src.portfolio.risk import PortfolioRiskConfig
 from src.portfolio.sleeves import STOP_KEYS, SleeveSpec
+from src.runtime.config import BAR_INTERVALS
 
-INTERVALS = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
+INTERVALS = tuple(BAR_INTERVALS)  # the runtime's bar lengths, so a config never asks for one it can't build
 _SLUG = re.compile(r"^[a-z0-9_]+$")
 DEFAULT_FEE_PCT = {"perp": 0.05, "spot": 0.40}  # Kraken taker, entry tier
 
@@ -119,6 +120,15 @@ def _known(cls: type) -> set[str]:
     return {item.name for item in fields(cls)}
 
 
+def _number(table: dict[str, Any], key: str, default: float, label: str, errors: list[str]) -> float | None:
+    """`table[key]` as a float, or None after recording an error (a quoted "10000" must not crash the loader)."""
+    value = table.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        errors.append(f"{label} {key} must be a number, not {value!r}")
+        return None
+    return float(value)
+
+
 def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> PortfolioConfig:
     """Validate a parsed TOML document and build the config, or raise listing every problem."""
     from src.research.catalog import build_strategy
@@ -133,10 +143,16 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         errors.append(f"[portfolio] unknown key '{key}'; allowed: {sorted(_PORTFOLIO_KEYS)}")
     if portfolio.get("allocation", "equal") not in ALLOCATION_METHODS:
         errors.append(f"[portfolio] allocation must be one of {list(ALLOCATION_METHODS)}")
-    if float(portfolio.get("initial_equity", 10_000.0)) <= 0:
+    initial_equity = _number(portfolio, "initial_equity", 10_000.0, "[portfolio]", errors)
+    if initial_equity is not None and initial_equity <= 0:
         errors.append("[portfolio] initial_equity must be above 0")
-    if not 0 <= float(portfolio.get("rebalance_band", 0.02)) < 1:
+    rebalance_band = _number(portfolio, "rebalance_band", 0.02, "[portfolio]", errors)
+    if rebalance_band is not None and not 0 <= rebalance_band < 1:
         errors.append("[portfolio] rebalance_band must be between 0 and 1 (0.02 = 2% of equity)")
+    for key, default in (("allocation_lookback_days", 90), ("allocation_refit_days", 30)):
+        value = portfolio.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            errors.append(f"[portfolio] {key} must be a whole number of at least 1")
 
     risk = PortfolioRiskConfig()
     risk_raw = dict(raw.get("risk", {}))
@@ -188,7 +204,8 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
             errors.append(f"{label} instrument '{table['instrument']}' has no [instruments] table")
         if table["interval"] not in INTERVALS:
             errors.append(f"{label} interval must be one of {list(INTERVALS)}")
-        if float(table.get("budget", 1.0)) <= 0:
+        budget = _number(table, "budget", 1.0, label, errors)
+        if budget is not None and budget <= 0:
             errors.append(f"{label} budget must be above 0")
         if instrument is not None and not instrument.can_short and not table.get("long_only", False):
             errors.append(f"{label} can go short but {instrument.id} can't; set long_only = true")
@@ -202,7 +219,7 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
             errors.append(f"{label} sizing: {exc}")
         for key in sorted(set(table.get("stops", {})) - set(STOP_KEYS)):
             errors.append(f"{label} stops: unknown key '{key}'; allowed: {list(STOP_KEYS)}")
-        if not set(table) - allowed_sleeve_keys:
+        if not set(table) - allowed_sleeve_keys and budget is not None:
             values = dict(table)
             if "sizing_params" not in values and values.get("sizing", "fixed_fraction") != "fixed_fraction":
                 values["sizing_params"] = {}
@@ -256,7 +273,13 @@ def describe(config: PortfolioConfig) -> str:
     scales = sleeve_scales(config.budgets(), config.allocation) if config.allocation != "inverse_vol" else {}
     lines.append("Sleeves:")
     for sleeve in config.sleeves:
-        share = f"{scales[sleeve.id]:.0%} of equity" if sleeve.id in scales else "set by volatility"
+        # The scale multiplies the sleeve's own target (which its sizer may put above 1), so it isn't a share of equity.
+        if not sleeve.enabled:
+            share = "not traded"
+        elif sleeve.id in scales:
+            share = f"scale {scales[sleeve.id]:.3g}"
+        else:
+            share = "scale set by volatility"
         state = "" if sleeve.enabled else "  [disabled]"
         params = ", ".join(f"{k}={v}" for k, v in sleeve.params.items())
         lines.append(f"  {sleeve.id:<18} {sleeve.instrument:<24} {sleeve.interval:<3} {sleeve.strategy}({params}){' long-only' if sleeve.long_only else ''}; "
