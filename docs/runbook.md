@@ -93,6 +93,24 @@ python main.py \
 
 This submits a **real Kraken market sell** for the full currently held base-asset size after validate-only checks pass.
 
+## First live test on Kraken Futures (minimum size)
+
+1. On futures.kraken.com: Settings, then API keys, then create a key with **General API: Full access** (trading) and
+   **Withdrawal API: No access**. Add an IP allow-list if you have a fixed IP. Put the key and secret in `.env` as
+   `KRAKEN_FUTURES_API_KEY` and `KRAKEN_FUTURES_SECRET`.
+2. Move collateral into the Futures wallet (a few EUR/USD is enough), then check without trading:
+   `python main.py --futures-verify-credentials`.
+3. One real round trip at the minimum size, 0.0001 BTC, about 8 USD of exposure (fees about 0.01 USD):
+   ```bash
+   python main.py --futures-live-test --futures-symbol BTC/USD --enable-live-trading --live-confirmation ENABLE_LIVE_TRADING
+   ```
+   It buys, confirms the position on Kraken, sells reduce-only, confirms it is flat, and records both fills (trade
+   log, tax ledger, Telegram). It refuses to run if the account already holds BTC perps, and it prints the account's
+   state if anything fails.
+4. Then the small live book: `config/portfolio.btc_live.toml` (about 200 NOK, a 30% drawdown limit). At that capital
+   the book holds either nothing or one 0.0001 BTC lot (about 44% of equity), and `max_gross_notional = 15` stops it
+   ever holding two.
+
 ## Live portfolio trading (Kraken Futures perps)
 
 Live uses the same config and engine as paper, but with a real Kraken Futures account behind it

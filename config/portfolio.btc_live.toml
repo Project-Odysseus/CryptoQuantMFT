@@ -1,0 +1,59 @@
+# First live book: the three BTC trend sleeves from the example portfolio, on the Kraken Futures BTC perp only.
+# Sized for about 200 NOK (~19 USD) with a 30% drawdown limit (scripts/research/risk_budget.py).
+# At this capital Kraken's minimum order (0.0001 BTC, ~8 USD) dominates: the book holds either nothing or one lot.
+# Check:  python main.py --portfolio-check config/portfolio.btc_live.toml
+# Paper:  python main.py --runtime paper --portfolio config/portfolio.btc_live.toml --runtime-iterations 0 --runtime-interval 60
+# Live:   add --runtime live --enable-live-trading --live-confirmation ENABLE_LIVE_TRADING (see docs/runbook.md)
+
+[portfolio]
+name = "btc-live"
+base_currency = "USD"
+initial_equity = 19               # paper only; a live start adopts the real account's equity
+rebalance_band = 0.02
+scale = 0.55                      # a 30% drawdown limit with a 1.5x margin (risk budget, 2026-09-26)
+allocation = "equal"
+
+[risk]
+max_gross_exposure = 1.5
+max_net_exposure = 1.0
+max_instrument_weight = 1.0
+max_drawdown = 0.40               # kill: flatten and stay flat until --portfolio-reset-peak
+daily_loss_limit = 0.10
+stale_after_bars = 2
+max_gross_notional = 15           # USD: room for one 0.0001 BTC lot (~8 USD), never two
+
+[instruments."kraken_futures:BTC/USD"]
+kind = "perp"
+max_leverage = 2.0
+slippage_bps = 5
+lot_step = 0.0001                 # Kraken's: a live start re-reads these from the exchange
+min_order_size = 0.0001
+
+[[sleeves]]
+id = "btc_ma_1d"
+instrument = "kraken_futures:BTC/USD"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+long_only = true
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[sleeves]]
+id = "btc_keltner_ls"
+instrument = "kraken_futures:BTC/USD"
+interval = "1d"
+strategy = "keltner_breakout"
+params = { window = 40, atr_multiplier = 2.0 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[sleeves]]
+id = "btc_ma_4h"
+instrument = "kraken_futures:BTC/USD"
+interval = "4h"
+strategy = "moving_average_crossover"
+params = { short_window = 8, long_window = 96 }
+long_only = true
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }

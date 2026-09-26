@@ -201,7 +201,9 @@ def run_book(
     per_bar = funding_pct_per_day / 100.0 / per_day
     funding = pd.DataFrame({spec.id: per_bar if spec.kind == "perp" else 0.0 for spec in specs}, index=index)
     overlay = array_overlay(instruments, config=config.risk, venues=config.venues(), can_short=config.can_short()) if risk_overlay else None
-    result = simulate_portfolio(inputs.prices, targets, funding=funding, costs=costs, rebalance_band=config.rebalance_band, adjust_targets=overlay)
+    # Simulated in money at the config's starting equity, so money limits (max_gross_notional) bind as in the runtime
+    result = simulate_portfolio(inputs.prices, targets, funding=funding, costs=costs, rebalance_band=config.rebalance_band, adjust_targets=overlay,
+                                initial_equity=config.initial_equity)
     return PortfolioBacktest(allocation=method, risk_overlay=risk_overlay, sleeves=tuple(budgets), allocated=allocated, targets=targets, result=result)
 
 

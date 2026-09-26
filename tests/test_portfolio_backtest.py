@@ -86,7 +86,8 @@ def test_a_sleeve_alone_is_its_own_weights_simulated_at_full_size() -> None:
     assert alone.sleeves == ("eth_4h",)
     weights = inputs.sleeve_weights[["eth_4h"]].rename(columns={"eth_4h": "kraken_futures:ETH/USD"})
     prices = inputs.prices[["kraken_futures:ETH/USD"]]
-    expected = simulate_portfolio(prices, weights, costs=PortfolioCosts(fee_pct=0.0, slippage_bps=0.0), rebalance_band=config.rebalance_band)
+    expected = simulate_portfolio(prices, weights, costs=PortfolioCosts(fee_pct=0.0, slippage_bps=0.0), rebalance_band=config.rebalance_band,
+                                  initial_equity=config.initial_equity)
     np.testing.assert_allclose(alone.result.equity.to_numpy(), expected.equity.to_numpy())
     assert (alone.targets["kraken_futures:BTC/USD"] == 0.0).all()
 
@@ -270,3 +271,16 @@ def test_the_scale_knob_sizes_the_whole_book_and_the_risk_budget_finds_it() -> N
     assert 0.3 < scale < 1.0 and at_scale["max_drawdown"] <= target + 1e-9
     with pytest.raises(ValueError, match="between 0 and 1"):
         scale_for_max_drawdown(config, inputs, 1.5)
+
+
+def test_the_money_cap_binds_in_research_at_the_configs_capital() -> None:
+    from dataclasses import replace as replace_config
+
+    config = _config(initial_equity=1_000)
+    inputs = prepare_inputs(config, bar_loader=synthetic_loader)
+    free = run_book(config, inputs, funding_pct_per_day=0.0)
+    capped = run_book(replace_config(config, risk=replace_config(config.risk, max_gross_notional=200.0)), inputs, funding_pct_per_day=0.0)
+    notional = capped.result.gross_exposure * capped.result.equity
+    assert free.result.gross_exposure.max() > 0.3
+    assert notional.min() >= 0 and (notional - 200.0).max() <= 0.025 * capped.result.equity.max()  # only drift inside the 2% rebalance band
+    assert capped.result.metrics()["avg_gross_exposure"] < free.result.metrics()["avg_gross_exposure"]

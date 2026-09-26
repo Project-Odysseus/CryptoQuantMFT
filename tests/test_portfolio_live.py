@@ -300,3 +300,66 @@ def test_the_kill_switch_on_a_live_account_cancels_everything_and_closes_every_p
     assert any(request["endpoint"] == "cancelallorders" for request in fake.requests)
     assert fake.positions == {} and engine.book.units() == {} and engine.pending_orders == {}
     assert all(order.reduce_only for order in report.orders)
+
+
+def test_the_live_plumbing_test_round_trips_the_minimum_size_and_records_it(tmp_path) -> None:
+    from src.execution.live_test import run_futures_live_test
+
+    class Rates:
+        def get_rate(self, pair: str = "EUR/NOK", at: Any = None) -> float:
+            return 10.0
+
+    fake = FakeKraken(equity=20.0)  # about 200 NOK
+    adapter = _adapter(fake)
+    adapter.max_leverage = 3.0
+    logger = TradeLogger(tmp_path / "trades.db")
+    logger.fx_rate_collector = Rates()
+    alerts = []
+
+    class Notifier:
+        def send_alert(self, **kwargs: Any) -> bool:
+            alerts.append(kwargs)
+            return True
+
+    summary = run_futures_live_test(adapter, symbol="BTC/USD", mark_price=50_000.0, trade_logger=logger, notifier=Notifier(), sleep=lambda seconds: None)
+    sent = fake.sent_orders()
+    assert [(order["side"], order["size"], order.get("reduceOnly")) for order in sent] == [("buy", "0.0001", None), ("sell", "0.0001", "true")]
+    assert fake.positions == {} and summary["steps"][0]["position_after"] == pytest.approx(0.0001) and summary["steps"][1]["position_after"] == 0.0
+    assert summary["fees_estimated"] == pytest.approx(2 * 0.0001 * 50_000 * 0.0005)
+    assert {row["strategy_id"] for row in logger.list_trades()} == {"live_test"} and len(logger.list_trades()) == 2
+    assert {event["transaction_type"] for event in logger.list_tax_events()} == {"TRADING_FEE"}  # same price in and out: no P&L
+    assert alerts and "[LIVE]" in alerts[0]["message"]
+
+
+def test_the_live_plumbing_test_refuses_an_account_that_already_holds_the_contract_and_reports_a_stuck_fill(tmp_path) -> None:
+    from src.execution.live_test import LiveTestError, run_futures_live_test
+
+    fake = FakeKraken()
+    fake.positions["PF_XBTUSD"] = [0.002, 50_000.0]
+    with pytest.raises(LiveTestError, match="only runs from flat"):
+        run_futures_live_test(_adapter(fake), symbol="BTC/USD", mark_price=50_000.0, sleep=lambda seconds: None)
+    assert fake.sent_orders() == []
+
+    fake = FakeKraken()
+    fake.delay_fills = True  # the fill never shows up in /fills within the timeout
+    with pytest.raises(LiveTestError, match="position on Kraken is 0.0001"):
+        run_futures_live_test(_adapter(fake), symbol="BTC/USD", mark_price=50_000.0, sleep=lambda seconds: None, timeout=3)
+
+
+def test_the_live_test_command_needs_the_live_gates_and_keys(monkeypatch, capsys, tmp_path) -> None:
+    import argparse
+
+    import main
+    from config import settings
+
+    monkeypatch.setattr(main, "PORTFOLIO_KILL_SWITCH_FILE", tmp_path / "kill.json")
+    args = argparse.Namespace(enable_live_trading=False, live_confirmation=None, futures_symbol="BTC/USD")
+    assert main.futures_live_test(args) == 2 and "places real orders" in capsys.readouterr().out
+    args = argparse.Namespace(enable_live_trading=True, live_confirmation="ENABLE_LIVE_TRADING", futures_symbol="BTC/USD")
+    monkeypatch.setattr(settings, "kraken_futures_api_key", "")
+    assert main.futures_live_test(args) == 2 and "not set" in capsys.readouterr().out
+    monkeypatch.setattr(settings, "kraken_futures_api_key", "key")
+    monkeypatch.setattr(settings, "kraken_futures_secret", "c2VjcmV0")
+    fake = FakeKraken(equity=20.0)
+    code = main.futures_live_test(args, transport=fake, fetch_contract=lambda symbol: CONTRACTS[0], fetch_mark=lambda venue_symbol: 50_000.0, sleep=lambda seconds: None)
+    assert code == 0 and "LIVE TEST OK" in capsys.readouterr().out and fake.positions == {}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import uuid
 import signal
 import sys
 from datetime import datetime, timezone
@@ -1716,6 +1717,51 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
     return 0
 
 
+def futures_live_test(args: argparse.Namespace, *, transport: Any = None, fetch_contract: Any = None, fetch_mark: Any = None, sleep: Any = None) -> int:
+    """One real round trip at the minimum size on Kraken Futures (see src/execution/live_test.py), behind the live gates."""
+    from src.execution.kraken_futures_cross import KrakenFuturesCrossMarginAdapter
+    from src.execution.live_test import LiveTestError, run_futures_live_test
+    from src.utils.telegram import TelegramNotifier
+
+    if not args.enable_live_trading or args.live_confirmation != LIVE_TRADING_CONFIRMATION:
+        print(f"Refusing: this places real orders. Add --enable-live-trading --live-confirmation {LIVE_TRADING_CONFIRMATION}.")
+        return 2
+    if not settings.kraken_futures_api_key or not settings.kraken_futures_secret:
+        print("Refusing: KRAKEN_FUTURES_API_KEY / KRAKEN_FUTURES_SECRET are not set in .env.")
+        return 2
+    if KillSwitchController(state_file=PORTFOLIO_KILL_SWITCH_FILE).is_active():
+        print("Refusing: the kill switch is active.")
+        return 2
+    symbol = args.futures_symbol
+
+    def verified(symbol: str) -> Any:
+        from src.data.kraken_futures import fetch_fee_schedules, fetch_instrument, venue_symbol_for
+        from src.execution.perps import perp_contract_from_instrument
+
+        instrument = fetch_instrument(venue_symbol_for(symbol))
+        return perp_contract_from_instrument(instrument, fetch_fee_schedules()[instrument["feeScheduleUid"]], symbol=symbol)
+
+    def mark(venue_symbol: str) -> float:
+        from src.data.kraken_futures import fetch_tickers
+
+        return float(fetch_tickers()[venue_symbol]["markPrice"])
+
+    contract = (fetch_contract or verified)(symbol)
+    adapter = KrakenFuturesCrossMarginAdapter(contracts=[contract], api_key=settings.kraken_futures_api_key, api_secret=settings.kraken_futures_secret,
+                                              max_leverage=LIVE_PERP_MAX_LEVERAGE, transport=transport, client_id_prefix=f"cqm-livetest-{uuid.uuid4().hex[:8]}")
+    price = (fetch_mark or mark)(contract.venue_symbol)
+    print(f"LIVE TEST: buy {contract.min_size} {symbol} ({contract.venue_symbol}, about {contract.min_size * price:,.2f} {contract.collateral_currency}) and close it right away.")
+    try:
+        summary = run_futures_live_test(adapter, symbol=symbol, mark_price=price, trade_logger=TradeLogger(database_path=settings.database_path),
+                                        notifier=TelegramNotifier(), **({"sleep": sleep} if sleep else {}))
+    except LiveTestError as exc:
+        print(f"LIVE TEST FAILED: {exc}")
+        return 1
+    print(f"LIVE TEST OK: bought at {summary['open_price']:,.2f}, sold at {summary['close_price']:,.2f}; P&L {summary['realized_pnl']:+.4f}, "
+          f"fees ~{summary['fees_estimated']:.4f} {summary['currency']}; account equity {summary['equity_before']} -> {summary['equity_after']}; flat again.")
+    return 0
+
+
 def _portfolio_live_refusal(args: argparse.Namespace, config: Any) -> str | None:
     """Why a live portfolio must not start (None when every gate passes). The same gates as single-strategy live, plus a money cap."""
     if not args.enable_live_trading:
@@ -1917,6 +1963,7 @@ def main() -> None:
     parser.add_argument("--since", default=None, help="Filter --post-run-analysis to data on or after this date (YYYY-MM-DD)")
     parser.add_argument("--kill-switch", action="store_true", help="Activate the runtime kill switch and cancel any open orders via the configured execution adapter")
     parser.add_argument("--kill-switch-reason", default="manual", help="Reason to record when activating the kill switch")
+    parser.add_argument("--futures-live-test", action="store_true", help="REAL ORDERS: buy the smallest --futures-symbol size on Kraken Futures and close it right away, checking fills, positions, the tax ledger and Telegram. Needs --enable-live-trading and --live-confirmation")
     parser.add_argument("--futures-venue-check", action="store_true", help="Non-destructive: fetch Kraken Futures public specs, fees, live mark price and funding history for --futures-symbol and print them (no credentials, no orders)")
     parser.add_argument("--futures-verify-credentials", action="store_true", help="Non-destructive: call Kraken Futures private read-only endpoints (accounts, open positions, open orders) with KRAKEN_FUTURES_API_KEY/SECRET and print the result. Places no orders")
     parser.add_argument("--futures-symbol", default="BTC/USD", help="Symbol for --futures-venue-check, e.g. BTC/USD, ETH/USD or SOL/USD")
@@ -1993,6 +2040,9 @@ def main() -> None:
         print(f"Reason: {state['reason']}")
         print(f"Orders cancelled: {len(state['orders_cancelled'])}")
         return
+
+    if args.futures_live_test:
+        raise SystemExit(futures_live_test(args))
 
     if args.futures_verify_credentials:
         _run_futures_verify_credentials(symbol=args.futures_symbol)
