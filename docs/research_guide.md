@@ -3,12 +3,14 @@
 How to test strategy ideas on real Kraken data, decide whether a result is real, and turn a good idea into
 something the runtime can run. Findings from past runs are in [`research_log.md`](research_log.md).
 
-Three ways in, all built on the same code:
+Four ways in, all built on the same code:
 
 | Entry point | Use it for |
 | --- | --- |
-| `notebooks/strategy_research.ipynb` | Exploring: single backtests with charts, writing your own strategy inline, sweeps, heatmaps |
+| `notebooks/signal_research.ipynb` | **Start here for a new signal**: feature check, strategy, backtest, scorecard, sweep and portfolio fit on the perps from 2020 |
+| `notebooks/strategy_research.ipynb` | Older playground on Kraken spot (720 candles): single backtests, sweeps, heatmaps |
 | `python scripts/research/research.py ...` | Repeatable runs that save CSVs, a markdown summary and heatmaps |
+| `python scripts/research/portfolio_backtest.py CONFIG` | A whole portfolio config: each sleeve alone, the book per allocation method, sleeve correlations |
 | `from src.research import ...` | Your own scripts |
 
 ## Quick start
@@ -101,7 +103,11 @@ anyway) and `make_regime_gated(fn, required_regime="trending")`. In research the
 4. Add a test in `tests/test_strategies.py` showing it enters, holds and exits when it should.
 
 You can research a strategy before step 1: pass a factory straight to `sweep(data, my_breakout, grid={...})` or a
-built strategy to `run_strategy(bars, my_breakout(), label="...")`.
+built strategy to `run_strategy(bars, my_breakout(), label="...")`. For a vectorized strategy (fast on years of
+bars), build it with `rule_strategy(rules, warmup=...)` from entry/exit rules, or `signal_strategy(signals,
+warmup=...)` from a position array, both in `src/backtest/strategies.py`. Either one can also be tried as a
+portfolio sleeve before it is registered (`candidate_report(config, SleeveSpec(...), strategy=...)` in
+`src/portfolio/backtest.py`).
 
 ## How results are computed
 
@@ -188,6 +194,22 @@ surrounded by the opposite colour is a spike: someone got lucky with those exact
 - **A handful of trades.** 3–5 trades per symbol in a period is anecdote, not statistics.
 - **Correlated symbols aren't independent evidence.** BTC, ETH and SOL move together, so "works on all three" is
   weaker than it sounds.
+
+### The scorecard: every check at once
+
+`scorecard(data, strategy, ...)` in `src/research/scorecard.py` runs the checks above for each symbol, and
+`checks(card)` turns them into pass/fail:
+
+| Check | Passes when | Why |
+| --- | --- | --- |
+| `beats_buy_hold_is` | in-sample Sharpe > buy-and-hold's | exposure to a rising market isn't a signal |
+| `holds_up_ho` | holdout Sharpe > 0 and at least half the in-sample Sharpe | the in-sample result survives unseen data |
+| `timing_is_real` | beats 90% of time-shifted placebos in-sample | the placebo keeps trades, holding times and exposure but moves them in time; only real timing beats it |
+| `survives_costs` | with 3x funding (taker costs on spot) Sharpe stays > 0 and keeps half the zero-cost Sharpe | tradable at our fees, not just at zero cost |
+| `consistent` | at least 60% of calendar years positive | not one lucky year |
+
+Passing is the entry ticket, not proof. The last test is whether the signal improves the book:
+`candidate_report` runs the portfolio with and without it (see the signal research notebook, section 7).
 
 ## Features and forecasts (before strategies)
 
@@ -324,12 +346,16 @@ recording_gaps()                                                            # ex
 
 ## A research loop that works
 
+The signal research notebook walks through these steps in order.
+
 1. Write the hypothesis in one sentence (why would this make money, and who is on the other side?).
 2. `compare` at sensible defaults on 4h and 1d. Is it anywhere near positive net of costs? If not, check it at zero
    cost to see whether any signal exists at all.
 3. `sweep` two parameters. Look for a plateau, a decent `share_positive_is`, and a holdout that agrees.
-4. Judge against buy-and-hold on both Sharpe and drawdown. Be honest about which regime the periods covered.
-5. Pick parameters from the *middle* of the plateau, not the best cell.
+4. Judge against buy-and-hold on both Sharpe and drawdown. Be honest about which regime the periods covered. The
+   `scorecard` does this check and the others in one call.
+5. Pick parameters from the *middle* of the plateau, not the best cell. Then check that it improves the portfolio
+   (`candidate_report`), not only that it works alone.
 6. Before paper trading, re-test on more history (see below) if at all possible.
 7. Paper trade (`--runtime paper`), then `live_dry_run`, then live with minimum size.
 
