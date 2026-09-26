@@ -4,7 +4,8 @@ A step-by-step plan for running several strategies on several coins and venues a
 that you, or any coding agent, can pick it up cold and continue. It doesn't depend on who wrote the earlier steps.
 Each step says which files to touch, what to build, how to test it, and how to tell it's done.
 
-Status as of 2026-09-26: Phase 0 is done. Phases 1-2 are in progress (see the tracker in section 10).
+Status as of 2026-09-26: Phase 0 is done. Steps 1.1-1.3, 2.2, 2.4 and 2.5 are done and tested; 1.4, the
+`--portfolio-check` flag (2.1), 2.3 and 2.6-2.7 are next (see the tracker in section 10).
 
 ---
 
@@ -262,12 +263,23 @@ Python and need no network, so they are good hotspot work.
   t+1 never changes the weight at t).
 - Done when: for one sleeve, `simulate_portfolio(prices, weights)` reproduces the single-strategy research
   backtest's returns within costs.
+- Findings (2026-09-26):
+  - A long-only sleeve matches `SimpleBacktester` exactly at zero cost, and within 0.2% of final equity with perp
+    costs (`test_a_long_only_sleeve_reproduces_the_single_strategy_backtest`).
+  - **Flips differ from the single-strategy stack.** `SleeveRunner` flips in one bar (long to short at the same
+    close). `SimpleBacktester` and `PaperTradingEngine` go flat on the flip bar and open the other side on the next
+    bar. Portfolio research and the portfolio runtime share the sleeve runner, so they agree with each other. But a
+    long/short sleeve won't match a single-strategy backtest bar for bar around flips. The one-bar flip is what the
+    order planner (2.6, "split a flip into close plus open") expects.
 
 **1.2 Generalise `simulate_portfolio` to any bar interval**
 - Files: `src/research/portfolio.py`.
 - Tasks: add `periods_per_year` (inferred from the index spacing). Keep funding as per-bar rates; the caller
   converts daily funding to per-bar.
 - Tests: the same book on daily vs 4h bars (4h prices from the same daily path) gives the same daily returns.
+- Findings (2026-09-26): `day_start_equity` (for the daily-loss rule) was set *after* the day's first bar had
+  booked its P&L. On daily bars the day's loss was therefore always 0 and the halt never fired. It now starts from
+  the equity before that bar (bars are stamped at their open).
 
 **1.3 Allocation functions**
 - Files: new `src/portfolio/allocation.py`.
@@ -332,6 +344,9 @@ Python and need no network, so they are good hotspot work.
   6. drawdown de-risk multiplier;
   7. daily-loss and max-drawdown halts: no new risk, or flatten all.
 - Tests: one per rule; every cap result is within limits; the actions explain every change.
+- Note for 2.6: the overlay only sees instruments that have a target. An instrument that is held but has no sleeve
+  left (for example a sleeve was disabled) is not flattened by it, so the order planner must treat a missing
+  target as 0.
 
 **2.6 Order planner**
 - Files: `src/portfolio/orders.py`.
@@ -509,15 +524,15 @@ Python and need no network, so they are good hotspot work.
 ## 10. Progress tracker
 - [x] 0.1 Sizing contract
 - [x] 0.2 Research portfolio backtester
-- [ ] 1.1 Sleeve targets over history. **In progress (2026-09-26):** `src/portfolio/sleeves.py` (`SleeveRunner.step`, `run_sleeve`, `SleeveState`) is written and merges steps 1.1 and 2.2: research replays the same bar-by-bar runner as the runtime. It needs its tests (see the step's list).
-- [ ] 1.2 Any bar interval in `simulate_portfolio`. **Code done** (`periods_per_year`, `rebalance_band`, `adjust_targets` hook with `current_weights`); needs its tests. Still to add: per-instrument fees in `PortfolioCosts`.
-- [ ] 1.3 Allocation functions. **Code done** (`src/portfolio/allocation.py`); needs tests.
+- [x] 1.1 Sleeve targets over history (2026-09-26). `src/portfolio/sleeves.py` (`SleeveRunner.step`, `run_sleeve`, `SleeveState`) merges steps 1.1 and 2.2: research replays the same bar-by-bar runner as the runtime. Tests: `tests/test_portfolio_sleeves.py`. See the step's findings on flips.
+- [x] 1.2 Any bar interval in `simulate_portfolio` (2026-09-26): `periods_per_year`, `rebalance_band`, the `adjust_targets` hook with `current_weights`, per-instrument fees (`PortfolioCosts.fee_pct` as a mapping), and the day-start fix in the step's findings. Tests in `tests/test_portfolio.py`.
+- [x] 1.3 Allocation functions (2026-09-26): `src/portfolio/allocation.py`, tests in `tests/test_portfolio_allocation.py`.
 - [ ] 1.4 Research script, example config, study and log entry. The example config exists (`config/portfolio.example.toml`, it validates); `scripts/research/portfolio_backtest.py` is not written yet.
-- [ ] 2.1 Config and validation, `--portfolio-check`. **Code done** (`src/portfolio/config.py`: `load_portfolio_config`, `describe`, all rules, every error reported at once); needs tests and the `--portfolio-check` flag in `main.py`.
-- [ ] 2.2 Sleeve runner with state
+- [ ] 2.1 Config and validation, `--portfolio-check`. **Code and tests done** (`src/portfolio/config.py`: `load_portfolio_config`, `describe`, all rules, every error reported at once, non-numeric values reported instead of crashing; `tests/test_portfolio_config.py`). Only the `--portfolio-check` flag in `main.py` is left.
+- [x] 2.2 Sleeve runner with state (2026-09-26, the same module as 1.1): stepping one bar at a time with a JSON restart every bar matches `run_sleeve`; stops flatten the sleeve and block re-entry until the signal resets. `SleeveState` keeps `bars_held` instead of an entry time.
 - [ ] 2.3 Allocation (runtime form)
-- [ ] 2.4 Netting and attribution. **Code done** (`src/portfolio/netting.py`); needs tests.
-- [ ] 2.5 Portfolio risk overlay. **Code done** (`src/portfolio/risk.py`: `apply_portfolio_risk`, `drawdown_multiplier`, `array_overlay` for research); needs tests.
+- [x] 2.4 Netting and attribution (2026-09-26): `src/portfolio/netting.py`, tests in `tests/test_portfolio_allocation.py`.
+- [x] 2.5 Portfolio risk overlay (2026-09-26): `src/portfolio/risk.py` (`apply_portfolio_risk`, `drawdown_multiplier`, `array_overlay` for research), tests in `tests/test_portfolio_risk.py`. The config also rejects a non-positive daily-loss limit, venue cap or `stale_after_bars`.
 - [ ] 2.6 Order planner
 - [ ] 2.7 Parity test
 - [ ] 3.1 Portfolio book
