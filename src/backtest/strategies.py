@@ -462,6 +462,42 @@ def _latched_strategy(rules: Any, *, warmup: int) -> StrategyFn:
     return strategy
 
 
+def rule_strategy(rules: Any, *, warmup: int) -> StrategyFn:
+    """A strategy from entry/exit rules, for strategies written in a notebook or script.
+
+    `rules(bars)` gets an object with `.close`, `.high`, `.low` and `.volume`
+    arrays and returns (long_entry, long_exit, short_entry, short_exit)
+    boolean arrays; the short pair may be None for a long-only idea. The
+    result works everywhere a registered strategy does (backtests, sweeps,
+    portfolio sleeves) and is vectorized, so years of bars take milliseconds.
+    """
+    return _latched_strategy(rules, warmup=warmup)
+
+
+def signal_strategy(signals: Any, *, warmup: int) -> StrategyFn:
+    """A strategy from a function that returns the position to hold (-1/0/1) at every bar.
+
+    Use this when the idea isn't "enter on X, exit on Y", e.g. the sign of a
+    z-score. `signals(bars)` gets the same `.close`/`.high`/`.low`/`.volume`
+    object as `rule_strategy` and must be causal: element t may only use
+    bars up to t. The per-bar form the runtime calls takes the last element.
+    """
+
+    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
+        """The position at the latest bar."""
+        if len(history) < warmup:
+            return 0
+        return int(np.sign(np.nan_to_num(np.asarray(signals(_BarArrays(history)), dtype=float)[-1])))
+
+    def signal_series(bars: Sequence[Any]) -> np.ndarray:
+        out = np.sign(np.nan_to_num(np.asarray(signals(_BarArrays(bars)), dtype=float))).astype(int)
+        out[: max(0, warmup - 1)] = 0
+        return out
+
+    strategy.signal_series = signal_series  # type: ignore[attr-defined]
+    return strategy
+
+
 def latch_series(
     long_entry: np.ndarray,
     long_exit: np.ndarray,

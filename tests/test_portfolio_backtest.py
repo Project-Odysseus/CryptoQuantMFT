@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import runpy
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -143,3 +144,40 @@ warmup_bars = 60
 def test_a_venue_without_a_history_loader_is_reported() -> None:
     with pytest.raises(ValueError, match="no history loader for venue 'binance'"):
         backtest.default_bar_loader(InstrumentSpec(id="binance:BTC/USDT"), "1d")
+
+
+def test_a_notebook_strategy_can_be_scored_as_a_candidate_sleeve() -> None:
+    from src.backtest.indicators import rolling_mean
+    from src.backtest.strategies import rule_strategy
+    from src.portfolio.backtest import candidate_report
+    from src.portfolio.sleeves import SleeveSpec
+
+    def rules(bars):
+        above = rolling_mean(bars.close, 10) > rolling_mean(bars.close, 40)
+        return above, ~above, None, None
+
+    config = _config()
+    candidate = SleeveSpec(id="eth_notebook", instrument="kraken_futures:ETH/USD", interval="1d", strategy="notebook_ma", warmup_bars=45)
+    report = candidate_report(config, candidate, strategy=rule_strategy(rules, warmup=40), holdout="2023-08-01", bar_loader=synthetic_loader, funding_pct_per_day=0.0)
+
+    assert set(report["books"]["book"]) == {"without", "with eth_notebook"} and set(report["books"]["period"]) == {"is", "ho"}
+    assert list(report["correlation"].index) == ["btc_1d", "eth_4h"] and report["correlation"]["eth_notebook"].between(-1, 1).all()
+    assert report["alone"]["avg_gross_exposure"].gt(0).all()
+
+    with pytest.raises(ValueError, match="already has a sleeve"):
+        candidate_report(config, config.sleeves[0], bar_loader=synthetic_loader)
+    with pytest.raises(ValueError, match="not in the config's"):
+        candidate_report(config, SleeveSpec(id="sol", instrument="kraken_futures:SOL/USD", interval="1d", strategy="x"), bar_loader=synthetic_loader)
+
+
+def test_a_prebuilt_strategy_replaces_the_registry_and_keeps_long_only() -> None:
+    from src.backtest.indicators import rolling_mean
+    from src.backtest.strategies import signal_strategy
+    from src.portfolio.sleeves import SleeveSpec
+
+    strategy = signal_strategy(lambda b: np.sign(rolling_mean(b.close, 5) - rolling_mean(b.close, 20)), warmup=20)
+    bars = synthetic_loader(InstrumentSpec(id="kraken_futures:BTC/USD"), "1d")
+    spec = SleeveSpec(id="x", instrument="kraken_futures:BTC/USD", interval="1d", strategy="not_registered")
+    both_sides = run_sleeve(spec, bars, strategy=strategy).weights
+    long_only = run_sleeve(replace(spec, long_only=True), bars, strategy=strategy).weights
+    assert (both_sides < 0).any() and (long_only >= 0).all() and (long_only > 0).any()

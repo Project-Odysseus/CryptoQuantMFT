@@ -138,12 +138,22 @@ def _close(bar: Any) -> float:
 class SleeveRunner:
     """Turns a sleeve's signals into target weights, one completed bar at a time."""
 
-    def __init__(self, spec: SleeveSpec) -> None:
-        """Build the strategy, the sizer and (if stops are configured) a risk manager for exits."""
+    def __init__(self, spec: SleeveSpec, *, strategy: Any | None = None) -> None:
+        """Build the strategy, the sizer and (if stops are configured) a risk manager for exits.
+
+        `strategy` replaces the registry lookup with a ready-made StrategyFn
+        (`spec.params` is then ignored and `spec.long_only` still applies), so
+        a strategy written in a notebook can be tried as a sleeve before it is
+        registered.
+        """
+        from src.backtest.strategies import make_long_only
         from src.research.catalog import build_strategy
 
         self.spec = spec
-        self.strategy = build_strategy(spec.strategy, **dict(spec.params), long_only=spec.long_only)
+        if strategy is None:
+            self.strategy = build_strategy(spec.strategy, **dict(spec.params), long_only=spec.long_only)
+        else:
+            self.strategy = make_long_only(strategy) if spec.long_only else strategy
         self.sizer: PositionSizer = build_sizer(spec.sizing, **dict(spec.sizing_params))
         unknown = sorted(set(spec.stops) - set(STOP_KEYS))
         if unknown:
@@ -211,9 +221,9 @@ class SleeveRun:
     state: SleeveState
 
 
-def run_sleeve(spec: SleeveSpec, bars: Sequence[Any], *, state: SleeveState | None = None) -> SleeveRun:
-    """Replay `spec` over `bars` with the same `SleeveRunner.step` the runtime uses."""
-    runner = SleeveRunner(spec)
+def run_sleeve(spec: SleeveSpec, bars: Sequence[Any], *, state: SleeveState | None = None, strategy: Any | None = None) -> SleeveRun:
+    """Replay `spec` over `bars` with the same `SleeveRunner.step` the runtime uses (`strategy`: see `SleeveRunner`)."""
+    runner = SleeveRunner(spec, strategy=strategy)
     bars = list(bars)
     signals = runner.signals(bars)
     state = state or SleeveState()

@@ -20,8 +20,8 @@ each sleeve alone can be compared on the same inputs.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import Any
 
 import pandas as pd
@@ -30,7 +30,7 @@ from src.portfolio.allocation import allocate_history
 from src.portfolio.config import InstrumentSpec, PortfolioConfig
 from src.portfolio.netting import net_history
 from src.portfolio.risk import array_overlay
-from src.portfolio.sleeves import run_sleeve
+from src.portfolio.sleeves import SleeveSpec, run_sleeve
 from src.research.portfolio import PortfolioCosts, PortfolioResult, simulate_portfolio
 from src.runtime.config import BAR_INTERVALS
 
@@ -100,9 +100,14 @@ def _closes(bars: Sequence[Any]) -> pd.Series:
     return series[~series.index.duplicated(keep="last")].sort_index()
 
 
-def prepare_inputs(config: PortfolioConfig, *, bar_loader: BarLoader | None = None) -> PortfolioInputs:
-    """Load bars for every enabled sleeve and its instrument, run each sleeve over its history, and align them on one grid."""
+def prepare_inputs(config: PortfolioConfig, *, bar_loader: BarLoader | None = None, strategies: Mapping[str, Any] | None = None) -> PortfolioInputs:
+    """Load bars for every enabled sleeve and its instrument, run each sleeve over its history, and align them on one grid.
+
+    `strategies` maps a sleeve id to a ready-made StrategyFn that replaces
+    the registry lookup for that sleeve (a strategy still in a notebook).
+    """
     loader = bar_loader or default_bar_loader
+    strategies = dict(strategies or {})
     sleeves = config.enabled_sleeves
     if not sleeves:
         raise ValueError("the config has no enabled sleeves")
@@ -130,7 +135,7 @@ def prepare_inputs(config: PortfolioConfig, *, bar_loader: BarLoader | None = No
         bars = bars_for(sleeve.instrument, sleeve.interval)
         shift = pd.Timedelta(seconds=BAR_INTERVALS[sleeve.interval]) - grid_step
         decided = _timestamps(bars) + shift
-        series = pd.Series(run_sleeve(sleeve, bars).weights, index=decided)
+        series = pd.Series(run_sleeve(sleeve, bars, strategy=strategies.get(sleeve.id)).weights, index=decided)
         series = series[~series.index.duplicated(keep="last")]
         weights[sleeve.id] = series.reindex(grid.union(series.index)).ffill().reindex(grid).fillna(0.0)
         starts.append(decided[min(sleeve.warmup_bars, len(decided) - 1)])
@@ -197,3 +202,66 @@ def run_book(
     overlay = array_overlay(instruments, config=config.risk, venues=config.venues(), can_short=config.can_short()) if risk_overlay else None
     result = simulate_portfolio(inputs.prices, targets, funding=funding, costs=costs, rebalance_band=config.rebalance_band, adjust_targets=overlay)
     return PortfolioBacktest(allocation=method, risk_overlay=risk_overlay, sleeves=tuple(budgets), allocated=allocated, targets=targets, result=result)
+
+
+PERIOD_METRICS = ("sharpe", "cagr", "vol", "max_drawdown", "turnover_per_year", "cost_pct_per_year", "funding_pct_per_year", "avg_gross_exposure", "avg_net_exposure")
+
+
+def period_metrics(book: PortfolioBacktest, holdout: pd.Timestamp, *, label: str | None = None) -> list[dict[str, Any]]:
+    """One row per period ("is" before `holdout`, "ho" from it) with the book's main metrics."""
+    rows = []
+    for period, start, end in (("is", None, holdout), ("ho", holdout, None)):
+        metrics = book.result.metrics(start, end)
+        if metrics:
+            rows.append({"book": label or book.allocation, "period": period, **{key: metrics[key] for key in PERIOD_METRICS}})
+    return rows
+
+
+def daily_returns(book: PortfolioBacktest) -> pd.Series:
+    """The book's daily returns (for correlations between sleeves on different intervals)."""
+    return book.result.equity.resample("1D").last().pct_change().dropna()
+
+
+def candidate_report(
+    config: PortfolioConfig,
+    candidate: SleeveSpec,
+    *,
+    strategy: Any | None = None,
+    holdout: pd.Timestamp | str = "2024-10-01",
+    bar_loader: BarLoader | None = None,
+    funding_pct_per_day: float = 0.01,
+) -> dict[str, pd.DataFrame]:
+    """Would `candidate` improve the book? The book with and without it, and how it correlates with each sleeve.
+
+    A new signal is worth adding when the book gets better, not only when the
+    signal looks good alone. A sleeve that repeats what the book already holds
+    adds risk without adding return. Both books run on the same inputs (the
+    candidate's warmup can move the start date) with the config's allocation
+    and risk limits.
+
+    Returns:
+        {"books": metrics per period for "without" and "with", "alone": the
+        candidate at full size, "correlation": its daily-return correlation
+        with every existing sleeve}.
+    """
+    if candidate.instrument not in config.instruments:
+        raise ValueError(f"{candidate.instrument} is not in the config's [instruments]; add an InstrumentSpec for it first")
+    if any(sleeve.id == candidate.id for sleeve in config.sleeves):
+        raise ValueError(f"the config already has a sleeve '{candidate.id}'")
+    holdout = pd.Timestamp(holdout, tz="UTC") if pd.Timestamp(holdout).tzinfo is None else pd.Timestamp(holdout)
+    extended = replace(config, sleeves=(*config.sleeves, candidate))
+    inputs = prepare_inputs(extended, bar_loader=bar_loader, strategies={candidate.id: strategy} if strategy is not None else None)
+    existing = [sleeve.id for sleeve in config.enabled_sleeves]
+    without = run_book(extended, inputs, sleeves=existing, funding_pct_per_day=funding_pct_per_day)
+    with_candidate = run_book(extended, inputs, funding_pct_per_day=funding_pct_per_day)
+    alone = run_book(extended, inputs, allocation="equal", sleeves=[candidate.id], risk_overlay=False, funding_pct_per_day=funding_pct_per_day)
+    candidate_returns = daily_returns(alone)
+    correlation = {
+        sleeve_id: candidate_returns.corr(daily_returns(run_book(extended, inputs, allocation="equal", sleeves=[sleeve_id], risk_overlay=False, funding_pct_per_day=funding_pct_per_day)))
+        for sleeve_id in existing
+    }
+    return {
+        "books": pd.DataFrame(period_metrics(without, holdout, label="without") + period_metrics(with_candidate, holdout, label=f"with {candidate.id}")),
+        "alone": pd.DataFrame(period_metrics(alone, holdout, label=f"{candidate.id} alone")),
+        "correlation": pd.Series(correlation, name=candidate.id).to_frame(),
+    }

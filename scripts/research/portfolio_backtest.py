@@ -35,23 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import pandas as pd
 
 from src.portfolio.allocation import ALLOCATION_METHODS
-from src.portfolio.backtest import PortfolioBacktest, prepare_inputs, run_book
+from src.portfolio.backtest import PortfolioBacktest, daily_returns, period_metrics, prepare_inputs, run_book
 from src.portfolio.config import load_portfolio_config
-
-COLUMNS = ("sharpe", "cagr", "vol", "max_drawdown", "turnover_per_year", "cost_pct_per_year", "funding_pct_per_year", "avg_gross_exposure", "avg_net_exposure")
-
-
-def _rows(label: str, book: PortfolioBacktest, holdout: pd.Timestamp) -> list[dict[str, object]]:
-    rows = []
-    for period, start, end in (("is", None, holdout), ("ho", holdout, None)):
-        metrics = book.result.metrics(start, end)
-        if metrics:
-            rows.append({"book": label, "period": period, **{key: metrics[key] for key in COLUMNS}})
-    return rows
-
-
-def _daily_returns(book: PortfolioBacktest) -> pd.Series:
-    return book.result.equity.resample("1D").last().pct_change().dropna()
 
 
 def _table(rows: list[dict[str, object]]) -> pd.DataFrame:
@@ -80,16 +65,16 @@ def main() -> None:
     sleeve_returns: dict[str, pd.Series] = {}
     for sleeve_id in inputs.sleeve_weights.columns:
         alone = run_book(config, inputs, allocation="equal", sleeves=[sleeve_id], risk_overlay=False, funding_pct_per_day=args.funding_pct_per_day)
-        sleeve_rows += _rows(sleeve_id, alone, holdout)
-        sleeve_returns[sleeve_id] = _daily_returns(alone)
+        sleeve_rows += period_metrics(alone, holdout, label=sleeve_id)
+        sleeve_returns[sleeve_id] = daily_returns(alone)
 
     book_rows: list[dict[str, object]] = []
     books: dict[str, PortfolioBacktest] = {}
     for method in ALLOCATION_METHODS:
         books[method] = run_book(config, inputs, allocation=method, funding_pct_per_day=args.funding_pct_per_day)
-        book_rows += _rows(method, books[method], holdout)
+        book_rows += period_metrics(books[method], holdout)
     unlimited = run_book(config, inputs, risk_overlay=False, funding_pct_per_day=args.funding_pct_per_day)
-    book_rows += _rows(f"{config.allocation} without risk limits", unlimited, holdout)
+    book_rows += period_metrics(unlimited, holdout, label=f"{config.allocation} without risk limits")
 
     correlation = pd.DataFrame(sleeve_returns).corr()
     out = args.out or Path("data/research") / f"portfolio_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
