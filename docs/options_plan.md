@@ -208,8 +208,8 @@ the shape of an exposure the book already takes.
   70 days at average funding, or about 10 days in a bull market, is cheaper in spot. A "core" long sleeve could
   hold spot while the tactical trend sleeves use perps. Spot can't be shorted on Kraken, so shorts stay on perps.
 - *Cash-and-carry* (long spot, short perp): the carry study found it only pays in bull markets (1-3% a year in the
-  last 12 months). Keep it as a manual regime trade for when funding runs above 15-20% a year. It also needs the
-  spot leg to live on the same account as the tax FIFO.
+  last 12 months). Keep it as a manual regime trade for when funding runs above 15-20% a year. Kraken's spot and
+  futures wallets are separate, so the short perp needs its own collateral and top-ups in rallies.
 - *Options-implied forward vs perp:* compare Deribit's forward with the perp price for a basis signal, not an
   arbitrage (the costs are larger than the gap at our size).
 
@@ -228,7 +228,7 @@ don't yet beat simple ones out of sample.
   days), a planner that picks listed contracts, `[risk.exposure]` limits, and an exposure section on the dashboard
   (O3b).
 - **Two venues in one book:** options on Deribit and hedges on Kraken Futures mean collateral on both, transfers
-  between them, and per-venue caps. `PortfolioBook` already keeps venue equity separate. BTC-settled (inverse)
+  between them, and per-venue caps. `PortfolioBook` already keeps cash per venue, in each venue's currency. BTC-settled (inverse)
   options make the collateral itself a BTC delta, and the exposure layer must count it.
 - **Capital:** buying options caps the loss at the premium, so a few USD per 0.01 BTC contract could fit even
   today's capital (after a Deribit account, Norway eligibility and USDC collateral). Selling options needs margin
