@@ -5,6 +5,48 @@ Dated findings from strategy research, newest first. Methodology and column mean
 
 ---
 
+## 2026-09-26 (later): Intraday, 15m and 1h bars, BTC and ETH perpetuals 2020-2026
+
+**Question:** is there an edge at holding periods of hours, net of costs? **Short answer: not from price and volume
+features alone at our fee tier.** Reproduce with `python scripts/research/intraday_study.py --interval 15m` (or
+`1h`).
+
+**Data check first.** The inverse `PI_` contracts went quiet after 2022, which made 42-69% of recent 15m bars stale
+and would have manufactured fake reversal signals. History is now stitched from `PI_` (to 2022) and the linear `PF_`
+contracts (from 2023): at most 0.7% flat 15m bars in any year.
+
+**Single features** (rank correlation with the next 4h return, `src/research/features.py`):
+- **Short-term reversal is real and consistent.** The last 4h move, the last day's move, the distance from the daily
+  mean and the position in the daily range all predict the next 4h with IC -0.03 to -0.046, the same sign in 6-7 of
+  7 years on both coins. It is still there on Kraken's index-price candles (IC -0.056 vs -0.066 on trades for the
+  1h version), so it is not just bid-ask bounce. But it lives in the many small moves (the plain return
+  autocorrelation is about 0), so it is worth only a few bps.
+- **Late US session.** The 20:00-22:00 UTC hours were up +4.5 / +3.1 bps (BTC) and +5.3 / +3.9 (ETH) on average
+  since 2020, 5-6 of 7 years positive, followed by a negative 22:00 hour. Since mid-2022 only the 21:00 hour holds up
+  (+3.4 / +4.2 bps on index prices, t about 2.5). With 48 hour-coin combinations tested, treat it as a lead, not a
+  finding.
+- The other coin's last move, volume shocks and the volatility ratio add little.
+
+**Combined forecast** (`src/research/forecast.py`: walk-forward ridge over 14 features, refit monthly on past data
+with a purge, out-of-sample from February 2021; trade when the forecast exceeds a threshold, hold until it changes
+sign):
+- **It works before costs.** 15m out-of-sample IC +0.018 (BTC) / +0.022 (ETH), a monotone decile table, and Sharpe
+  1.2 / 1.7 at zero cost.
+- **The edge per trade is too small.** The strongest forecasts are worth about 5-13 bps over 4h, against ~20 bps for
+  a taker round trip. At taker fees every threshold loses money.
+- **Maker fees make it marginal.** ETH long/short reaches Sharpe about 1.0 when it only trades forecasts above
+  20-30 bps; BTC reaches 0.3-0.4. That assumes every limit order fills at the bar close, which is optimistic: real
+  limit orders fill mostly when price moves against them.
+- **It is fading.** The out-of-sample IC turned slightly negative in 2025 and 2026 on both coins.
+- 1h bars tell the same story with a weaker signal (IC +0.008 / +0.014).
+
+**What this means.** A few basis points per trade is the typical size of edges in liquid crypto majors at these
+horizons. With these costs and these features, there is nothing to trade yet. Getting an intraday edge needs either
+better information (order flow, positioning, funding, cross-market data), cheaper execution (maker fills that are
+modelled realistically), or a different kind of strategy (market-neutral, many coins). See the roadmap in `TODO.MD`.
+
+---
+
 ## 2026-09-26: Full history on BTC and ETH perpetuals, 2020-02-26 to 2026-09-25
 
 **Data:** Kraken Futures trade candles, stitched from the inverse perpetuals (`PI_XBTUSD` / `PI_ETHUSD`, from

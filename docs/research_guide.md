@@ -184,6 +184,31 @@ surrounded by the opposite colour is a spike: someone got lucky with those exact
 - **Correlated symbols aren't independent evidence.** BTC, ETH and SOL move together, so "works on all three" is
   weaker than it sounds.
 
+## Features and forecasts (before strategies)
+
+For short holding periods, test whether a feature predicts anything before wrapping it in trading rules:
+
+```python
+from src.research import load_bars
+from src.research.features import bars_frame, forward_return, past_return, volatility_scaled, bucket_table, information_coefficient, ic_by_year, seasonality
+from src.research.forecast import walk_forward_ridge, threshold_positions
+
+frame = bars_frame(load_bars("BTC/USD", "15m", source="perp"))
+close = frame["close"].to_numpy()
+feature = volatility_scaled(past_return(close, 16), close, 672)   # last 4h move, scaled by recent volatility
+forward = forward_return(close, 16)                               # next 4h
+information_coefficient(feature, forward)                         # rank correlation; |0.02-0.05| is typical and small
+ic_by_year(feature, forward, frame.index)                         # a real effect keeps its sign year after year
+bucket_table(feature, forward, 16, buckets=10)                    # mean forward return in bps per decile vs costs
+```
+
+- Compare the bucket means (bps) with the round trip: about 20 bps taker and 4 bps maker on Kraken perpetuals.
+- t-stats use non-overlapping observations; overlapping forward returns would overstate significance.
+- `walk_forward_ridge` combines many features into one out-of-sample forecast (refits on past data only, with a purge
+  of `horizon` bars), and `threshold_positions` turns it into positions that only trade strong forecasts.
+- `scripts/research/intraday_study.py` runs the whole study (feature ICs, seasonality, combined forecast at three
+  cost levels) and saves the tables.
+
 ## A research loop that works
 
 1. Write the hypothesis in one sentence (why would this make money, and who is on the other side?).

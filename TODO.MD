@@ -260,6 +260,16 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [ ] Candidate ideas: time-of-day/session effects, opening-range and volatility breakouts with same-day exits, short-horizon reversal after outsized moves, funding-rate and basis signals, volume/flow bursts
   - [ ] Add a max-holding-period rule (e.g. exit after N bars or at a session boundary) so strategies stay intraday-to-few-days by construction
   - [ ] Maker (post-only) execution for entries, since intraday edge per trade is small relative to the 0.05% taker fee
+  - [x] First pass (2026-09-26, `scripts/research/intraday_study.py`, `docs/research_log.md`): short-term reversal and a late-US-session effect are real but worth only a few bps; a walk-forward forecast combining 14 OHLCV features has Sharpe 1.2-1.7 before costs, loses at taker fees, is marginal at (optimistic) maker fees, and faded in 2025-26. Nothing to trade from price/volume alone at our fee tier
+- [ ] **Research roadmap: data and models most likely to produce an edge (ranked, 2026-09-26)**
+  - [ ] **Realistic maker-fill modelling** in backtests (fill only if price trades through the limit; queue and adverse selection), because every intraday conclusion hinges on maker vs taker
+  - [ ] **Positioning and funding data** (hours-to-days signals): funding-rate history, open interest and liquidations from Binance/Bybit/OKX public APIs (Kraken only publishes one year of funding); test funding extremes, OI build-ups and liquidation cascades as features
+  - [ ] **Record Kraken order-flow data now** (public trades with aggressor side, L2 book snapshots via WebSocket): trade-flow imbalance and book imbalance are where minutes-to-hours edges usually live, and this history cannot be bought cheaply later
+  - [ ] **Cross-sectional strategies across many perps** (Kraken lists hundreds): rank coins by recent return, funding or volume and hold the top vs bottom, market-neutral; needs the multi-asset portfolio backtester
+  - [ ] **Funding/basis carry** (long spot, short perp when funding is paid): measure net carry after fees across coins and exchanges before building; Kraken BTC/ETH funding averaged only ~3%/yr over the last year
+  - [ ] **Volatility forecasting (HAR/GARCH)** for position sizing: not an edge by itself, but it lifts the risk-adjusted return of every strategy
+  - [ ] **Calendar/event features**: US macro releases (CPI, FOMC), options expiries, CME weekend gaps
+  - [ ] **Multiple-testing control**: we have now run thousands of configurations; add a deflated Sharpe or reality-check test and keep a never-touched final holdout
 
 - [ ] **Single-Exchange Mean Reversion & Regime Signals**
   - [ ] Build rolling $Z$-score calculator on a single-exchange spread/price series over 5m, 15m, and 1h lookbacks:
