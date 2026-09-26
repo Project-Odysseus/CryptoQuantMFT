@@ -35,12 +35,14 @@ from datetime import datetime
 from typing import Any
 
 from src.execution.adapters import ExecutionAdapter, ExecutionOrder, ExecutionReport
-from src.execution.kraken_futures_adapter import KrakenFuturesPrivateClient, Transport
+from src.execution.kraken_futures_adapter import (
+    _ACCEPTED_SEND_STATUSES,
+    LOST_ORDER_SETTLE_ATTEMPTS,
+    MIN_UNFILLED_AGE_SECONDS,
+    KrakenFuturesPrivateClient,
+    Transport,
+)
 from src.execution.perps import PerpContract
-
-_ACCEPTED_SEND_STATUSES = {"placed", "partiallyFilled", "filled"}
-LOST_ORDER_SETTLE_ATTEMPTS = 3  # an IOC order with no fill after this many checks...
-MIN_UNFILLED_AGE_SECONDS = 15.0  # ...and at least this old never filled (/fills can lag the order by a few seconds)
 
 
 class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):

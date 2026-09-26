@@ -46,6 +46,8 @@ API_BASE = "https://futures.kraken.com/derivatives"
 
 # sendorder statuses that mean the order reached the matching engine.
 _ACCEPTED_SEND_STATUSES = {"placed", "partiallyFilled", "filled"}
+LOST_ORDER_SETTLE_ATTEMPTS = 3  # an IOC order with no fill after this many checks...
+MIN_UNFILLED_AGE_SECONDS = 15.0  # ...and at least this old never filled (/fills can lag the order by a few seconds)
 
 Transport = Callable[[str, str, dict[str, str], bytes | None], dict[str, Any]]
 
@@ -150,6 +152,9 @@ class KrakenFuturesExecutionAdapter(MarginAccountAdapter):
         self.margin_equity: float | None = None
         self.available_margin: float | None = None
         self.unrealized_funding: float = 0.0
+        self._settle_attempts: dict[str, int] = {}
+        self._submitted_monotonic: dict[str, float] = {}
+        self.min_unfilled_age_seconds = MIN_UNFILLED_AGE_SECONDS
 
     # ---- HTTP -------------------------------------------------------------
 
@@ -196,6 +201,7 @@ class KrakenFuturesExecutionAdapter(MarginAccountAdapter):
             # its cliOrdId up in /fills instead of assuming either outcome.
             order.message = f"submission outcome unknown ({exc}); will reconcile by cliOrdId {cli_ord_id}"
             self._orders[order_id] = order
+            self._submitted_monotonic[order_id] = time.monotonic()
             return ExecutionReport(order_id=order_id, status="SUBMITTED", message=order.message)
 
         send_status = payload.get("sendStatus") or {}
@@ -206,6 +212,7 @@ class KrakenFuturesExecutionAdapter(MarginAccountAdapter):
         order.remote_status = status
         order.message = f"sent to Kraken Futures ({status}), cliOrdId {cli_ord_id}"
         self._orders[order_id] = order
+        self._submitted_monotonic[order_id] = time.monotonic()
         return ExecutionReport(order_id=order_id, status="SUBMITTED", message=order.message)
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
@@ -256,9 +263,15 @@ class KrakenFuturesExecutionAdapter(MarginAccountAdapter):
                 filled = sum(float(fill["size"]) for fill in own_fills)
                 still_open = cli_ord_id in open_ids or (order.remote_order_id in open_ids if order.remote_order_id else False)
                 if filled <= 0.0:
-                    if not still_open and order.remote_order_id is not None:
+                    if still_open:
+                        continue
+                    # Not open and no fill yet. Kraken's /fills can lag a filled IOC order by seconds, so only
+                    # conclude "never filled" after several checks and a minimum age; concluding early loses a real fill
+                    attempts = self._settle_attempts[order.order_id] = self._settle_attempts.get(order.order_id, 0) + 1
+                    age = time.monotonic() - self._submitted_monotonic.get(order.order_id, time.monotonic())
+                    if attempts >= LOST_ORDER_SETTLE_ATTEMPTS and age >= self.min_unfilled_age_seconds:
                         order.status = "CANCELED"
-                        order.message = "IOC order expired without a fill"
+                        order.message = "IOC order ended without a fill" if order.remote_order_id else "no fill found for a lost-response order"
                         recovered.append(order.order_id)
                     continue
                 vwap = sum(float(fill["size"]) * float(fill["price"]) for fill in own_fills) / filled

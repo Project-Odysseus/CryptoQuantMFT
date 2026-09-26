@@ -17,9 +17,9 @@ mirror them in `TODO.MD`.
   2026-09-25). Fixed 2026-09-26: a fill with no fee waits up to `FEE_SETTLE_MAX_POLLS` (3) cycles for it, then is
   logged with an `exchange_fee_unsettled` warning. Partial fills now log only their share of the fee, and a
   synchronous fill can't be logged a second time by reconciliation
-- [ ] **Futures (single-contract adapter): IOC write-off race.** It marks an order cancelled on the first check if
-  `/fills` hasn't caught up yet, which can lose a real fill. The portfolio adapter already waits (several checks and
-  a minimum age)
+- [x] **Futures (single-contract adapter): IOC write-off race.** It marked an order cancelled on the first check if
+  `/fills` hadn't caught up yet, which could lose a real fill. Fixed 2026-09-26: both Kraken Futures adapters now
+  share the same rule (3 checks and at least 15 s old before an unfilled order is written off)
 - [ ] **Risk exits: trailing ATR stop.** The ATR stop is a fixed distance from the entry, not one that ratchets with
   the position
 - [ ] **Risk exits: placeholder defaults.** The 5% daily loss, 60-bar time stop, 3x ATR and 5% drawdown stop in

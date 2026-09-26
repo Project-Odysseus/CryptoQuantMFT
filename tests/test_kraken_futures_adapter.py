@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import pytest
 
 from src.execution import PaperTradingEngine
-from src.execution.kraken_futures_adapter import KrakenFuturesExecutionAdapter, sign_request
+from src.execution.kraken_futures_adapter import LOST_ORDER_SETTLE_ATTEMPTS, KrakenFuturesExecutionAdapter, sign_request
 from src.execution.perps import assumed_perp_contract, perp_contract_from_instrument
 from src.risk.controls import RiskControlConfig, RiskManager
 from src.risk.kill_switch import KillSwitchController
@@ -192,8 +192,27 @@ def test_ioc_order_without_a_fill_is_marked_cancelled() -> None:
 
     fake.next_send_status = "partiallyFilled"  # accepted, but our fake books no fill for this status
     adapter.submit_order(order_id="o2", side="buy", size=0.002, price=50000.0, timestamp=T0, symbol="BTC/USD")
+    adapter.min_unfilled_age_seconds = 0.0  # simulated checks take no wall-clock time
+    for _ in range(LOST_ORDER_SETTLE_ATTEMPTS - 1):
+        adapter.recover_execution_state()
+        assert adapter.get_order_status(order_id="o2").status == "SUBMITTED"  # /fills may still be catching up
     adapter.recover_execution_state()
     assert adapter.get_order_status(order_id="o2").status == "CANCELED"
+
+
+def test_fill_that_reaches_fills_late_is_booked_not_written_off() -> None:
+    """Kraken's /fills can lag a filled IOC order; an early empty answer must not cancel the order locally."""
+    fake = FakeKraken()
+    adapter = _adapter(fake)
+    fake.next_send_status = "partiallyFilled"  # accepted, but the fill isn't in /fills yet
+    adapter.submit_order(order_id="o1", side="buy", size=0.002, price=50000.0, timestamp=T0, symbol="BTC/USD")
+    adapter.recover_execution_state()
+    assert adapter.get_order_status(order_id="o1").status == "SUBMITTED"
+
+    fake._fill({"size": "0.002", "side": "buy", "cliOrdId": adapter.client_order_id("o1")})  # /fills catches up
+    adapter.recover_execution_state()
+    assert adapter.get_order_status(order_id="o1").status == "FILLED"
+    assert adapter.position_size() == pytest.approx(0.002)
 
 
 def test_position_closed_on_the_exchange_is_reported_as_a_liquidation() -> None:
