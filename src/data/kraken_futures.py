@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from src.data.historical import _request_json
+
+_UTC = timezone.utc
 
 PUBLIC_BASE = "https://futures.kraken.com/derivatives/api"
 
@@ -174,10 +176,16 @@ def fetch_candles(
     ]
 
 
-# Longest single-contract price history per coin. Kraken's inverse perpetuals (PI_) have trade candles from
-# 2020-02-26; the linear PF_ contracts only start in 2022. Their daily closes differ by a median of 0.05% (BTC) and
-# 0.09% (ETH), so the PI_ series stands in for the perpetual price when researching the longer history.
-HISTORY_VENUE_SYMBOLS: dict[str, str] = {"BTC/USD": "PI_XBTUSD", "ETH/USD": "PI_ETHUSD"}
+# Longest clean perpetual price history per coin, as (venue symbol, used from) segments. Kraken's inverse
+# perpetuals (PI_) have trade candles from 2020-02-26 but went quiet after traders moved to the linear PF_
+# contracts (launched 2022-03): by 2026, 42% of BTC and 69% of ETH 15-minute PI_ bars had no trades, so their prices
+# are stale intraday. PF_ trades continuously from 2023. Stitching PI_ before 2023-01-01 and PF_ after gives one
+# series with no stale stretches; the two contracts' closes differ by a median of 0.05% (BTC) / 0.09% (ETH).
+HISTORY_SEGMENTS: dict[str, list[tuple[str, datetime | None]]] = {
+    "BTC/USD": [("PI_XBTUSD", None), ("PF_XBTUSD", datetime(2023, 1, 1, tzinfo=_UTC))],
+    "ETH/USD": [("PI_ETHUSD", None), ("PF_ETHUSD", datetime(2023, 1, 1, tzinfo=_UTC))],
+}
+HISTORY_VENUE_SYMBOLS: dict[str, str] = {symbol: segments[0][0] for symbol, segments in HISTORY_SEGMENTS.items()}
 
 
 def fetch_perp_history(
@@ -228,8 +236,8 @@ def fetch_perp_history(
     ]
 
 
-def load_or_fetch_perp_history(symbol: str, *, interval_seconds: int, start: datetime, cache_dir: str = "data/historical_cache", refresh: bool = False) -> list[Any]:
-    """`fetch_perp_history` for a runtime symbol (BTC/USD, ETH/USD), cached as parquet and topped up incrementally."""
+def _load_or_fetch_venue_history(venue_symbol: str, symbol: str, *, interval_seconds: int, start: datetime, end: datetime | None, cache_dir: str, refresh: bool) -> list[Any]:
+    """Candles for one contract between `start` and `end` (None = now), cached as parquet and topped up incrementally."""
     from datetime import timedelta, timezone
     from pathlib import Path
 
@@ -237,12 +245,8 @@ def load_or_fetch_perp_history(symbol: str, *, interval_seconds: int, start: dat
 
     from src.storage.bar_aggregator import OHLCVBar
 
-    if symbol.upper() not in HISTORY_VENUE_SYMBOLS:
-        raise ValueError(f"no long perpetual history is mapped for {symbol!r}; known: {sorted(HISTORY_VENUE_SYMBOLS)}")
-    venue_symbol = HISTORY_VENUE_SYMBOLS[symbol.upper()]
     path = Path(cache_dir) / f"kraken_futures_{venue_symbol}_{interval_seconds}s.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
-
     bars: list[Any] = []
     if path.exists() and not refresh:
         frame = pd.read_parquet(path)
@@ -253,7 +257,25 @@ def load_or_fetch_perp_history(symbol: str, *, interval_seconds: int, start: dat
         if not bars or bars[0].timestamp > start + timedelta(seconds=interval_seconds):
             bars = []
     fetch_from = bars[-1].timestamp + timedelta(seconds=interval_seconds) if bars else start
-    if fetch_from + timedelta(seconds=interval_seconds) <= datetime.now(timezone.utc):
-        bars = bars + [bar for bar in fetch_perp_history(venue_symbol, interval_seconds=interval_seconds, start=fetch_from, symbol=symbol) if not bars or bar.timestamp > bars[-1].timestamp]
+    fetch_until = min(end, datetime.now(timezone.utc)) if end is not None else datetime.now(timezone.utc)
+    if fetch_from + timedelta(seconds=interval_seconds) <= fetch_until:
+        bars = bars + [bar for bar in fetch_perp_history(venue_symbol, interval_seconds=interval_seconds, start=fetch_from, end=fetch_until, symbol=symbol) if not bars or bar.timestamp > bars[-1].timestamp]
         pd.DataFrame({key: [getattr(bar, key) for bar in bars] for key in ("timestamp", "open", "high", "low", "close", "volume")}).to_parquet(path, index=False)
     return [bar for bar in bars if bar.timestamp >= start]
+
+
+def load_or_fetch_perp_history(symbol: str, *, interval_seconds: int, start: datetime, cache_dir: str = "data/historical_cache", refresh: bool = False) -> list[Any]:
+    """Perpetual trade candles for BTC/USD or ETH/USD from `start`, stitched across contracts (see HISTORY_SEGMENTS)."""
+    key = symbol.upper()
+    if key not in HISTORY_SEGMENTS:
+        raise ValueError(f"no long perpetual history is mapped for {symbol!r}; known: {sorted(HISTORY_SEGMENTS)}")
+    segments = HISTORY_SEGMENTS[key]
+    bars: list[Any] = []
+    for index, (venue_symbol, segment_start) in enumerate(segments):
+        segment_end = segments[index + 1][1] if index + 1 < len(segments) else None
+        first = max(start, segment_start) if segment_start is not None else start
+        if segment_end is not None and first >= segment_end:
+            continue
+        piece = _load_or_fetch_venue_history(venue_symbol, symbol, interval_seconds=interval_seconds, start=first, end=segment_end, cache_dir=cache_dir, refresh=refresh)
+        bars.extend(bar for bar in piece if segment_end is None or bar.timestamp < segment_end)
+    return bars

@@ -122,7 +122,7 @@ def test_perp_history_pages_forward_and_caches(tmp_path, monkeypatch: pytest.Mon
     calls: list[tuple[int, int]] = []
 
     def fake(method, url, params=None):
-        calls.append((params["from"], params["to"]))
+        calls.append((url.split("/")[-2], params["from"], params["to"]))
         first = (params["from"] + day - 1) // day * day
         return {"candles": [{"time": ts * 1000, "open": "1", "high": "2", "low": "0.5", "close": "1.5", "volume": "10"} for ts in range(first, params["to"] + 1, day)]}
 
@@ -135,10 +135,12 @@ def test_perp_history_pages_forward_and_caches(tmp_path, monkeypatch: pytest.Mon
     monkeypatch.setattr(kraken_futures, "datetime", FrozenDatetime)
     bars = load_or_fetch_perp_history("BTC/USD", interval_seconds=day, start=start, cache_dir=str(tmp_path))
 
-    assert len(calls) == 3  # 4500 days in pages of 2000
+    # PI_ only up to 2023-01-01 (one 2000-day page), PF_ from then to now (two pages).
+    assert [call[0] for call in calls] == ["PI_XBTUSD", "PF_XBTUSD", "PF_XBTUSD"]
+    assert max(call[2] for call in calls if call[0] == "PI_XBTUSD") == int(datetime(2023, 1, 1, tzinfo=timezone.utc).timestamp())
     assert bars[0].timestamp == start and bars[-1].timestamp == now - timedelta(days=1)  # today's candle is still open
     assert all((b.timestamp - a.timestamp).days == 1 for a, b in zip(bars, bars[1:]))
-    assert (tmp_path / "kraken_futures_PI_XBTUSD_86400s.parquet").exists()
+    assert (tmp_path / "kraken_futures_PI_XBTUSD_86400s.parquet").exists() and (tmp_path / "kraken_futures_PF_XBTUSD_86400s.parquet").exists()
 
     calls.clear()
     assert len(load_or_fetch_perp_history("BTC/USD", interval_seconds=day, start=start, cache_dir=str(tmp_path))) == len(bars)
