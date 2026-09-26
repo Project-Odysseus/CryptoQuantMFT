@@ -111,4 +111,5 @@ permission, and never print them.
 - **2026-09-25/26, perpetuals:** the contract and margin model, the sandbox, verified Kraken specs, the single-contract live adapter, and perp tax flows.
 - **2026-09-26, research data and studies:** perp history since 2020, positioning data, the Binance archive (859 coins), and the order-flow recorder. Studies: intraday, positioning, volatility, carry, cross-sectional, diversification, portfolio, and risk budget. Also the deflated Sharpe, the signal notebook and the scorecard.
 - **2026-09-26, portfolio and options:** portfolio phases 0-4 and the live path with the first real Kraken Futures round trip, Telegram trade messages with reasons, and the options research framework.
-- **2026-09-26, cleanup:** `.env.example` deleted (it held real credentials and nothing used it; it was never committed), and the roadmap deduplicated.
+- **2026-09-26, cleanup:** `.env.example` deleted (it held real credentials and nothing used it; it was never committed), the roadmap deduplicated, and `README.md` rewritten with a module map.
+- **2026-09-26, live hardening:** paper shorts from flat, the spot `fee=0` reconciliation, the futures IOC write-off race, Kraken altname symbols, a trailing ATR stop, and tested runtime risk defaults (`todo_important.md`).

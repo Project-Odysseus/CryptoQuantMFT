@@ -1,168 +1,144 @@
 # CryptoQuantMFT
 
-CryptoQuantMFT is a Python trading-framework prototype for researching, backtesting, paper-running, and carefully validating a future Kraken live path. The current source of truth is **paper mode**, with **Kraken `live_dry_run`** as the promotion lane and explicit safety gates around real `live` mode.
+A Python 3.13 framework for systematic crypto trading on Kraken, covering spot and Kraken Futures perpetuals. It
+takes a strategy from research to paper to live: a multi-strategy portfolio, Norwegian tax records, and an options
+research track. **Paper mode is the source of truth**, and real trading sits behind explicit gates.
 
-## Current state
+## Status (2026-09-26)
 
-- **Stable today:** demo backtests, walk-forward evaluation, paper runtime, runtime health reporting, reconciliation, checkpoints, and kill-switch controls
-- **Validated against Kraken without trading:** private-endpoint auth, balances, open/closed order lookups, status/cancel probes, validate-only order requests, kill-switch preview, and manual quote-order preview
-- **Now available for a tightly controlled first round-trip:** manual Kraken CLI open-by-notional and close-position flows, guarded by live confirmation flags, a second manual confirmation token, and kill-switch readiness checks
-- **Now in place for go-live prep:** Norwegian tax-ledger foundation with Norges Bank EUR/NOK rates, FIFO EUR cost-basis tracking, yearly summary/export, and year-end holdings valuation
-- **Not yet signed off for production trading:** populated real-order reconciliation and post-trade tax-ledger validation against actual Kraken fills
+| Area | State |
+| --- | --- |
+| Research, backtests, notebooks | Safe any time (public data) |
+| Paper portfolio (`--portfolio`) | Runs until stopped, with checkpoints, a dashboard and Telegram alerts |
+| Kraken Futures live | Proven with a real minimum-size round trip; `config/portfolio.btc_live.toml` is ready behind the live gates |
+| Kraken spot live (single-strategy runtime) | Proven with small round trips; the last hardening items are in `todo_important.md` |
+| Options | Research only (pricing, calibration, SVI surface, exposures); no execution |
 
-## What the repo can do
+The roadmap is in [`TODO.MD`](TODO.MD), and live-execution hardening in [`todo_important.md`](todo_important.md).
 
-- **Research/backtesting:** synthetic and Kraken-sourced backtests, walk-forward runs, L2-style event simulation, analytics, and plotting
-- **Runtime/execution:** `paper`, `live_dry_run`, and guarded `live` runtime modes; exchange-shaped adapters for Kraken/Firi; persistence for trades, equity, events, and runtime state
-- **Risk/safety:** volatility-aware sizing, drawdown/exposure limits, spread/slippage/staleness guards, watchdog monitoring, reconciliation, and kill-switch controls
-- **Tax readiness:** Norwegian tax-event storage for EUR-quoted live trades, EUR fiat-pool tracking, annual summary export, and year-end wealth snapshot support
-
-## Architecture at a glance
-
-```text
-Market data connectors
-  -> Market storage + streaming aggregation
-  -> Strategy / signal evaluation
-  -> Risk manager
-  -> Paper trading engine / execution router
-  -> Trade logger + health reporting + checkpoint state
-```
-
-For deeper repository walkthroughs:
-
-- Operational runbook: [docs/runbook.md](docs/runbook.md)
-- Architecture map: [docs/architecture-map.md](docs/architecture-map.md)
-- Extended system explanation: [extended_Explanation.md](extended_Explanation.md)
-
-## Repository layout
-
-```text
-main.py                  CLI entry point for backtests, runtime flows, reports, and kill switch
-config.py                Environment-based settings loader
-src/data/                Connectors, historical data, FX collection, and pipeline orchestration
-src/storage/             SQLite/parquet persistence, aggregation, and trade logging
-src/backtest/            Backtesting engine, analytics, plotting, and walk-forward evaluation
-src/risk/                Risk controls, sizing logic, and kill-switch handling
-src/execution/           Paper trading, adapters, routing, and reconciliation
-src/runtime/             Runtime configuration and orchestration loop
-src/utils/               Logging, notifications, and telemetry helpers
-tests/                   Unit and integration coverage across the main subsystems
-```
-
-## Example workflows
-
-Run the test suite:
+## Setup
 
 ```bash
-pytest
+conda env create -f environment.yml && conda activate CryptoArb
+pytest                                   # ~600 tests, under a minute
 ```
 
-Run a demo backtest:
+Credentials go in `.env` (never commit it; keys need no withdrawal permission): `KRAKEN_API_KEY`, `KRAKEN_SECRET`,
+`KRAKEN_FUTURES_API_KEY`, `KRAKEN_FUTURES_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. `config.py` loads them.
+
+## Everyday commands
 
 ```bash
-python main.py --demo-backtest
-```
+# Research
+python scripts/research/portfolio_backtest.py config/portfolio.example.toml    # sleeves, books, holdout
+python scripts/research/risk_budget.py config/portfolio.btc_live.toml --capital 19 --max-drawdown 0.3
+python scripts/research/stop_study.py config/portfolio.btc_live.toml          # do the risk exits help?
+# notebooks/signal_research.ipynb (open in VS Code or Jupyter): try and score a new signal
 
-Run walk-forward evaluation:
+# Portfolio: check, paper, dashboard
+python main.py --portfolio-check config/portfolio.btc_live.toml
+python main.py --runtime paper --portfolio config/portfolio.btc_live.toml --runtime-iterations 0 --runtime-interval 60
+python main.py --dashboard --report
 
-```bash
-python main.py --walk-forward
-```
-
-Run a deterministic paper-runtime smoke test:
-
-```bash
-python main.py --runtime paper --use-mock-connector --runtime-iterations 3 --dashboard --report
-```
-
-Run the committed baseline paper-runtime config:
-
-```bash
-python main.py --runtime paper --runtime-config-path config/runtime.paper.json --dashboard --report
-```
-
-Run the exchange-shaped Kraken dry-run promotion lane:
-
-```bash
-python main.py --runtime live_dry_run --execution-exchange kraken --runtime-iterations 3 --dashboard --report
-```
-
-Run the non-destructive Kraken verification before any live promotion:
-
-```bash
+# Read-only exchange checks (no orders)
 python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR
-```
+python main.py --telegram-test
+python main.py --option-chain-snapshot
 
-This checks private-endpoint auth, balances, open/closed orders, status/cancel handling, and a `validate=true` order request without placing a real order.
-
-Preview a small Kraken BTC/EUR buy by EUR notional without sending it:
-
-```bash
-python main.py --kraken-preview-order --kraken-preview-symbol BTC/EUR --kraken-preview-quote-amount 3
-```
-
-This fetches live pair rules, current price, your EUR balance, rounds the BTC size to Kraken precision, and only runs `AddOrder` with `validate=true`.
-
-Submit a small manual Kraken BTC/EUR buy after the preview passes:
-
-```bash
-python main.py \
-  --kraken-submit-order \
-  --kraken-submit-symbol BTC/EUR \
-  --kraken-submit-quote-amount 3.5 \
-  --enable-live-trading \
-  --live-confirmation ENABLE_LIVE_TRADING \
-  --kraken-submit-confirmation SUBMIT_KRAKEN_ORDER
-```
-
-This is a **real live action**. It reuses the preview sizing path, submits a market order only after validation passes, refreshes balances, and logs a filled trade into the local trade/tax ledger when Kraken reports an immediate fill.
-
-Preview closing the full current BTC/EUR position without sending it:
-
-```bash
-python main.py --kraken-preview-close-position --kraken-close-symbol BTC/EUR
-```
-
-Submit a full manual close of the current BTC/EUR position:
-
-```bash
-python main.py \
-  --kraken-close-position \
-  --kraken-close-symbol BTC/EUR \
-  --enable-live-trading \
-  --live-confirmation ENABLE_LIVE_TRADING \
-  --kraken-close-confirmation SUBMIT_KRAKEN_ORDER
-```
-
-This is also a **real live action**. It reads the current BTC balance, rounds the sell size to Kraken precision, validates the close first, then submits a market sell to close the position.
-
-Seed the EUR fiat pool before the first real Kraken trade:
-
-```bash
-python main.py --tax-log-fiat-eur 1000 --tax-fx-rate 11.50 --tax-reference initial_capital
-```
-
-Print the Norwegian tax summary and optionally export the ledger:
-
-```bash
+# Tax
 python main.py --tax-report --tax-year 2026 --tax-export-path exports/tax_2026.csv
 ```
 
-`--runtime live` is now guarded on purpose: it requires `--enable-live-trading`, the exact confirmation token `--live-confirmation ENABLE_LIVE_TRADING`, an explicit non-auto `--execution-exchange`, and a ready/inactive kill-switch state before the CLI will even attempt the live path.
+**Real orders:** `--runtime live`, `--futures-live-test`, the `--kraken-submit-*` / `--kraken-close-*` flows and
+`--kill-switch` act on the real account. Live needs `--enable-live-trading --live-confirmation
+ENABLE_LIVE_TRADING`, a named `--execution-exchange`, a ready kill switch and, for the portfolio,
+`[risk] max_gross_notional`. See [`docs/runbook.md`](docs/runbook.md) before using any of them.
 
-Show recent persisted runtime activity:
+## Module map
 
-```bash
-python main.py --report --report-limit 20
+Arrows read "uses" (they follow the imports). `main.py` is the only entry point, and each flag calls one function
+in it.
+
+```mermaid
+flowchart TD
+    main["main.py<br/>CLI: research, runtimes, reports, tax, live gates, kill switch"]
+    settings["config.py + .env<br/>keys, DB path, Telegram"]
+    cfgfiles["config/<br/>portfolio TOML, runtime JSON"]
+
+    subgraph live["Runtimes"]
+        portfolio["src/portfolio<br/>config, sleeves, allocation, netting, risk overlay,<br/>order planner, book, engine, candle feed, runtime, exposure"]
+        runtime["src/runtime<br/>RuntimeOrchestrator (single strategy),<br/>RuntimeConfig, checkpoints, watchdog"]
+    end
+
+    subgraph exec["Execution"]
+        execution["src/execution<br/>PaperTradingEngine, ExecutionRouter, adapters:<br/>Sandbox, Kraken spot, Kraken Futures (single, cross-margin),<br/>perps margin model, reconciliation, live test"]
+        risk["src/risk<br/>RiskManager (entries, exits, breakers),<br/>sizers, kill switch"]
+    end
+
+    subgraph res["Research"]
+        research["src/research<br/>vectorised engine, strategy catalog, scorecard,<br/>deflated Sharpe, portfolio sim, vol forecasts"]
+        backtest["src/backtest<br/>strategy registry, SimpleBacktester, costs,<br/>walk-forward, L2 simulator, plots"]
+        signals["src/signals<br/>regime, volatility (and legacy order-book signals)"]
+        options["src/options<br/>Black-76, Merton, local-vol PDE, validation gate,<br/>calibration, SVI surface, Deribit chains"]
+    end
+
+    subgraph base["Data and storage"]
+        data["src/data<br/>exchange connectors, pipeline, Kraken/Binance history,<br/>positioning, FX, order-flow recorder"]
+        storage["src/storage<br/>TradeLogger: SQLite trades, events, snapshots, tax ledger;<br/>bars, market store"]
+        utils["src/utils<br/>logger, Telegram alerts"]
+    end
+
+    ext[("Kraken spot · Kraken Futures<br/>Deribit · Binance archive · Norges Bank")]
+    db[("data/cryptoquant.db")]
+
+    main --> portfolio & runtime & execution & backtest & options & data & storage & risk
+    main --> settings & cfgfiles
+    portfolio --> execution & risk & backtest & research & runtime & data & options & storage & utils
+    runtime --> execution & backtest & risk & storage & utils
+    execution --> risk & backtest & storage
+    research --> backtest & data
+    backtest --> risk & signals & data & storage
+    risk --> storage
+    options --> utils
+    data --> storage & utils & settings
+    storage --> data
+    utils --> settings
+    data -. HTTP .-> ext
+    execution -. orders .-> ext
+    options -. chains .-> ext
+    storage --> db
 ```
 
-## Path to first safe live trade
+Notebooks (`notebooks/`) and scripts (`scripts/research/`) sit on top of `src/research`, `src/portfolio` and
+`src/options`. They never place orders.
 
-1. Keep paper mode stable and rerun Kraken verification.
-2. Seed the EUR fiat pool for tax basis tracking.
-3. Run a manual `--kraken-preview-order` for the intended tiny order size.
-4. Execute a small real Kraken trade with the guarded manual submit flow.
-5. When you are ready to exit, use the guarded close-position flow instead of the strategy runtime.
-6. Immediately verify reconciliation, order IDs, fees, and tax-ledger rows from the real fill and close.
+### The two runtime paths
 
-Until step 6 is checked, treat the project as **pre-live but close**.
+- **Portfolio (the main path):** `CandleFeed` (REST candles) → each sleeve's strategy and exits → allocation →
+  netting per instrument → risk overlay (caps, money cap, drawdown kill) → order planner (lots, bands,
+  reduce-only) → adapter (paper sandbox or Kraken Futures) → `PortfolioBook` → `TradeLogger` and Telegram. The
+  research backtester runs the same functions, and a parity test holds research and runtime to the same result.
+- **Single strategy (spot, the older path):** connector → `MarketDataPipeline` → bars → strategy →
+  `RiskManager` → `PaperTradingEngine` → `ExecutionRouter` → adapter → reconciliation → `TradeLogger`.
+
+A new strategy is registered once, in `StrategyRegistry` (`src/backtest/runner.py`), with its defaults and sweep
+grid in `src/research/catalog.py`. It is then available to the notebooks, the research scripts, portfolio sleeves
+and the runtime.
+
+## Conventions
+
+`Decimal` for money, balances and order sizes; log returns for statistics. Async, non-blocking network code. Fees
+and slippage in every backtest; no look-ahead. SQLite is the record: reports, the dashboard and tax read from it.
+Orders go through the adapters, never directly from a strategy. More in [`CLAUDE.md`](CLAUDE.md).
+
+## Docs
+
+| File | What |
+| --- | --- |
+| [`docs/runbook.md`](docs/runbook.md) | How to run everything, the live checklists, the kill switch, backups |
+| [`docs/architecture-map.md`](docs/architecture-map.md) | The code in more detail, class by class |
+| [`docs/portfolio_plan.md`](docs/portfolio_plan.md) | The portfolio design and build phases |
+| [`docs/options_plan.md`](docs/options_plan.md) | Options: pricing models, the test gate, strategy design notes |
+| [`docs/research_log.md`](docs/research_log.md) | Every study and what it found, newest first |
+| [`docs/research_guide.md`](docs/research_guide.md) | How to research a strategy without fooling yourself |
+| [`docs/perpetual_futures.md`](docs/perpetual_futures.md) | Perps: contracts, margin, funding, Kraken specifics |
