@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from src.execution import PaperTradingEngine
 from src.execution.adapters import ExecutionReport
 from src.risk.controls import RiskControlConfig, RiskManager
@@ -959,3 +961,25 @@ def test_exchange_cycle_closes_long_and_short_positions_when_signal_returns_to_z
         closed = engine.run_exchange_cycle([bar(0, 68000.0), bar(1, 68000.0)], [entry_signal, 0.0])
         assert [trade.side for trade in closed.trades] == [exit_side]
         assert closed.portfolio_history[-1].position_size == 0.0
+
+
+def test_paper_run_opens_and_closes_a_short_from_flat_when_shorts_are_allowed() -> None:
+    """Paper runs allow shorts; the fill model used to cancel every sell that wasn't covered by a long."""
+    prices = [100.0, 100.0, 100.0, 90.0, 90.0, 90.0, 90.0]
+    bars = [OHLCVBar(exchange="mock", symbol="BTC/USD", interval_seconds=60, timestamp=datetime(2024, 1, 1, 0, index, tzinfo=timezone.utc),
+                     open=price, high=price, low=price, close=price, volume=10.0) for index, price in enumerate(prices)]
+    signals = [-1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0]
+
+    shorting = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=5, allow_short=True).run(bars, signals)
+    assert [(order.side, order.status) for order in shorting.orders] == [("sell", "FILLED"), ("buy", "FILLED")]
+    filled = [trade for trade in shorting.trades]
+    size = filled[0].size
+    assert filled[0].side == "sell" and filled[1].side == "buy" and filled[1].size == pytest.approx(size)
+    final = shorting.portfolio_history[-1]
+    assert final.position_size == 0.0 and final.equity == pytest.approx(1000.0 + (filled[0].price - filled[1].price) * size)
+    assert final.equity > 1000.0  # sold at 100, bought back at 90
+    assert min(snapshot.position_size for snapshot in shorting.portfolio_history) == pytest.approx(-size)
+
+    long_only = PaperTradingEngine(initial_cash=1000.0, default_order_size=1.0, partial_fill_fraction=1.0, max_order_lifetime_bars=5).run(bars, signals)
+    assert [(order.side, order.status) for order in long_only.orders][:1] == [("sell", "CANCELED")]
+    assert long_only.portfolio_history[-1].equity == pytest.approx(1000.0)

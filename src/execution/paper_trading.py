@@ -233,23 +233,10 @@ class PaperTradingEngine:
                     execution_price = self._apply_cost(price, side=order.side, size=fill_size)
                     cost = abs(execution_price - gross_price) * fill_size
                     fees_paid += cost
-                    if order.side == "buy" and cash >= execution_price * fill_size:
-                        cash -= execution_price * fill_size
-                        position_size += fill_size
-                        avg_entry_price = self._update_average_price(
-                            current_position=position_size,
-                            average_price=avg_entry_price,
-                            fill_size=fill_size,
-                            fill_price=execution_price,
-                        )
-                    elif order.side == "sell" and position_size >= fill_size:
-                        realized_pnl += (execution_price - (avg_entry_price or execution_price)) * fill_size
-                        cash += execution_price * fill_size
-                        position_size -= fill_size
-                        if position_size <= 0.0:
-                            avg_entry_price = None
-                        else:
-                            avg_entry_price = avg_entry_price
+                    booked = self._book_paper_fill(side=order.side, size=fill_size, price=execution_price, cash=cash, position=position_size, average=avg_entry_price)
+                    if booked is not None:
+                        cash, position_size, avg_entry_price, realized = booked
+                        realized_pnl += realized
                     else:
                         order.status = "CANCELED"
                         order.last_reason = "insufficient_cash_or_position"
@@ -1466,6 +1453,44 @@ class PaperTradingEngine:
             return price
         trade_price = self.cost_model.apply_trade_cost(price, side=side, role="taker", size=size)
         return self.cost_model.apply_fx_cost(trade_price, side=side, size=1.0)
+
+    def _book_paper_fill(self, *, side: str, size: float, price: float, cash: float, position: float, average: float | None) -> tuple[float, float, float | None, float] | None:
+        """Apply one paper fill to cash, position and average entry; returns (cash, position, average, realized) or None if refused.
+
+        Longs need the cash to pay for the buy. With `allow_short`, a sell from
+        flat or from a short opens or adds to a short: the proceeds go to cash
+        and equity (cash + position x price) carries the short's P&L. Before
+        this, every sell needed a long at least as big as the order, so paper
+        `run()` cancelled every short entry although paper runs allow shorts. A
+        fill that would flip through flat is refused: the engine exits and
+        enters with separate orders.
+        """
+        realized = 0.0
+        if side == "buy":
+            if position < 0.0:  # covering a short
+                if size > -position + 1e-12:
+                    return None
+                realized = ((average or price) - price) * size
+                new_position = position + size
+                new_average = average if new_position < -1e-12 else None
+            else:
+                if cash < price * size:
+                    return None
+                new_position = position + size
+                new_average = price if not average or position <= 0.0 else (average * position + price * size) / new_position
+            return cash - price * size, (0.0 if abs(new_position) <= 1e-12 else new_position), new_average, realized
+        if position > 0.0:  # reducing a long
+            if size > position + 1e-12:
+                return None
+            realized = (price - (average or price)) * size
+            new_position = position - size
+            new_average = average if new_position > 1e-12 else None
+        else:
+            if not self.allow_short:
+                return None
+            new_position = position - size
+            new_average = price if not average or position >= 0.0 else (average * -position + price * size) / -new_position
+        return cash + price * size, (0.0 if abs(new_position) <= 1e-12 else new_position), new_average, realized
 
     def _update_average_price(self, *, current_position: float, average_price: float | None, fill_size: float, fill_price: float) -> float | None:
         if current_position <= 0.0:

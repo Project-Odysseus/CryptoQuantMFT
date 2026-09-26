@@ -22,7 +22,8 @@ mirror them in `TODO.MD`.
   the position
 - [ ] **Risk exits: placeholder defaults.** The 5% daily loss, 60-bar time stop, 3x ATR and 5% drawdown stop in
   `build_runtime_orchestrator` were never tested against a backtest
-- [ ] **Paper `run()` can't open a short from flat** (the sell is cancelled); `live_dry_run` can
+- [x] **Paper `run()` can open a short from flat** (the sell used to be cancelled; fixed 2026-09-26 with a
+  regression test)
 - [ ] **Futures: trigger the kill switch once against a real open position at minimum size** (mirrors `TODO.MD`
   section 1)
 
