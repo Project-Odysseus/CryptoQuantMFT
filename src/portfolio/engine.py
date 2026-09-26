@@ -394,7 +394,8 @@ class PortfolioEngine:
             current=self.book.weights(), equity=equity, peak_equity=float(self.book.peak_equity),
             day_start_equity=float(self.book.day_start_equity), stale=stale,
         )
-        plan = plan_orders(self.book.units(), report.adjusted, prices=prices, equity=equity, instruments=self.config.instruments, band=self.config.rebalance_band)
+        plan = plan_orders(self.book.units(), report.adjusted, prices=prices, equity=equity, instruments=self.config.instruments, band=self.config.rebalance_band,
+                           small_lot_cap=self.config.small_lot_cap(equity))
         busy = {meta["instrument"] for meta in self.pending_orders.values()}
         orders = []
         for order in plan.orders:

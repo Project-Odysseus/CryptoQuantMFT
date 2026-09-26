@@ -284,3 +284,21 @@ def test_the_money_cap_binds_in_research_at_the_configs_capital() -> None:
     assert free.result.gross_exposure.max() > 0.3
     assert notional.min() >= 0 and (notional - 200.0).max() <= 0.025 * capped.result.equity.max()  # only drift inside the 2% rebalance band
     assert capped.result.metrics()["avg_gross_exposure"] < free.result.metrics()["avg_gross_exposure"]
+
+
+def test_lot_rounding_in_research_follows_the_order_planner_including_the_small_account_rule() -> None:
+    """Lots worth ~50% of equity: tiny targets round to flat, unless the small-account rule holds one lot."""
+    from dataclasses import replace as replace_config
+
+    config = _config(initial_equity=1_000, scale=0.1)
+    big_lots = {key: replace_config(spec, lot_step=5.0, min_order_size=5.0) for key, spec in config.instruments.items()}  # ~500 of 1,000
+    config = replace_config(config, instruments=big_lots)
+    inputs = prepare_inputs(config, bar_loader=synthetic_loader)
+    continuous = run_book(config, inputs, funding_pct_per_day=0.0)
+    rounded = run_book(config, inputs, funding_pct_per_day=0.0, lots=True)
+    small_rule = run_book(replace_config(config, small_account_equity=1e9), inputs, funding_pct_per_day=0.0, lots=True)
+
+    assert 0 < continuous.result.gross_exposure.max() < 0.3  # every target is below one lot
+    assert rounded.result.gross_exposure.max() == 0.0  # so plain rounding never trades
+    held = small_rule.result.gross_exposure[small_rule.result.gross_exposure > 0]
+    assert len(held) > 0 and held.min() > 0.2  # the rule holds whole lots (~0.5 of equity at entry, drifting with price)

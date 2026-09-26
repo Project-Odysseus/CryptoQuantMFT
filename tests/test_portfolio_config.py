@@ -158,3 +158,17 @@ def test_the_portfolio_scale_is_validated_and_described() -> None:
     assert _parse(portfolio={"scale": 0.5}).scale == 0.5 and _parse().scale == 1.0
     assert "scale must be above 0 and at most 10" in _problems(portfolio={"scale": 0})
     assert "scale 0.5" in describe(_parse(portfolio={"scale": 0.5})).splitlines()[0]
+
+
+def test_small_account_settings_are_read_and_checked(tmp_path) -> None:
+    from pathlib import Path
+
+    from src.portfolio.config import PortfolioConfigError, load_portfolio_config
+
+    base = Path("config/portfolio.btc_live.toml").read_text()
+    config = load_portfolio_config("config/portfolio.btc_live.toml")
+    assert config.small_account_equity == 95 and config.small_account_max_lot_weight == 0.9
+    bad = tmp_path / "bad.toml"
+    bad.write_text(base.replace("small_account_max_lot_weight = 0.9", "small_account_max_lot_weight = 1.5"))
+    with pytest.raises(PortfolioConfigError, match="small_account_max_lot_weight"):
+        load_portfolio_config(bad)

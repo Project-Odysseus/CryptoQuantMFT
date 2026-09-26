@@ -15,7 +15,11 @@ Rules, in the order they apply to each instrument:
    `simulate_portfolio(rebalance_band=...)`, so research trades the same way.
 4. The target position is rounded toward zero on the instrument's lot grid,
    so rounding never makes a position bigger than its target, and never
-   pushes one past a cap.
+   pushes one past a cap. The exception is a small account
+   (`small_lot_cap`): there one lot can be a large share of equity (0.0001
+   BTC is ~44% of 19 USD), so rounding toward zero would keep the book flat
+   almost always. A nonzero target that rounds to zero lots then holds one
+   lot, if that lot is at most `small_lot_cap` of equity.
 5. A flip becomes two orders: a reduce-only close, then an open.
 6. Orders smaller than the instrument's minimum size are skipped
    (`below_min_size`). Nothing is silently resized.
@@ -92,6 +96,18 @@ def round_toward_zero(units: Decimal, step: Decimal) -> Decimal:
     return ((units / step).to_integral_value(rounding=ROUND_DOWN) * step).quantize(step)
 
 
+def lot_target_units(target_weight: float, *, equity: float, price: float, spec: InstrumentSpec, small_lot_cap: float | None = None) -> Decimal:
+    """The signed position in units for `target_weight`, on the lot grid (rule 4 above; shared with the research backtest)."""
+    raw = _decimal(target_weight) * _decimal(max(equity, 0.0)) / _decimal(price)
+    step = _decimal(spec.lot_step)
+    target = round_toward_zero(raw, step)
+    if target == 0 and target_weight != 0.0 and small_lot_cap is not None and equity > 0:
+        one_lot = max(step if step > 0 else FALLBACK_STEP, _decimal(spec.min_order_size))
+        if float(one_lot) * price / equity <= small_lot_cap:
+            target = one_lot if target_weight > 0 else -one_lot
+    return target
+
+
 def plan_orders(
     current_units: Mapping[str, Decimal | float],
     target_weights: Mapping[str, float],
@@ -100,6 +116,7 @@ def plan_orders(
     equity: float,
     instruments: Mapping[str, InstrumentSpec],
     band: float = 0.0,
+    small_lot_cap: float | None = None,
 ) -> OrderPlan:
     """Plan the orders that move `current_units` to `target_weights` (signed shares of `equity`).
 
@@ -111,6 +128,9 @@ def plan_orders(
         equity: Portfolio equity in the base currency.
         instruments: Specs with `lot_step`, `min_order_size` and `can_short`.
         band: The rebalance band as a share of equity (0.02 = 2%).
+        small_lot_cap: Set while the account is small: a nonzero target that
+            rounds to zero lots holds one lot, if one lot is at most this share
+            of equity (see rule 4). None rounds toward zero as usual.
     """
     plan = OrderPlan()
     reducing: list[PlannedOrder] = []
@@ -138,7 +158,7 @@ def plan_orders(
             continue
 
         raw_target = _decimal(target_weight) * _decimal(max(equity, 0.0)) / _decimal(price)
-        target = round_toward_zero(raw_target, _decimal(spec.lot_step))
+        target = lot_target_units(target_weight, equity=equity, price=price, spec=spec, small_lot_cap=small_lot_cap)
         if target == current:
             if raw_target != current:
                 plan.skipped.append(SkippedChange(instrument, "below_lot_step", current_weight, target_weight))

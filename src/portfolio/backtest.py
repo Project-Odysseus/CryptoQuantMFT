@@ -24,6 +24,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from src.portfolio.allocation import allocate_history
@@ -160,6 +161,7 @@ def run_book(
     sleeves: Sequence[str] | None = None,
     risk_overlay: bool = True,
     funding_pct_per_day: float = 0.01,
+    lots: bool = False,
 ) -> PortfolioBacktest:
     """Allocate, net and simulate one book from prepared inputs.
 
@@ -173,6 +175,9 @@ def run_book(
         funding_pct_per_day: Funding longs pay on perps, in % of notional per
             day (0.01 is about the measured one-year mean on Kraken BTC/ETH;
             see `CostSettings.perp`).
+        lots: Hold whole lots, as the runtime's order planner does (rounded
+            toward zero, with the small-account one-lot rule). Matters when a
+            lot is a large share of equity; costs a little speed.
     """
     method = allocation or config.allocation
     chosen = list(sleeves) if sleeves is not None else list(inputs.sleeve_weights.columns)
@@ -201,10 +206,30 @@ def run_book(
     per_bar = funding_pct_per_day / 100.0 / per_day
     funding = pd.DataFrame({spec.id: per_bar if spec.kind == "perp" else 0.0 for spec in specs}, index=index)
     overlay = array_overlay(instruments, config=config.risk, venues=config.venues(), can_short=config.can_short()) if risk_overlay else None
+    if lots:
+        overlay = _lot_rounding(overlay, specs, inputs.prices.to_numpy(), config)
     # Simulated in money at the config's starting equity, so money limits (max_gross_notional) bind as in the runtime
     result = simulate_portfolio(inputs.prices, targets, funding=funding, costs=costs, rebalance_band=config.rebalance_band, adjust_targets=overlay,
                                 initial_equity=config.initial_equity)
     return PortfolioBacktest(allocation=method, risk_overlay=risk_overlay, sleeves=tuple(budgets), allocated=allocated, targets=targets, result=result)
+
+
+def _lot_rounding(overlay: Any, specs: Sequence[Any], prices: np.ndarray, config: PortfolioConfig) -> Any:
+    """Wrap the risk overlay so targets become whole lots, exactly as `plan_orders` sizes them in the runtime."""
+    from src.portfolio.orders import lot_target_units
+
+    def adjust(row: np.ndarray, *, equity: float, index: int, **rest: Any) -> np.ndarray:
+        row = np.asarray(overlay(row, equity=equity, index=index, **rest) if overlay is not None else row, dtype=float)
+        cap = config.small_lot_cap(equity)
+        out = np.zeros_like(row)
+        for column, spec in enumerate(specs):
+            price = prices[index, column]
+            if row[column] != 0.0 and price > 0 and equity > 0:
+                units = lot_target_units(float(row[column]), equity=equity, price=float(price), spec=spec, small_lot_cap=cap)
+                out[column] = float(units) * price / equity
+        return out
+
+    return adjust
 
 
 PERIOD_METRICS = ("sharpe", "cagr", "vol", "max_drawdown", "turnover_per_year", "cost_pct_per_year", "funding_pct_per_year", "avg_gross_exposure", "avg_net_exposure")

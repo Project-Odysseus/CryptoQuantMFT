@@ -219,6 +219,10 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
   Kraken, re-arm with `python main.py --kill-switch-reset`, and restart a live portfolio with
   `--portfolio-adopt-exchange` so its book matches the now-flat account.
 - **After the max-drawdown kill:** the book stays flat until you re-arm it with `--portfolio-reset-peak` (logged).
+- **Small accounts:** with `[portfolio] small_account_equity` set (95 USD, about 1000 NOK, in the BTC live config),
+  a target too small for one lot holds one lot anyway, up to `small_account_max_lot_weight` (90%) of equity and
+  within `max_gross_notional`. Above the threshold, targets round toward zero on the lot grid. Research matches
+  it with `run_book(..., lots=True)`.
 - **Currency:** one currency per portfolio for now. USD perps are fine, but EUR spot mixed with USD perps is refused
   until an FX feed exists.
 - **Tax records (live only):** every perp realized P&L, fee and funding payment is written to the tax ledger as it

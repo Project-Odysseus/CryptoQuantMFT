@@ -28,6 +28,20 @@ rounded to whole lots after the overlay.
 3. **The expected money is small**: about 23% a year on 19 USD is roughly 4 USD a year. The first live run is a
    test of the machinery, not a source of profit.
 
+**Follow-up (same day): the planner rounds toward zero, not to the nearest lot.** The table above rounded to the
+nearest lot. The runtime's order planner rounds toward zero, so a target below one lot stays flat. Re-run with the
+exact planner rule (`run_book(..., lots=True)`):
+
+| Book at 19 USD | Sharpe | CAGR | Max drawdown | Avg gross | Turnover/yr |
+| --- | --- | --- | --- | --- | --- |
+| Continuous weights | 1.41 | 22.7% | 16.8% | 0.22 | 8.7 |
+| Whole lots, rounded toward zero | 1.29 | 18.5% | 23.0% | 0.19 | 11.7 |
+| Whole lots + small-account rule | 1.45 | 20.9% | 15.7% | 0.20 | 8.5 |
+
+The small-account rule (`[portfolio] small_account_equity = 95`, about 1000 NOK): below it, a nonzero target
+that rounds to zero lots holds one lot, if the lot is at most 90% of equity and fits the money cap. It is on in
+`config/portfolio.btc_live.toml`. Above the threshold, normal rounding applies.
+
 ---
 
 ## 2026-09-26: Risk exits and account breakers for the single-strategy runtime

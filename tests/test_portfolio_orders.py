@@ -103,3 +103,35 @@ def test_spot_never_goes_short_and_missing_prices_or_specs_are_reported() -> Non
 def test_round_toward_zero_uses_a_fallback_step_when_unknown() -> None:
     assert round_toward_zero(Decimal("-1.23456"), Decimal("0.01")) == Decimal("-1.23")
     assert round_toward_zero(Decimal("0.123456789123"), Decimal(0)) == Decimal("0.12345678")
+
+
+def test_a_small_account_holds_one_lot_for_a_target_too_small_for_a_lot() -> None:
+    """At 19 USD one 0.0001 BTC lot (5 USD at 50k) is 26% of equity: a 10% target holds it instead of staying flat."""
+    small = {BTC: 0.10}
+    assert _plan({}, small, equity=19.0).orders == []  # plain rounding toward zero: flat
+    plan = plan_orders({}, small, prices=PRICES, equity=19.0, instruments=SPECS, small_lot_cap=0.9)
+    assert _summary(plan) == [(BTC, "buy", "0.0001", False, "open")]
+    shorts = plan_orders({}, {BTC: -0.05}, prices=PRICES, equity=19.0, instruments=SPECS, small_lot_cap=0.9)
+    assert _summary(shorts) == [(BTC, "sell", "0.0001", False, "open")]
+
+
+def test_the_small_account_rule_holds_the_lot_until_the_target_goes_flat_and_respects_its_cap() -> None:
+    held = {BTC: Decimal("0.0001")}
+    assert plan_orders(held, {BTC: 0.05}, prices=PRICES, equity=19.0, instruments=SPECS, small_lot_cap=0.9).orders == []  # keep the one lot
+    assert _summary(plan_orders(held, {BTC: 0.0}, prices=PRICES, equity=19.0, instruments=SPECS, small_lot_cap=0.9)) == [(BTC, "sell", "0.0001", True, "close")]
+    # One lot is 26% of equity: a cap below that keeps the book flat
+    assert plan_orders({}, {BTC: 0.10}, prices=PRICES, equity=19.0, instruments=SPECS, small_lot_cap=0.2).orders == []
+
+
+def test_the_config_turns_the_rule_on_only_below_the_threshold_and_within_the_money_cap() -> None:
+    from dataclasses import replace
+
+    from src.portfolio.config import PortfolioConfig
+    from src.portfolio.risk import PortfolioRiskConfig
+
+    config = PortfolioConfig(name="t", instruments=SPECS, sleeves=(), small_account_equity=95.0, small_account_max_lot_weight=0.9)
+    assert config.small_lot_cap(19.0) == pytest.approx(0.9)
+    assert config.small_lot_cap(95.0) is None and config.small_lot_cap(500.0) is None
+    capped = replace(config, risk=PortfolioRiskConfig(max_gross_notional=5.7))
+    assert capped.small_lot_cap(19.0) == pytest.approx(0.3)  # 5.7 USD of 19
+    assert replace(config, small_account_equity=0.0).small_lot_cap(19.0) is None

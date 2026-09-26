@@ -89,11 +89,24 @@ class PortfolioConfig:
     initial_equity: float = 10_000.0
     rebalance_band: float = 0.02
     scale: float = 1.0  # multiplies every allocated target: the one knob that sizes the whole book (see risk_budget.py)
+    # Below this equity (base currency; 0 = off), a nonzero target that rounds to zero lots holds one lot, if that
+    # lot is at most `small_account_max_lot_weight` of equity. For accounts where one lot is a big share of the book.
+    small_account_equity: float = 0.0
+    small_account_max_lot_weight: float = 0.9
     allocation: str = "equal"
     allocation_lookback_days: int = 90
     allocation_refit_days: int = 30
     risk: PortfolioRiskConfig = field(default_factory=PortfolioRiskConfig)
     path: str | None = None
+
+    def small_lot_cap(self, equity: float) -> float | None:
+        """The one-lot allowance while the account is below `small_account_equity`, within the money cap; else None."""
+        if not 0 < equity < self.small_account_equity:
+            return None
+        cap = self.small_account_max_lot_weight
+        if self.risk.max_gross_notional is not None:
+            cap = min(cap, self.risk.max_gross_notional / equity)
+        return cap
 
     @property
     def enabled_sleeves(self) -> tuple[SleeveSpec, ...]:
@@ -113,7 +126,8 @@ class PortfolioConfig:
         return {instrument_id: spec.can_short for instrument_id, spec in self.instruments.items()}
 
 
-_PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "scale", "allocation", "allocation_lookback_days", "allocation_refit_days"}
+_PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "scale", "allocation", "allocation_lookback_days", "allocation_refit_days",
+                   "small_account_equity", "small_account_max_lot_weight"}
 _TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves"}
 
 
@@ -153,6 +167,12 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
     scale = _number(portfolio, "scale", 1.0, "[portfolio]", errors)
     if scale is not None and not 0 < scale <= 10:
         errors.append("[portfolio] scale must be above 0 and at most 10 (0.5 = half the size the sleeves ask for)")
+    small_account_equity = _number(portfolio, "small_account_equity", 0.0, "[portfolio]", errors)
+    if small_account_equity is not None and small_account_equity < 0:
+        errors.append("[portfolio] small_account_equity must be 0 (off) or above")
+    small_lot_weight = _number(portfolio, "small_account_max_lot_weight", 0.9, "[portfolio]", errors)
+    if small_lot_weight is not None and not 0 < small_lot_weight <= 1:
+        errors.append("[portfolio] small_account_max_lot_weight must be above 0 and at most 1 (0.9 = one lot up to 90% of equity)")
     for key, default in (("allocation_lookback_days", 90), ("allocation_refit_days", 30)):
         value = portfolio.get(key, default)
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -246,6 +266,8 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         initial_equity=float(portfolio.get("initial_equity", 10_000.0)),
         rebalance_band=float(portfolio.get("rebalance_band", 0.02)),
         scale=float(portfolio.get("scale", 1.0)),
+        small_account_equity=float(portfolio.get("small_account_equity", 0.0)),
+        small_account_max_lot_weight=float(portfolio.get("small_account_max_lot_weight", 0.9)),
         allocation=str(portfolio.get("allocation", "equal")),
         allocation_lookback_days=int(portfolio.get("allocation_lookback_days", 90)),
         allocation_refit_days=int(portfolio.get("allocation_refit_days", 30)),

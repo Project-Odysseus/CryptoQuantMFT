@@ -12,6 +12,10 @@ initial_equity = 19               # paper only; a live start adopts the real acc
 rebalance_band = 0.02
 scale = 0.55                      # a 30% drawdown limit with a 1.5x margin (risk budget, 2026-09-26)
 allocation = "equal"
+# Small account: one 0.0001 BTC lot is ~44% of 19 USD. Below ~1000 NOK (95 USD), a target too small for one lot
+# holds one lot anyway, up to 90% of equity (research log 2026-09-27). Above it, normal lot rounding applies.
+small_account_equity = 95
+small_account_max_lot_weight = 0.9
 
 [risk]
 max_gross_exposure = 1.5
