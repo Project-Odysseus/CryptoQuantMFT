@@ -72,6 +72,11 @@ flowchart TD
   - Public funding, open-interest, long/short-ratio and implied-vol history from Binance, Bybit and Deribit for
     research, cached under `data/historical_cache/positioning/`.
 
+- `src/data/binance_archive.py`
+  - Daily bars, funding and perp premium for every Binance USDT perpetual (delisted included) from
+    data.binance.vision, cached per symbol under `data/historical_cache/binance_um/`. Research only; the
+    multi-coin portfolio backtester is `src/research/portfolio.py`.
+
 ### Storage layer
 
 - `src/storage/market_store.py`

@@ -263,6 +263,34 @@ result, stats = simulate_fills(bars, positions, taker_fee_pct=0.05, maker_fee_pc
 - A shuffled-forecast placebo (in `scripts/research/volatility_study.py`) separates real timing from the noise of
   varying the size at all.
 
+### Many coins at once: cross-sectional strategies and portfolios
+
+`src/data/binance_archive.py` downloads daily bars, funding and (on request) the perp premium for every Binance
+USDT perpetual that ever traded, delisted coins included, so a strategy that sells losers can't skip the ones that
+went to zero. It caches per symbol under `data/historical_cache/binance_um/`. The first download is about 50,000
+small files (use wifi). Re-running resumes and tops up.
+
+`src/research/portfolio.py` backtests a book of many positions: a target weight per coin per day, fees plus slippage
+by liquidity on the traded notional, each coin's own funding, and delisted coins closed at their last price.
+
+```python
+from src.data.binance_archive import update_cache, load_panel
+from src.research.portfolio import liquid_universe, rank_weights, simulate_portfolio, slippage_by_liquidity, PortfolioCosts, cross_sectional_ic
+
+update_cache()                                                                 # or --download on the study script
+klines = load_panel("klines_1d"); close = klines.pivot_table(index="date", columns="symbol", values="close")
+volume = klines.pivot_table(index="date", columns="symbol", values="quote_volume")
+universe = liquid_universe(volume, top_n=50)                                   # most-traded 50, from past data only
+scores = close / close.shift(30) - 1                                           # e.g. 30-day momentum
+weights = rank_weights(scores, universe, quantile=0.2)                         # long top 20%, short bottom 20%, dollar-neutral
+result = simulate_portfolio(close, weights, funding=funding_wide, costs=PortfolioCosts(slippage_bps=slippage_by_liquidity(volume)), rebalance_every=7)
+result.metrics("2024-01-01")                                                   # Sharpe, drawdown, legs, turnover, cost and funding drag
+```
+
+`scripts/research/cross_sectional_study.py` runs eight features through the IC test and long/short portfolios, with
+signs fixed in-sample (to 2023) and a 2024+ holdout. `--kraken-only` restricts the universe to coins Kraken
+Futures lists today.
+
 ### Recorded order flow (only from when the recorder started)
 
 `python main.py --record-market-data` (see `runbook.md`) records trades, order-book samples, perp tickers and

@@ -273,12 +273,21 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
     - [ ] After ~4 weeks: trade-flow imbalance, book imbalance and liquidation-burst features on 1m-1h bars, same study layout as `positioning_study.py`
     - [ ] Optional: move it to an always-on machine (a small VPS) so laptop sleep doesn't leave gaps
   - [ ] **Cross-sectional strategies across many perps** (Kraken lists hundreds): rank coins by recent return, funding or volume and hold the top vs bottom, market-neutral; needs the multi-asset portfolio backtester
+    - [x] Data: `src/data/binance_archive.py`, every Binance USDT perp since 2020 including ~340 delisted ones (LUNA, FTT, ...), daily bars, funding and premium, resumable
+    - [x] Portfolio backtester: `src/research/portfolio.py` (target weights per coin, fees, liquidity-based slippage, per-coin funding, delistings, long/short leg attribution), plus `rank_weights`, `liquid_universe`, `cross_sectional_ic`
+    - [x] Study: `scripts/research/cross_sectional_study.py`, 8 features, IC and long/short portfolios, signs fixed in-sample, 2024+ holdout, `--kraken-only`; tested end to end on synthetic data
+    - [ ] **On wifi:** `python scripts/research/cross_sectional_study.py --download` (about 50,000 small files; stopped 2026-09-26 on a mobile hotspot), then `--kraken-only`, then write up in `docs/research_log.md`
   - [ ] **Funding/basis carry** (long spot, short perp when funding is paid): measure net carry after fees across coins and exchanges before building; Kraken BTC/ETH funding averaged only ~3%/yr over the last year
   - [x] **Volatility forecasting for position sizing** (2026-09-26, `src/research/volatility.py`, `scripts/research/volatility_study.py`). HAR-RV is the most accurate forecast and EWMA is close; the runtime's 10-bar window is the worst and under-forecasts by ~1.8x. Sizing at entry to a volatility target lifts MA crossover and long/short Keltner beyond a shuffled-forecast placebo (Sharpe +0.07 to +0.36), not Keltner long-only or Donchian; resizing open positions and vol-timing buy-and-hold don't help. GARCH was skipped: HAR on intraday data is the stronger standard
     - [x] Runtime: opt-in `--target-annual-vol` sizes entries from an EWMA forecast as a share of equity (runbook "Position size"); found that the default sizing is really a fixed 10% of equity (`todo_important.md`)
     - [ ] HAR in the runtime (needs 1h bars and a year of history at startup); EWMA is used for now
   - [ ] **Calendar/event features**: US macro releases (CPI, FOMC), options expiries, CME weekend gaps
   - [ ] **Multiple-testing control**: we have now run thousands of configurations; add a deflated Sharpe or reality-check test and keep a never-touched final holdout
+- [ ] **Needs exchange API keys (Binance / Bybit / OKX / Deribit)**: collected here so research never waits on keys. Everything so far used public data. Put keys in `.env` only, read-only first, with no withdrawal permission, and never print them. Check first that each venue offers derivatives to a Norwegian account.
+  - [ ] Read-only keys: the fee tier each account actually gets (maker/taker, VIP level), to replace the assumed fees in carry and cross-sectional backtests
+  - [ ] Trading keys and an execution adapter per venue: only after a strategy has passed paper and dry-run on that venue
+  - [ ] Deribit: options positions and trading for the planned options strategies (options market data itself is public)
+  - [ ] OKX: keys don't unlock more history; its funding and OI need live recording (add OKX to `config/market_data.json` feeds)
 
 - [ ] **Single-Exchange Mean Reversion & Regime Signals**
   - [ ] Build rolling $Z$-score calculator on a single-exchange spread/price series over 5m, 15m, and 1h lookbacks:
