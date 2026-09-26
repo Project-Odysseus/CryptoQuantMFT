@@ -4,7 +4,7 @@ A step-by-step plan for running several strategies on several coins and venues a
 that you, or any coding agent, can pick it up cold and continue. It doesn't depend on who wrote the earlier steps.
 Each step says which files to touch, what to build, how to test it, and how to tell it's done.
 
-Status as of 2026-09-26: Phase 0 is done. Steps 1.1-1.3, 2.2, 2.4 and 2.5 are done and tested; 1.4, the
+Status as of 2026-09-26: Phases 0 and 1 are done. Steps 2.2, 2.4 and 2.5 are done and tested. The
 `--portfolio-check` flag (2.1), 2.3 and 2.6-2.7 are next (see the tracker in section 10).
 
 ---
@@ -186,9 +186,9 @@ max_gross_exposure = 1.5         # sum of |weights| across instruments
 max_net_exposure = 1.0           # |sum of weights|
 max_instrument_weight = 0.6      # per instrument, after netting
 max_venue_exposure = { kraken_futures = 1.5, kraken = 0.5 }
-max_drawdown = 0.25              # from the equity peak: beyond it, flatten and halt new entries
+max_drawdown = 0.40              # from the equity peak: flatten and stay flat until a person resets it (a kill)
 daily_loss_limit = 0.05          # beyond it, no new risk until the next UTC day
-drawdown_derisk_start = 0.10     # scale all targets down linearly from here...
+drawdown_derisk_start = 0.25     # optional, off by default: scale all targets down linearly from here...
 drawdown_derisk_floor = 0.5      # ...to 50% at max_drawdown
 stale_after_bars = 2             # an instrument with no new bar for this many intervals takes no new risk
 
@@ -301,6 +301,10 @@ Python and need no network, so they are good hotspot work.
 - Study: BTC and ETH perps; MA crossover (1d and 4h) and long/short Keltner (1d); vol-target sizing. Compare each
   sleeve alone with `fixed`, `equal` and `inverse_vol` books. Write the findings in `docs/research_log.md`.
 - Done when: the script runs from the config alone, and the log entry says which allocation to default to and why.
+- Findings (2026-09-26, `docs/research_log.md`): default to `equal`; `inverse_vol` adds nothing when sleeves are
+  already vol-sized. The `max_drawdown` halt is a permanent kill (a flat book can't recover its drawdown), so it
+  must sit above the book's worst drawdown. The example now uses 40%. De-risking on drawdown lowered Sharpe, so
+  it is off by default. The pipeline lives in `src/portfolio/backtest.py` (`prepare_inputs`, `run_book`).
 
 ### Phase 2: Portfolio core (pure functions, no I/O)
 
@@ -408,7 +412,8 @@ Python and need no network, so they are good hotspot work.
   `RuntimeOrchestrator`.
 - Tasks: a cycle is fetch, drain bars, run a portfolio cycle only when a sleeve's bar completed (otherwise just mark
   the book), then checkpoint and health. Keep the watchdog, the kill switch, alerts and the single-strategy path
-  working.
+  working. The `max_drawdown` halt never lifts by itself (see 1.4), so add an explicit operator reset (for
+  example `--portfolio-reset-peak`) that is logged as an event.
 - Verify: `python main.py --runtime paper --portfolio config/portfolio.example.toml --use-mock-connector
   --runtime-iterations 5 --dashboard`.
 
@@ -527,7 +532,7 @@ Python and need no network, so they are good hotspot work.
 - [x] 1.1 Sleeve targets over history (2026-09-26). `src/portfolio/sleeves.py` (`SleeveRunner.step`, `run_sleeve`, `SleeveState`) merges steps 1.1 and 2.2: research replays the same bar-by-bar runner as the runtime. Tests: `tests/test_portfolio_sleeves.py`. See the step's findings on flips.
 - [x] 1.2 Any bar interval in `simulate_portfolio` (2026-09-26): `periods_per_year`, `rebalance_band`, the `adjust_targets` hook with `current_weights`, per-instrument fees (`PortfolioCosts.fee_pct` as a mapping), and the day-start fix in the step's findings. Tests in `tests/test_portfolio.py`.
 - [x] 1.3 Allocation functions (2026-09-26): `src/portfolio/allocation.py`, tests in `tests/test_portfolio_allocation.py`.
-- [ ] 1.4 Research script, example config, study and log entry. The example config exists (`config/portfolio.example.toml`, it validates); `scripts/research/portfolio_backtest.py` is not written yet.
+- [x] 1.4 Research script, example config, study and log entry (2026-09-26): `scripts/research/portfolio_backtest.py` over `src/portfolio/backtest.py`, tests in `tests/test_portfolio_backtest.py`, findings in `docs/research_log.md`.
 - [ ] 2.1 Config and validation, `--portfolio-check`. **Code and tests done** (`src/portfolio/config.py`: `load_portfolio_config`, `describe`, all rules, every error reported at once, non-numeric values reported instead of crashing; `tests/test_portfolio_config.py`). Only the `--portfolio-check` flag in `main.py` is left.
 - [x] 2.2 Sleeve runner with state (2026-09-26, the same module as 1.1): stepping one bar at a time with a JSON restart every bar matches `run_sleeve`; stops flatten the sleeve and block re-entry until the signal resets. `SleeveState` keeps `bars_held` instead of an entry time.
 - [ ] 2.3 Allocation (runtime form)
@@ -551,3 +556,6 @@ Python and need no network, so they are good hotspot work.
   `fixed_fraction`.
 - Portfolio base currency: USD (perps) or EUR (spot, tax). Default: USD, with EUR conversion for tax and reports.
 - Starting sleeves and budgets: from the Phase 1 study. Default until then: the example config.
+- Portfolio kill level and de-risking: the study (1.4) supports a 40% drawdown kill and no de-risking for the
+  example book. That is a lot of drawdown for a first live book, so a smaller live allocation may suit better
+  than a tighter kill.

@@ -285,8 +285,9 @@ def describe(config: PortfolioConfig) -> str:
         lines.append(f"  {sleeve.id:<18} {sleeve.instrument:<24} {sleeve.interval:<3} {sleeve.strategy}({params}){' long-only' if sleeve.long_only else ''}; "
                      f"sizing {sleeve.sizing} {sleeve.sizing_params}; budget {sleeve.budget:g} -> {share}{'; stops ' + str(sleeve.stops) if sleeve.stops else ''}{state}")
     risk = config.risk
-    lines.append(f"Risk: gross <= {risk.max_gross_exposure:g}x, net <= {risk.max_net_exposure:g}x, per instrument <= {risk.max_instrument_weight:g}x"
-                 f"{', venues ' + str(risk.max_venue_exposure) if risk.max_venue_exposure else ''}; de-risk from {risk.drawdown_derisk_start:.0%} drawdown to "
-                 f"{risk.drawdown_derisk_floor:.0%} size at {risk.max_drawdown:.0%}, then flatten; daily loss limit {risk.daily_loss_limit:.0%}" if risk.drawdown_derisk_start is not None and risk.daily_loss_limit is not None
-                 else f"Risk: {risk}")
+    venues = f", venues {risk.max_venue_exposure}" if risk.max_venue_exposure else ""
+    derisk = (f"de-risk from {risk.drawdown_derisk_start:.0%} drawdown to {risk.drawdown_derisk_floor:.0%} size at {risk.max_drawdown:.0%}, then flatten"
+              if risk.drawdown_derisk_start is not None else f"flatten at {risk.max_drawdown:.0%} drawdown")
+    daily = f"daily loss limit {risk.daily_loss_limit:.0%}" if risk.daily_loss_limit is not None else "no daily loss limit"
+    lines.append(f"Risk: gross <= {risk.max_gross_exposure:g}x, net <= {risk.max_net_exposure:g}x, per instrument <= {risk.max_instrument_weight:g}x{venues}; {derisk}; {daily}")
     return "\n".join(lines)

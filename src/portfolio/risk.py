@@ -8,11 +8,17 @@ and enforces, in order:
 3. the per-instrument cap;
 4. per-venue caps (a venue's instruments scaled down together);
 5. the net cap, then the gross cap (everything scaled down together);
-6. drawdown de-risking: all targets scaled down linearly once the drawdown from
-   the equity peak passes `drawdown_derisk_start`, reaching
-   `drawdown_derisk_floor` at `max_drawdown`;
+6. drawdown de-risking (off unless `drawdown_derisk_start` is set): all
+   targets scaled down linearly once the drawdown from the equity peak passes
+   `drawdown_derisk_start`, reaching `drawdown_derisk_floor` at `max_drawdown`;
 7. halts: at `max_drawdown` everything is flattened, and past the
    `daily_loss_limit` positions may only shrink until the next UTC day.
+
+The `max_drawdown` halt is a kill, not a pause. A flat book's drawdown can't
+recover, so it stays flat until a person resets the equity peak. Set it above
+the book's worst historical drawdown. The 2026-09-26 portfolio study
+(docs/research_log.md) found that de-risking lowered Sharpe for trend sleeves,
+which recover from drawdowns by trending again, so it is off by default.
 
 Every change is returned as a `RiskAction` with its rule, so the dashboard and
 logs can say why a target isn't what the sleeves asked for. The same function
@@ -38,7 +44,7 @@ class PortfolioRiskConfig:
     max_venue_exposure: dict[str, float] = field(default_factory=dict)
     max_drawdown: float = 0.25
     daily_loss_limit: float | None = 0.05
-    drawdown_derisk_start: float | None = 0.10
+    drawdown_derisk_start: float | None = None
     drawdown_derisk_floor: float = 0.5
     stale_after_bars: int = 2
 

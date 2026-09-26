@@ -288,7 +288,7 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [ ] **Multiple-testing control**: we have now run thousands of configurations; add a deflated Sharpe or reality-check test and keep a never-touched final holdout
 - [ ] **Portfolio, multi-strategy, multi-asset** (plan: `docs/portfolio_plan.md`; follow its steps in order, and tick them there and here)
   - [x] Phase 0: sizing contract (share of equity, `src/risk/sizing.py`) and the research portfolio backtester
-  - [ ] Phase 1: research. Sleeve targets, any bar interval, allocation, `scripts/research/portfolio_backtest.py` and a study (1.1-1.3 done and tested 2026-09-26; 1.4, the script and study, is left)
+  - [x] Phase 1: research. Sleeve targets, any bar interval, allocation, `scripts/research/portfolio_backtest.py` and a study (2026-09-26; findings in `docs/research_log.md`: equal allocation, 40% kill, no de-risking)
   - [ ] Phase 2: pure core. Config and `--portfolio-check`, sleeve runner, netting, portfolio risk overlay, order planner, parity test (config, sleeve runner, netting and risk overlay done and tested 2026-09-26; the `--portfolio-check` flag, runtime allocation, order planner and parity test are left)
   - [ ] Phase 3: stateful book, paper execution through sandbox adapters, checkpoint and restart
   - [ ] Phase 4: runtime `--portfolio`, multi-instrument data, reporting, alerts

@@ -6,6 +6,58 @@ accident.
 
 ---
 
+## 2026-09-26: Multi-sleeve portfolio of trend rules on the BTC and ETH perpetuals
+
+**Question:** does a book of the trend rules that held up (MA crossover and Keltner, daily and 4h, BTC and ETH) beat
+its sleeves? And which allocation and risk limits should the portfolio default to? **Short answer:** yes, mostly
+through a smoother holdout. Default to `equal` allocation, and to a 40% drawdown kill without de-risking.
+Reproduce with `python scripts/research/portfolio_backtest.py config/portfolio.example.toml` (module
+`src/portfolio/backtest.py`: the same sleeve, allocation, netting and risk functions the runtime will use).
+
+**Setup:** the 5 sleeves in `config/portfolio.example.toml`, each sized at entry to 50% annual vol (EWMA), on a 4h
+grid (daily decisions land on the day's last 4h bar). Kraken perp taker fees (0.05%) plus 5 bps slippage, funding
+0.01%/day on longs, 2% rebalance band. In-sample 2020-09-13 to 2024-09-30, holdout from 2024-10-01 (the split the
+perp studies use). The sleeve parameters come from the full-history study with that same split, so treat the
+holdout as a check, not proof.
+
+| | Sharpe IS | Sharpe HO | CAGR IS | CAGR HO | Max DD IS | Max DD HO |
+| --- | --- | --- | --- | --- | --- | --- |
+| btc_ma_1d alone | 1.57 | 0.88 | 107% | 28% | 61% | 33% |
+| eth_ma_1d alone | 1.23 | 0.94 | 58% | 30% | 42% | 35% |
+| btc_keltner_ls alone | 1.07 | 0.81 | 55% | 31% | 52% | 46% |
+| eth_keltner_ls alone | 0.79 | 1.18 | 31% | 56% | 64% | 28% |
+| btc_ma_4h alone | 1.54 | 0.76 | 72% | 23% | 41% | 39% |
+| **equal book, no risk limits** | 1.53 | 1.28 | 71% | 39% | 34% | 26% |
+| equal book, first example limits (de-risk 15-30%, kill 30%) | 1.40 | 1.13 | 55% | 30% | 29% | 23% |
+| **equal book, new example limits (kill 40%, no de-risk)** | 1.45 | 1.35 | 60% | 40% | 33% | 22% |
+| inverse_vol book, new limits | 1.44 | 1.29 | 60% | 37% | 33% | 21% |
+
+**Findings**
+1. **The book diversifies.** In-sample its Sharpe matches the best sleeve, with about half of the worst sleeve
+   drawdowns. In the holdout it beats every sleeve (1.28-1.35 vs 0.76-1.18). Daily return correlations between
+   sleeves are 0.26-0.74: the three BTC sleeves correlate 0.49-0.74, and BTC with ETH 0.38-0.64. So five sleeves
+   are far from five independent bets.
+2. **Allocation barely matters here.** `fixed` equals `equal` because the budgets are equal. `inverse_vol` is
+   slightly worse, because the sleeves are already sized to a volatility target, so scaling by instrument
+   volatility adds nothing. Default: `equal`. Revisit `inverse_vol` for `fixed_fraction` sleeves.
+3. **The `max_drawdown` halt is a kill, not a pause.** Once flat, the book's drawdown can't recover, so it stays
+   flat. With a 30% kill and no de-risking it tripped and the book sat flat through the whole holdout (Sharpe 0).
+   The first example only survived because its de-risking held the drawdown at 29%. Set the kill above the book's
+   worst drawdown (33% here), and give the runtime an explicit reset.
+4. **De-risking on drawdown hurts trend sleeves.** Scaling down from 15% drawdown cut in-sample Sharpe from 1.46 to
+   1.40 (caps alone vs caps plus de-risking). Trend books recover by trending again, and de-risking leaves them
+   under-sized when that happens. From 25% to 45% it made no difference. It is now off by default
+   (`drawdown_derisk_start` unset).
+5. **The other limits are roughly neutral.** Caps (gross 1.5, net 1.0, per instrument 1.0) move in-sample
+   Sharpe from 1.53 to 1.46 and holdout from 1.28 to 1.35. The 6% daily-loss limit changes almost nothing
+   (1.53 → 1.52). Keep both as safety rails.
+6. **Funding at 3x the assumed rate** (0.03%/day) costs about 0.06-0.08 Sharpe. The book is mostly long.
+
+**Next:** the order planner and the research/runtime parity test (portfolio plan 2.6-2.7). Add sleeves that are
+less correlated with BTC trend (the cross-sectional study once the Binance archive is downloaded, and carry).
+
+---
+
 ## 2026-09-26: Funding carry on BTC and ETH, per venue (long spot, short perp)
 
 **Question:** what does the classic carry trade earn after fees? It holds long spot and short perp, so the price

@@ -46,13 +46,13 @@ def test_the_example_config_loads_and_describes_itself() -> None:
     assert config.name == "trend-core" and config.allocation == "equal" and config.path == EXAMPLE
     assert list(config.instruments) == ["kraken_futures:BTC/USD", "kraken_futures:ETH/USD"]
     assert [sleeve.id for sleeve in config.enabled_sleeves] == ["btc_ma_1d", "eth_ma_1d", "btc_keltner_ls", "eth_keltner_ls", "btc_ma_4h"]
-    assert config.risk.max_drawdown == 0.30 and config.risk.max_venue_exposure == {"kraken_futures": 1.5}
+    assert config.risk.max_drawdown == 0.40 and config.risk.max_venue_exposure == {"kraken_futures": 1.5}
     assert config.venues()["kraken_futures:ETH/USD"] == "kraken_futures" and all(config.can_short().values())
 
     text = describe(config)
     for sleeve in config.sleeves:
         assert sleeve.id in text
-    assert "scale 0.2" in text and "then flatten" in text
+    assert "scale 0.2" in text and "flatten at 40% drawdown" in text and "daily loss limit 6%" in text
 
 
 def test_defaults_fill_in_what_the_file_leaves_out() -> None:
