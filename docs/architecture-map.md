@@ -185,7 +185,11 @@ flowchart TD
 1. Filled orders produce trades and portfolio updates.
 2. Those are persisted by `TradeLogger`.
 3. The runtime also logs operational events and health status.
-4. This gives you a more realistic paper-trading loop with an audit trail.
+4. Each new fill sends one Telegram message (`RuntimeOrchestrator._maybe_notify_new_trades` ->
+   `format_trade_alert` in `src/utils/telegram.py`). Every order carries an `intent` (`enter_long`, `exit_short`,
+   `time_stop`, ...) and the strategy `signal` that caused it (`PaperOrder` -> `PaperTrade`), so the message can say
+   why the trade happened.
+5. This gives you a more realistic paper-trading loop with an audit trail.
 
 ## 5. Why this matters
 

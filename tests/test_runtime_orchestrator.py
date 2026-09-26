@@ -609,3 +609,38 @@ def test_build_runtime_orchestrator_live_mode_refuses_to_start_with_zero_balance
 
     with pytest.raises(SystemExit):
         build_runtime_orchestrator(config=runtime_config, mode="live")
+
+
+def test_trade_alerts_report_each_new_trade_once_with_its_reason(tmp_path: Path, _no_real_telegram_messages: list[str]) -> None:
+    """Paper mode replays history every cycle: old trades must not be re-sent, and warmup trades not sent at all."""
+    from src.execution.paper_trading import PaperTrade
+    from src.utils.telegram import TelegramNotifier
+
+    runtime_config = RuntimeConfig(use_mock_connector=True, trading_symbol="BTC/EUR", state_path=tmp_path / "runtime.state.json",
+                                   strategy_name="moving_average_crossover", strategy_params={"short_window": 4, "long_window": 48})
+    orchestrator, _ = build_runtime_orchestrator(config=runtime_config, mode="paper")
+    orchestrator.alert_notifier = TelegramNotifier(bot_token="token", chat_id="chat")
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def result(trades: list[PaperTrade], bars: int) -> SimpleNamespace:
+        history = [PortfolioSnapshot(timestamp=start + timedelta(hours=i), cash=900.0, position_size=0.002, avg_entry_price=50000.0, equity=1005.0) for i in range(bars)]
+        return SimpleNamespace(trades=trades, portfolio_history=history)
+
+    def trade(order_id: str, hour: int, side: str, intent: str, signal: float) -> PaperTrade:
+        return PaperTrade(order_id=order_id, timestamp=start + timedelta(hours=hour), side=side, price=50000.0 + hour, size=0.002, fee=0.1, cost=0.1,
+                          symbol="BTC/EUR", intent=intent, signal=signal)
+
+    warmup = [trade("order-1", 0, "buy", "enter_long", 1.0), trade("order-2", 1, "sell", "exit_long", 0.0)]
+    orchestrator._maybe_notify_new_trades(result([*warmup, trade("order-3", 2, "buy", "enter_long", 1.0)], bars=3))
+    assert len(_no_real_telegram_messages) == 1
+    first = _no_real_telegram_messages[0]
+    assert first.startswith("[PAPER] BUY 0.002 BTC/EUR @ 50,002.00") and "Why: entry: the signal turned long (moving_average_crossover signal +1)" in first
+    assert "(short_window=4, long_window=48)" in first and "Position now: long 0.002 BTC/EUR" in first
+
+    replayed = [trade("order-7", 0, "buy", "enter_long", 1.0), trade("order-8", 1, "sell", "exit_long", 0.0), trade("order-9", 2, "buy", "enter_long", 1.0)]
+    orchestrator._maybe_notify_new_trades(result([*replayed, trade("order-10", 3, "sell", "time_stop", 1.0)], bars=4))
+    assert len(_no_real_telegram_messages) == 2
+    assert _no_real_telegram_messages[1].startswith("[PAPER] SELL") and "risk stop: held for the maximum number of bars" in _no_real_telegram_messages[1]
+
+    orchestrator._maybe_notify_new_trades(result(replayed, bars=4))  # nothing new
+    assert len(_no_real_telegram_messages) == 2

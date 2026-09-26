@@ -32,6 +32,10 @@ class PaperOrder:
     last_reason: str | None = None
     execution_status: str | None = None
     execution_message: str | None = None
+    # Why the order exists (enter_long, exit_short, time_stop, atr_stop, ...) and the strategy signal behind it,
+    # kept apart from last_reason, which later status changes overwrite.
+    intent: str | None = None
+    signal: float | None = None
 
     def __post_init__(self) -> None:
         self.created_at = self.timestamp
@@ -54,6 +58,9 @@ class PaperTrade:
     size: float
     fee: float
     cost: float
+    symbol: str | None = None
+    intent: str | None = None
+    signal: float | None = None
 
 
 @dataclass(slots=True)
@@ -141,6 +148,7 @@ class PaperTradingEngine:
         # left that side at least once, so a stop can't be undone on the next bar by an unchanged signal.
         self._reentry_block: str | None = None
         self._order_counter = 0
+        self._order_intents: dict[str, tuple[str | None, float | None]] = {}  # order id -> (intent, signal), for fills seen later
         # Instance-level so the daily-loss reference survives across cycles
         # within one running process (exchange-cycle mode has no other place
         # to keep it, since position/cash state is reconstructed from the
@@ -293,6 +301,9 @@ class PaperTradingEngine:
                             size=fill_size,
                             fee=cost,
                             cost=cost,
+                            symbol=order.symbol,
+                            intent=order.intent,
+                            signal=order.signal,
                         )
                     )
                     if self.trade_logger is not None:
@@ -327,7 +338,7 @@ class PaperTradingEngine:
             if not active_orders and forced_exit_reason is not None:
                 exit_side = "sell" if position_size > 0.0 else "buy"
                 reentry_block = "long" if position_size > 0.0 else "short"
-                order = self._create_order(timestamp=timestamp, side=exit_side, size=abs(position_size), bar=bar)
+                order = self._create_order(timestamp=timestamp, side=exit_side, size=abs(position_size), bar=bar, intent=forced_exit_reason, signal=signal)
                 order.last_reason = forced_exit_reason
                 active_orders.append(order)
                 orders.append(order)
@@ -352,7 +363,7 @@ class PaperTradingEngine:
                 bars_held = 0
             elif not active_orders:
                 if position_size > 0.0 and signal <= 0.0:
-                    order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar)
+                    order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar, intent="exit_long", signal=signal)
                     active_orders.append(order)
                     orders.append(order)
                     cash, position_size, avg_entry_price = self._maybe_route_order(
@@ -367,7 +378,7 @@ class PaperTradingEngine:
                     if order.status in {"FILLED", "CANCELED"}:
                         active_orders.remove(order)
                 elif position_size < 0.0 and signal >= 0.0:
-                    order = self._create_order(timestamp=timestamp, side="buy", size=abs(position_size), bar=bar)
+                    order = self._create_order(timestamp=timestamp, side="buy", size=abs(position_size), bar=bar, intent="exit_short", signal=signal)
                     active_orders.append(order)
                     orders.append(order)
                     cash, position_size, avg_entry_price = self._maybe_route_order(
@@ -421,7 +432,7 @@ class PaperTradingEngine:
                             risk_decision=risk_decision,
                         )
                         if order_size > 0.0:
-                            order = self._create_order(timestamp=timestamp, side="buy", size=order_size, bar=bar)
+                            order = self._create_order(timestamp=timestamp, side="buy", size=order_size, bar=bar, intent="enter_long", signal=signal)
                             active_orders.append(order)
                             orders.append(order)
                             cash, position_size, avg_entry_price = self._maybe_route_order(
@@ -475,7 +486,7 @@ class PaperTradingEngine:
                             risk_decision=risk_decision,
                         )
                         if order_size > 0.0:
-                            order = self._create_order(timestamp=timestamp, side="sell", size=order_size, bar=bar)
+                            order = self._create_order(timestamp=timestamp, side="sell", size=order_size, bar=bar, intent="enter_short", signal=signal)
                             active_orders.append(order)
                             orders.append(order)
                             cash, position_size, avg_entry_price = self._maybe_route_order(
@@ -615,7 +626,7 @@ class PaperTradingEngine:
         elif forced_exit_reason is not None:
             exit_side = "sell" if position_size > 0.0 else "buy"
             self._reentry_block = "long" if position_size > 0.0 else "short"
-            exit_order = self._create_order(timestamp=timestamp, side=exit_side, size=abs(position_size), bar=bar)
+            exit_order = self._create_order(timestamp=timestamp, side=exit_side, size=abs(position_size), bar=bar, intent=forced_exit_reason, signal=signal)
             exit_order.last_reason = forced_exit_reason
             cycle_orders.append(exit_order)
             self._log_order_event(
@@ -629,13 +640,13 @@ class PaperTradingEngine:
             if maybe_trade is not None:
                 trades.append(maybe_trade)
         elif position_size > 0.0 and signal <= 0.0:
-            exit_order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar)
+            exit_order = self._create_order(timestamp=timestamp, side="sell", size=position_size, bar=bar, intent="exit_long", signal=signal)
             cycle_orders.append(exit_order)
             maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)
             if maybe_trade is not None:
                 trades.append(maybe_trade)
         elif position_size < 0.0 and signal >= 0.0:
-            exit_order = self._create_order(timestamp=timestamp, side="buy", size=abs(position_size), bar=bar)
+            exit_order = self._create_order(timestamp=timestamp, side="buy", size=abs(position_size), bar=bar, intent="exit_short", signal=signal)
             cycle_orders.append(exit_order)
             maybe_trade = self._route_exchange_order(order=exit_order, price=price, timestamp=timestamp)
             if maybe_trade is not None:
@@ -680,7 +691,7 @@ class PaperTradingEngine:
                     risk_decision=risk_decision,
                 )
                 if order_size > 0.0:
-                    entry_order = self._create_order(timestamp=timestamp, side="buy", size=order_size, bar=bar)
+                    entry_order = self._create_order(timestamp=timestamp, side="buy", size=order_size, bar=bar, intent="enter_long", signal=signal)
                     cycle_orders.append(entry_order)
                     maybe_trade = self._route_exchange_order(order=entry_order, price=price, timestamp=timestamp)
                     if maybe_trade is not None:
@@ -739,7 +750,7 @@ class PaperTradingEngine:
                     risk_decision=risk_decision,
                 )
                 if order_size > 0.0:
-                    entry_order = self._create_order(timestamp=timestamp, side="sell", size=order_size, bar=bar)
+                    entry_order = self._create_order(timestamp=timestamp, side="sell", size=order_size, bar=bar, intent="enter_short", signal=signal)
                     cycle_orders.append(entry_order)
                     maybe_trade = self._route_exchange_order(order=entry_order, price=price, timestamp=timestamp)
                     if maybe_trade is not None:
@@ -907,16 +918,22 @@ class PaperTradingEngine:
             metadata=payload,
         )
 
-    def _create_order(self, *, timestamp: datetime, side: str, size: float, bar: Any | None = None) -> PaperOrder:
+    def _create_order(
+        self, *, timestamp: datetime, side: str, size: float, bar: Any | None = None, intent: str | None = None, signal: Any = None
+    ) -> PaperOrder:
         self._order_counter += 1
-        return PaperOrder(
+        order = PaperOrder(
             id=f"order-{self._order_counter}",
             timestamp=timestamp,
             side=side,
             size=size,
             symbol=_get_symbol(bar),
             exchange=_get_exchange(bar) or self.exchange_name,
+            intent=intent,
+            signal=_signal_value(signal),
         )
+        self._order_intents[order.id] = (order.intent, order.signal)
+        return order
 
     def _maybe_route_order(
         self,
@@ -1008,6 +1025,9 @@ class PaperTradingEngine:
                 size=fill_size,
                 fee=cost,
                 cost=cost,
+                symbol=order.symbol,
+                intent=order.intent,
+                signal=order.signal,
             )
         )
         if self.trade_logger is not None:
@@ -1102,6 +1122,9 @@ class PaperTradingEngine:
             size=fill_size,
             fee=cost,
             cost=cost,
+            symbol=order.symbol,
+            intent=order.intent,
+            signal=order.signal,
         )
 
     def _reconcile_exchange_fills(self, *, timestamp: datetime) -> list[PaperTrade]:
@@ -1162,6 +1185,9 @@ class PaperTradingEngine:
                     size=new_fill_size,
                     fee=fee,
                     cost=fee,
+                    symbol=getattr(order, "symbol", None),
+                    intent=self._order_intents.get(order.order_id, (None, None))[0],
+                    signal=self._order_intents.get(order.order_id, (None, None))[1],
                 )
             )
             if self.trade_logger is not None:
@@ -1468,6 +1494,14 @@ def _get_close(bar: Any) -> float:
     if isinstance(bar, dict):
         return float(bar["close"])
     raise TypeError("bars must expose a close attribute or be dictionaries with a close key")
+
+
+def _signal_value(signal: Any) -> float | None:
+    """A strategy signal as a number for records and alerts (None when it isn't numeric)."""
+    try:
+        return float(signal) if signal is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _get_symbol(bar: Any) -> str | None:

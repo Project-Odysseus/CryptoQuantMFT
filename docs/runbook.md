@@ -12,7 +12,7 @@ This runbook covers startup, daily checks, backup/restore, and recovery for the 
 ## Startup checklist
 
 1. Activate the intended Python environment.
-2. Confirm the runtime settings in `.env` are correct, especially `database_path`, `telegram_bot_token`, and `telegram_chat_id` if you intend to use Telegram alerts.
+2. Confirm the runtime settings in `.env` are correct, especially `database_path`, `telegram_bot_token`, and `telegram_chat_id` if you intend to use Telegram alerts. Then run `python main.py --telegram-test`: it sends one sample trade message marked `[TEST]`. Runtime alerts fail quietly (a missing token only logs `telegram_notifier_skipped`), so this is the way to know messages arrive.
 3. Start the runtime with a saved config and checkpoint path so the state can be recovered later:
 
 ```bash
@@ -92,6 +92,22 @@ python main.py \
 ```
 
 This submits a **real Kraken market sell** for the full currently held base-asset size after validate-only checks pass.
+
+## Telegram messages
+
+Every fill the runtime records sends one message: the mode (`[PAPER]`, `[DRY RUN]` or `[LIVE]`), side, size, symbol
+and price. Then it says why the trade happened, which strategy and parameters were used, the position after it, and
+the account (equity, P&L, the last hour, drawdown from the peak). The "why" line has two sources:
+
+- **The strategy's signal:** `entry: the signal turned long/short` or `exit: the signal left long/short`, with the
+  signal value on that bar (`+1`, `-1` or `0`).
+- **A risk stop that overrides the signal:** a time stop, an ATR stop, a position drawdown stop, the liquidation
+  buffer, or the daily-loss or drawdown limits. The message names which one.
+
+Paper mode replays its bar history each cycle, so trades are recognised by time, side, size and price, and each one
+is sent once. After a restart, trades from the warmup history are not re-sent. More than 5 new trades in one cycle
+are summarised in a single line. Other runtime alerts (stale data, reconciliation, risk stops, heartbeat) arrive as
+`ALERT <event>` followed by readable lines.
 
 ## Daily operational checks
 

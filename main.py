@@ -1639,6 +1639,31 @@ def _run_kraken_close_submission(
     return submission
 
 
+def telegram_test() -> int:
+    """Send one sample trade message, marked TEST, so delivery and formatting can be checked end to end.
+
+    The runtime's alerts fail quietly (a missing token only logs a skip), so
+    this is the way to find out whether messages actually arrive.
+    """
+    from src.utils.telegram import TelegramNotifier, TradeAlert
+
+    notifier = TelegramNotifier()
+    if not notifier.is_configured():
+        print("Telegram is not configured: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.")
+        return 1
+    alert = TradeAlert(
+        mode="test", strategy_name="moving_average_crossover", strategy_params={"short_window": 4, "long_window": 48},
+        side="buy", size=0.001, price=50000.0, symbol="BTC/USD", intent="enter_long", signal=1.0, fee=0.03,
+        position_size=0.001, avg_entry_price=50000.0, equity=1000.0, pnl=0.0, pnl_last_hour=0.0, drawdown_pct=0.0,
+        timestamp=datetime.now(timezone.utc),
+    )
+    if notifier.send_trade_alert(alert):
+        print("Sent a TEST trade message to Telegram. Check the chat.")
+        return 0
+    print("Telegram rejected or failed to deliver the message; see logs/app.log (telegram_notifier_failed).")
+    return 1
+
+
 def portfolio_check(path: str) -> int:
     """Validate a portfolio config and print what it resolves to; returns the process exit code.
 
@@ -1693,6 +1718,7 @@ def main() -> None:
     parser.add_argument("--sizing", choices=sorted(SIZERS), default=None, help="How entries are sized (see --list-sizing). Default: fixed_fraction at --risk-per-trade-pct. Every sizing gives a share of equity, capped by the exchange's position and per-trade limits")
     parser.add_argument("--sizing-params", default="{}", help="JSON parameters for --sizing, e.g. '{\"target_annual_vol\": 0.5}' for vol_target or '{\"kelly_fraction\": 0.5, \"min_trades\": 20}' for kelly")
     parser.add_argument("--list-sizing", action="store_true", help="Print every sizing method with its parameters and defaults, then exit")
+    parser.add_argument("--telegram-test", action="store_true", help="Send one sample trade message (marked TEST) to the Telegram chat in .env, to check delivery, then exit")
     parser.add_argument("--portfolio-check", metavar="PATH", default=None, help="Validate a portfolio TOML (sleeves, instruments, allocation, risk limits) and print the resolved plan, then exit. Touches no network or database")
     parser.add_argument("--target-annual-vol", type=float, default=None, help="Shorthand for --sizing vol_target --sizing-params '{\"target_annual_vol\": X}' (0.5 = 50%% a year; EWMA forecast, 10-day half-life)")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures trades perpetual futures: the in-process margin sandbox under live_dry_run, real Kraken Futures orders under live")
@@ -1762,6 +1788,8 @@ def main() -> None:
         return
     if args.portfolio_check:
         raise SystemExit(portfolio_check(args.portfolio_check))
+    if args.telegram_test:
+        raise SystemExit(telegram_test())
     try:
         runtime_config = build_runtime_config_from_args(args, argv=sys.argv[1:])
         if args.runtime:

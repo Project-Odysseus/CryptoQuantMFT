@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,7 +21,9 @@ from src.risk.kill_switch import KillSwitchController
 from src.runtime.live_plot import RuntimeLivePlotter
 from src.storage.trade_logger import TradeLogger
 from src.utils.logger import logger
-from src.utils.telegram import TelegramNotifier
+from src.utils.telegram import TelegramNotifier, TradeAlert
+
+MAX_TRADE_ALERTS_PER_CYCLE = 5  # more than this in one cycle is summarised in one line, so a replay can't flood the chat
 
 StrategyFn = Callable[[Sequence[Any], int, Any], float | int | str | None]
 
@@ -152,6 +154,9 @@ class RuntimeOrchestrator:
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.live_plotter = RuntimeLivePlotter(output_path=live_plot_path or getattr(runtime_config, "live_plot_path", None)) if live_plot or bool(getattr(runtime_config, "live_plot", False)) else None
         self.alert_notifier = TelegramNotifier()
+        self._trade_alerts_primed = False
+        self._notified_trade_keys: set[tuple[str, str, float, float]] = set()
+        self._notified_trade_order: deque[tuple[str, str, float, float]] = deque()
         self._active_alerts: set[str] = set()
         self.stale_quote_threshold_seconds = max(30.0, float(interval_seconds) * 10.0)
         self.heartbeat_timeout_seconds = max(2 * self.stale_quote_threshold_seconds, float(watchdog_timeout_seconds))
@@ -837,49 +842,73 @@ class RuntimeOrchestrator:
         )
 
     def _maybe_notify_new_trades(self, execution_result: Any | None, *, previous_trade_count: int = 0) -> None:
-        """Send a Telegram trade update when the runtime records a new paper-trade event."""
+        """Send one Telegram message per trade not reported yet, saying what traded, why, and where the account stands.
+
+        Paper mode replays the whole bar history every cycle, so the same trade
+        comes back each cycle with a new order id. Trades are therefore
+        recognised by what they are (time, side, size, price). On the first
+        cycle, trades from the warmup history are marked as seen, not sent;
+        only trades on the latest bar are reported.
+        """
         if execution_result is None:
             return
-
-        current_trades = list(getattr(execution_result, "trades", []) or [])
-        if len(current_trades) <= previous_trade_count:
+        trades = list(getattr(execution_result, "trades", []) or [])
+        history = list(getattr(execution_result, "portfolio_history", []) or [])
+        if not trades or not history:
+            return
+        latest = history[-1]
+        if not self._trade_alerts_primed:
+            self._trade_alerts_primed = True
+            latest_time = getattr(latest, "timestamp", None)
+            for trade in trades:
+                if latest_time is not None and trade.timestamp < latest_time:
+                    self._remember_trade_alert(trade)
+        fresh = [trade for trade in trades if self._trade_alert_key(trade) not in self._notified_trade_keys]
+        if not fresh:
             return
 
-        latest_trade = current_trades[-1]
-        portfolio_history = list(getattr(execution_result, "portfolio_history", []) or [])
-        if not portfolio_history:
-            return
-
-        latest_snapshot = portfolio_history[-1]
         initial_equity = float(getattr(self.execution_engine, "initial_cash", 1000.0))
-        current_equity = float(getattr(latest_snapshot, "equity", initial_equity))
-        current_pnl = current_equity - initial_equity
+        equity = float(getattr(latest, "equity", initial_equity))
+        peak = max([initial_equity] + [float(getattr(snapshot, "equity", initial_equity)) for snapshot in history])
+        common = {
+            "mode": self.mode,
+            "strategy_name": self.strategy_name,
+            "strategy_params": dict(self.strategy_params),
+            "position_size": float(getattr(latest, "position_size", 0.0) or 0.0),
+            "avg_entry_price": getattr(latest, "avg_entry_price", None),
+            "equity": equity,
+            "pnl": equity - initial_equity,
+            "pnl_last_hour": self._calculate_pnl_last_hour(),
+            "drawdown_pct": max(0.0, (peak - equity) / peak) if peak > 0 else 0.0,
+        }
+        for trade in fresh[-MAX_TRADE_ALERTS_PER_CYCLE:]:
+            self.alert_notifier.send_trade_alert(TradeAlert(
+                side=str(getattr(trade, "side", "unknown") or "unknown"),
+                size=float(trade.size),
+                price=float(trade.price),
+                fee=float(getattr(trade, "fee", 0.0) or 0.0),
+                symbol=getattr(trade, "symbol", None) or self.trading_symbol,
+                intent=getattr(trade, "intent", None),
+                signal=getattr(trade, "signal", None),
+                timestamp=trade.timestamp,
+                **common,
+            ))
+        if len(fresh) > MAX_TRADE_ALERTS_PER_CYCLE:
+            self.alert_notifier.send_message(f"... and {len(fresh) - MAX_TRADE_ALERTS_PER_CYCLE} earlier trades this cycle; see `python main.py --report`.")
+        for trade in fresh:
+            self._remember_trade_alert(trade)
 
-        peak_equity = initial_equity
-        worst_equity = current_equity
-        for snapshot in portfolio_history:
-            peak_equity = max(peak_equity, float(getattr(snapshot, "equity", initial_equity)))
-            worst_equity = min(worst_equity, float(getattr(snapshot, "equity", initial_equity)))
+    @staticmethod
+    def _trade_alert_key(trade: Any) -> tuple[str, str, float, float]:
+        return (str(trade.timestamp), str(trade.side), round(float(trade.size), 10), round(float(trade.price), 8))
 
-        current_drawdown_pct = 0.0 if peak_equity <= 0.0 else max(0.0, (peak_equity - current_equity) / peak_equity)
-        distance_to_max_drawdown_point = current_equity - worst_equity
-        position_side = "flat"
-        position_size = float(getattr(latest_snapshot, "position_size", 0.0))
-        if position_size > 0.0:
-            position_side = "long"
-        elif position_size < 0.0:
-            position_side = "short"
-
-        pnl_last_hour = self._calculate_pnl_last_hour()
-        self.alert_notifier.send_trade_update(
-            strategy_name=self.strategy_name,
-            trade_side=str(getattr(latest_trade, "side", "unknown") or "unknown"),
-            current_pnl=current_pnl,
-            pnl_last_hour=pnl_last_hour,
-            position_side=position_side,
-            max_drawdown_pct=current_drawdown_pct,
-            distance_to_max_drawdown_point=distance_to_max_drawdown_point,
-        )
+    def _remember_trade_alert(self, trade: Any) -> None:
+        key = self._trade_alert_key(trade)
+        if key not in self._notified_trade_keys:
+            self._notified_trade_keys.add(key)
+            self._notified_trade_order.append(key)
+        while len(self._notified_trade_order) > 5000:
+            self._notified_trade_keys.discard(self._notified_trade_order.popleft())
 
     def _calculate_pnl_last_hour(self) -> float:
         """Estimate recent equity change over the last hour using persisted equity snapshots."""
