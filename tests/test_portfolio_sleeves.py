@@ -145,6 +145,15 @@ def test_a_stop_flattens_the_sleeve_and_blocks_reentry_until_the_signal_resets()
     ]
 
 
+def test_a_trailing_atr_stop_takes_a_sleeve_out_after_a_pullback_from_its_best_close() -> None:
+    stops = {"atr_stop_multiplier": 1.0, "atr_window": 3}
+    closes = [100.0, 104.0, 108.0, 112.0, 105.0]  # ATR ~6.1 at the end: 105 is 7 below the 112 peak but 5 above entry
+    fixed = _step_through(SleeveRunner(_spec(sizing_params={"fraction": 0.5}, stops=stops)), closes, [1] * 5)
+    trailing = _step_through(SleeveRunner(_spec(sizing_params={"fraction": 0.5}, stops={**stops, "atr_trailing": True})), closes, [1] * 5)
+    assert fixed[-1] == ("hold", 0.5, None)
+    assert trailing[-1] == ("stop", 0.0, "atr_trailing_stop")
+
+
 def test_a_stopped_long_may_still_enter_short_and_a_time_stop_counts_bars_held() -> None:
     runner = SleeveRunner(_spec(sizing_params={"fraction": 0.5}, stops={"time_stop_bars": 2}))
     closes = [100.0] * 6

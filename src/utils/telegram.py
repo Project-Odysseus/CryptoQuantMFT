@@ -80,6 +80,7 @@ TRADE_REASONS = {
     "exit_short": "exit: the signal left short",
     "time_stop": "risk stop: held for the maximum number of bars",
     "atr_stop_loss": "risk stop: price moved the ATR stop distance against the position",
+    "atr_trailing_stop": "risk stop: price fell back the ATR stop distance from its best close since entry",
     "position_drawdown_stop": "risk stop: the position lost its maximum allowed share",
     "liquidation_buffer": "risk stop: price came too close to the liquidation price",
     "hard_stop": "risk stop: account drawdown hard stop",

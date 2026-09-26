@@ -426,6 +426,42 @@ def test_risk_manager_evaluate_exit_triggers_atr_stop_loss() -> None:
     assert decision.reason == "atr_stop_loss"
 
 
+def _flat_range_bars(closes: list[float]) -> list[OHLCVBar]:
+    """Bars with a constant 4-wide high-low range, so ATR is ~4 whatever the closes do."""
+    return [
+        OHLCVBar(exchange="mock", symbol="BTC/NOK", interval_seconds=60, timestamp=datetime(2024, 1, 1, 0, index, tzinfo=timezone.utc),
+                 open=close, high=close + 2.0, low=close - 2.0, close=close, volume=10.0)
+        for index, close in enumerate(closes)
+    ]
+
+
+def test_trailing_atr_stop_ratchets_behind_the_best_close_since_entry() -> None:
+    """Entered at 100, rallied to 106: a fall to 101 is far above the fixed stop (~95.7) but 5 below the peak (ATR ~4.3)."""
+    bars = _flat_range_bars([100.0, 102.0, 104.0, 106.0, 104.0, 101.0])
+    fixed = RiskManager(RiskControlConfig(atr_stop_multiplier=1.0, atr_window=3))
+    trailing = RiskManager(RiskControlConfig(atr_stop_multiplier=1.0, atr_window=3, atr_trailing=True))
+    kwargs = {"bars": bars, "current_bar": bars[-1], "position_side": "long", "avg_entry_price": 100.0, "bars_held": 5}
+
+    assert fixed.evaluate_exit(**kwargs).force_exit is False
+    decision = trailing.evaluate_exit(**kwargs)
+    assert decision.force_exit is True and decision.reason == "atr_trailing_stop"
+    # One bar earlier (104, 2 below the peak, ATR 4) the trail still holds
+    assert trailing.evaluate_exit(**{**kwargs, "bars": bars[:-1], "current_bar": bars[-2], "bars_held": 4}).force_exit is False
+
+
+def test_trailing_atr_stop_never_starts_worse_than_the_entry_and_mirrors_for_shorts() -> None:
+    """With no favourable move the trail sits where the fixed stop does; a short trails the lowest close."""
+    trailing = RiskManager(RiskControlConfig(atr_stop_multiplier=1.0, atr_window=3, atr_trailing=True))
+    falling = _flat_range_bars([100.0, 99.0, 98.0, 97.0])  # 3 below the 100 entry: inside a ~4 ATR stop
+    assert trailing.evaluate_exit(bars=falling, current_bar=falling[-1], position_side="long", avg_entry_price=100.0, bars_held=3).force_exit is False
+
+    short = _flat_range_bars([100.0, 98.0, 96.0, 102.0])  # 6 above the lowest close (96), ATR ~5.3; 2 above entry
+    decision = trailing.evaluate_exit(bars=short, current_bar=short[-1], position_side="short", avg_entry_price=100.0, bars_held=3)
+    assert decision.force_exit is True and decision.reason == "atr_trailing_stop"
+    fixed = RiskManager(RiskControlConfig(atr_stop_multiplier=1.0, atr_window=3))
+    assert fixed.evaluate_exit(bars=short, current_bar=short[-1], position_side="short", avg_entry_price=100.0, bars_held=3).force_exit is False
+
+
 def test_risk_manager_evaluate_exit_triggers_position_drawdown_stop_on_long() -> None:
     """A long down 5% from entry should be force-closed by the plain percentage stop."""
     bar = OHLCVBar(

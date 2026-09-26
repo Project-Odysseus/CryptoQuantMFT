@@ -84,6 +84,10 @@ class RiskControlConfig:
     time_stop_bars: int | None = None
     atr_stop_multiplier: float | None = None
     atr_window: int = 14
+    # Trail the ATR stop behind the best close since entry (a chandelier exit) instead of holding it a fixed
+    # distance from the entry. The stop then locks in part of a winning move and only moves in the position's favour
+    # (apart from ATR changes). Needs `atr_stop_multiplier`.
+    atr_trailing: bool = False
     # A fixed percentage stop against the entry price, independent of ATR.
     # Applies to either side: a long is stopped if price falls this far below
     # entry, a short if price rises this far above entry. This is the plain
@@ -340,12 +344,26 @@ class RiskManager:
             if atr > 0.0:
                 current_price = _get_close(current_bar)
                 stop_distance = atr * atr_multiplier
-                if position_side == "long" and current_price <= avg_entry_price - stop_distance:
-                    return ExitDecision(force_exit=True, reason="atr_stop_loss")
-                if position_side == "short" and current_price >= avg_entry_price + stop_distance:
-                    return ExitDecision(force_exit=True, reason="atr_stop_loss")
+                anchor, reason = avg_entry_price, "atr_stop_loss"
+                if self.config.atr_trailing:
+                    anchor, reason = self._best_close_since_entry(bars, position_side, avg_entry_price, bars_held), "atr_trailing_stop"
+                if position_side == "long" and current_price <= anchor - stop_distance:
+                    return ExitDecision(force_exit=True, reason=reason)
+                if position_side == "short" and current_price >= anchor + stop_distance:
+                    return ExitDecision(force_exit=True, reason=reason)
 
         return ExitDecision(force_exit=False)
+
+    @staticmethod
+    def _best_close_since_entry(bars: Sequence[Any], position_side: str, entry_price: float, bars_held: int) -> float:
+        """The highest close since entry for a long (lowest for a short), never worse than the entry price.
+
+        Derived from the last `bars_held` bars rather than kept as state, so it
+        survives restarts and every caller (backtest, paper, sleeves) gets the
+        same stop from the same history.
+        """
+        closes = [_get_close(bar) for bar in bars[len(bars) - bars_held :]] if bars_held > 0 else []
+        return max([entry_price, *closes]) if position_side == "long" else min([entry_price, *closes])
 
     def _estimate_atr(self, bars: Sequence[Any]) -> float:
         window_bars = list(bars[-(self.config.atr_window + 1) :])

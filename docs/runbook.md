@@ -257,6 +257,9 @@ python main.py --runtime live_dry_run --execution-exchange kraken \
   for `kraken_futures`). The dashboard shows the current signal immediately, but the first trade waits for the
   next bar close, so a restart never acts on a bar that closed hours earlier.
 - The time stop counts bars, so `time_stop_bars=60` on 4h bars is 10 days.
+- The ATR stop sits a fixed `atr_stop_multiplier` x ATR from the entry. With `atr_trailing = true` (a sleeve's
+  `stops`, or `RiskControlConfig`) it trails the best close since entry instead, and the exit reads
+  `atr_trailing_stop`.
 
 ### Position size
 

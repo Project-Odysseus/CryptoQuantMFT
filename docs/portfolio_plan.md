@@ -223,7 +223,7 @@ params = { window = 40, atr_multiplier = 2.0 }
 budget = 0.3
 sizing = "vol_target"
 sizing_params = { target_annual_vol = 0.5 }
-stops = { atr_stop_multiplier = 3.0, time_stop_bars = 60 }   # sleeve-level exits (optional)
+stops = { atr_stop_multiplier = 3.0, atr_trailing = true, time_stop_bars = 60 }   # sleeve-level exits (optional)
 ```
 
 **Validation rules** (each failure names the key and the fix):

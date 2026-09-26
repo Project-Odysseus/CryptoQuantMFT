@@ -31,7 +31,7 @@ import numpy as np
 from src.risk.controls import RiskControlConfig, RiskManager, gate_reentry
 from src.risk.sizing import PositionSizer, SizingContext, build_sizer
 
-STOP_KEYS = ("atr_stop_multiplier", "atr_window", "time_stop_bars", "position_drawdown_stop_pct")
+STOP_KEYS = ("atr_stop_multiplier", "atr_window", "atr_trailing", "time_stop_bars", "position_drawdown_stop_pct")
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +48,8 @@ class SleeveSpec:
         budget: The sleeve's share of the portfolio (see `allocation.py`).
         sizing, sizing_params: A sizer from `src/risk/sizing.py`; its share is the
             sleeve's weight at entry.
-        stops: Optional exits: `atr_stop_multiplier`, `atr_window`, `time_stop_bars`,
+        stops: Optional exits: `atr_stop_multiplier`, `atr_window`, `atr_trailing`
+            (trail the ATR stop behind the best close), `time_stop_bars`,
             `position_drawdown_stop_pct`.
         warmup_bars: History to load before the first decision.
         enabled: A disabled sleeve holds nothing.
