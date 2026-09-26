@@ -255,6 +255,12 @@ This section captures the highest-priority gaps found by reviewing the docs, cod
   - [ ] Fix the remaining research ↔ runtime gaps tracked in `todo_important.md` (re-entry after a forced exit, 4h/1d bar interval + history warmup) before paper-trading a researched strategy. Exit-on-zero semantics fixed 2026-09-25.
   - [ ] Evaluate maker (post-only limit) execution: ~0.5% instead of ~1.0% round trip roughly doubles the 4h trend family's Sharpe (see Phase 6)
   - [ ] Cross-strategy return correlation in the research summary (needed for the portfolio stage)
+- [ ] **Intraday-to-few-days strategy suite (requested 2026-09-26)**: holding periods from under an hour up to about 3 days, instead of the daily/weekly trend rules researched so far.
+  - [ ] Research on 15m/1h/4h Kraken perp candles back to 2020 (`--source perp`, add 15m/1h to the research defaults), judged net of taker and maker costs; short horizons are where costs decided every result so far
+  - [ ] Candidate ideas: time-of-day/session effects, opening-range and volatility breakouts with same-day exits, short-horizon reversal after outsized moves, funding-rate and basis signals, volume/flow bursts
+  - [ ] Add a max-holding-period rule (e.g. exit after N bars or at a session boundary) so strategies stay intraday-to-few-days by construction
+  - [ ] Maker (post-only) execution for entries, since intraday edge per trade is small relative to the 0.05% taker fee
+
 - [ ] **Single-Exchange Mean Reversion & Regime Signals**
   - [ ] Build rolling $Z$-score calculator on a single-exchange spread/price series over 5m, 15m, and 1h lookbacks:
     $$Z_t = \frac{\text{Spread}_t - \mu_{\text{rolling}}}{\sigma_{\text{rolling}}}$$
