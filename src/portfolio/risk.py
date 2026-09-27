@@ -49,6 +49,8 @@ class PortfolioRiskConfig:
     drawdown_derisk_floor: float = 0.5
     stale_after_bars: int = 2
     max_gross_notional: float | None = None  # total position value cap in money (base currency); required for live trading
+    # Limits on what the book is exposed to, per underlying, as shares of equity ([risk.exposure]; see exposure_limits.py)
+    exposure: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Reject limits that can't work together."""
@@ -68,6 +70,13 @@ class PortfolioRiskConfig:
             raise ValueError("risk.stale_after_bars must be at least 1")
         if self.max_gross_notional is not None and not self.max_gross_notional > 0:
             raise ValueError("risk.max_gross_notional must be above 0 (money, in the base currency)")
+        from src.portfolio.exposure_limits import EXPOSURE_LIMIT_KEYS
+
+        for key, value in self.exposure.items():
+            if key not in EXPOSURE_LIMIT_KEYS:
+                raise ValueError(f"risk.exposure.{key} is unknown; allowed: {sorted(EXPOSURE_LIMIT_KEYS)}")
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
+                raise ValueError(f"risk.exposure.{key} must be a number above 0 (a share of equity)")
 
 
 @dataclass(frozen=True, slots=True)

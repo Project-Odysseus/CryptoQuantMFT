@@ -25,6 +25,14 @@ daily_loss_limit = 0.06          # past this loss within a UTC day, positions ma
 stale_after_bars = 2
 # max_gross_notional = 3000      # the most money the book may hold in positions (base currency); required for --runtime live
 
+# Exposure limits per underlying, as shares of equity (src/portfolio/exposure_limits.py). They matter once option
+# sleeves exist; for perps alone, max_delta and max_scenario_loss already bound the book.
+# [risk.exposure]
+# max_delta = 1.0              # delta in money at most 100% of equity
+# max_vega_per_point = 0.01    # at most 1% of equity per implied-vol point
+# max_short_gamma = 0.002      # a 1% move worsens the 1% delta by at most 0.2% of equity
+# max_scenario_loss = 0.30     # the worst of -50%..+50% moves x vol shocks loses at most 30%
+
 [instruments."kraken_futures:BTC/USD"]
 kind = "perp"
 max_leverage = 2.0
