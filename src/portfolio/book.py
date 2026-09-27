@@ -13,6 +13,12 @@ Accounting per instrument kind:
   the fee from collateral. Reducing realises (price - average entry) x
   units into cash. The open position is worth units x (mark - average
   entry). Funding moves cash: longs pay when the rate is positive.
+- **option** (Deribit USDC-settled, e.g. "deribit:BTC_USDC-27NOV26-70000-P"):
+  the premium changes hands at the fill, as with spot: buying pays price x
+  units, selling (writing) receives it, and a short is negative units. The
+  position is worth units x mark. At expiry it settles at intrinsic value
+  (`settle_expired_options`). Contracts are registered as they are traded
+  (`register_option`), since listings change every week. USDC counts as USD.
 
 Each venue keeps its cash in its own currency (Kraken spot in EUR, Kraken
 Futures in USD). Equity in the base currency converts each venue at a
@@ -34,7 +40,7 @@ from typing import Any
 
 from src.portfolio.config import InstrumentSpec, PortfolioConfig
 
-VENUE_CURRENCY = {"kraken": "EUR", "kraken_futures": "USD"}
+VENUE_CURRENCY = {"kraken": "EUR", "kraken_futures": "USD", "deribit": "USD"}  # Deribit linear options settle in USDC, counted 1:1
 ZERO = Decimal(0)
 
 
@@ -110,6 +116,48 @@ class PortfolioBook:
 
     # --- updates -------------------------------------------------------------------------------------------------
 
+    def register_option(self, instrument: str) -> InstrumentSpec:
+        """Make an option contract known to the book ("deribit:BTC_USDC-27NOV26-70000-P"); idempotent."""
+        if instrument not in self.instruments:
+            if not instrument.startswith("deribit:"):
+                raise ValueError(f"option ids look like 'deribit:<Deribit name>', not {instrument!r}")
+            self.instruments[instrument] = InstrumentSpec(id=instrument, kind="option", allow_short=True)
+            self.venue_currency.setdefault("deribit", VENUE_CURRENCY["deribit"])
+            self.cash.setdefault("deribit", ZERO)
+        return self.instruments[instrument]
+
+    def settle_expired_options(self, now: datetime, underlying_prices: Mapping[str, Decimal | float], *, fee_rate: Decimal | float = ZERO) -> list[dict[str, Any]]:
+        """Close every option whose expiry has passed at its intrinsic value; returns one record per settlement.
+
+        `underlying_prices` is the settlement price per coin ({"BTC": 84000}); Deribit uses a 30-minute average of
+        its index before 08:00 UTC, so a live book should pass that. Longs receive intrinsic x units, shorts pay it;
+        the realized P&L is intrinsic minus the premium paid (or plus the premium received).
+        """
+        from src.options.deribit import parse_instrument, underlying_and_settlement
+
+        settled = []
+        for instrument, position in self.positions.items():
+            spec = self.instruments.get(instrument)
+            if spec is None or spec.kind != "option" or position.units == 0:
+                continue
+            currency, expiry, strike, right = parse_instrument(instrument.split(":", 1)[1])
+            coin, _settlement = underlying_and_settlement(currency)
+            if expiry > now or coin not in underlying_prices:
+                continue
+            spot = _d(underlying_prices[coin])
+            strike_d = _d(strike)
+            intrinsic = max(spot - strike_d, ZERO) if right == "call" else max(strike_d - spot, ZERO)
+            units = position.units
+            fee = abs(units) * spot * _d(fee_rate) if intrinsic > 0 else ZERO
+            realized = (intrinsic - position.avg_entry) * units
+            self.cash[spec.venue] += units * intrinsic - fee
+            position.realized_pnl += realized
+            position.fees += fee
+            position.units, position.avg_entry = ZERO, ZERO
+            self.marks[instrument] = intrinsic
+            settled.append({"instrument": instrument, "units": units, "settlement_price": spot, "intrinsic": intrinsic, "realized": realized, "fee": fee, "expiry": expiry})
+        return settled
+
     def _spec(self, instrument: str) -> InstrumentSpec:
         if instrument not in self.instruments:
             raise KeyError(f"{instrument} is not in the book's instruments")
@@ -143,7 +191,7 @@ class PortfolioBook:
         elif new_units == 0:
             position.avg_entry = ZERO
 
-        if spec.kind == "spot":
+        if spec.kind in ("spot", "option"):  # the premium or the purchase price changes hands at the fill
             self.cash[venue] -= signed * price + fee
         else:
             self.cash[venue] += realized - fee
@@ -224,7 +272,7 @@ class PortfolioBook:
             if spec.venue != venue or position.units == 0:
                 continue
             mark = self.marks.get(instrument, position.avg_entry)
-            total += position.units * mark if spec.kind == "spot" else position.units * (mark - position.avg_entry)
+            total += position.units * mark if spec.kind in ("spot", "option") else position.units * (mark - position.avg_entry)
         return total
 
     def equity(self) -> Decimal:
@@ -279,14 +327,16 @@ class PortfolioBook:
             "day": self.day.isoformat() if self.day else None,
             "last_update": self.last_update.isoformat() if self.last_update else None,
             "liquidations_booked": list(self.liquidations_booked),
+            "options": sorted(instrument for instrument, spec in self.instruments.items() if spec.kind == "option"),
         }
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any], *, instruments: Mapping[str, InstrumentSpec]) -> "PortfolioBook":
         """Rebuild from `to_dict` output and the config's instruments."""
+        options = {instrument: InstrumentSpec(id=instrument, kind="option", allow_short=True) for instrument in payload.get("options", [])}
         book = cls(
             base_currency=payload["base_currency"],
-            instruments=dict(instruments),
+            instruments={**dict(instruments), **options},
             cash={venue: Decimal(amount) for venue, amount in payload["cash"].items()},
             venue_currency=dict(payload["venue_currency"]),
             positions={instrument: BookPosition(**{key: Decimal(value) for key, value in fields.items()}) for instrument, fields in payload["positions"].items()},

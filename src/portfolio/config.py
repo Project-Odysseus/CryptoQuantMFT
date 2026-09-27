@@ -26,7 +26,8 @@ from src.runtime.config import BAR_INTERVALS
 
 INTERVALS = tuple(BAR_INTERVALS)  # the runtime's bar lengths, so a config never asks for one it can't build
 _SLUG = re.compile(r"^[a-z0-9_]+$")
-DEFAULT_FEE_PCT = {"perp": 0.05, "spot": 0.40}  # Kraken taker, entry tier
+DEFAULT_FEE_PCT = {"perp": 0.05, "spot": 0.40,  # Kraken taker, entry tier
+                   "option": 0.03}  # Deribit: 0.03% of the underlying per option (capped at 12.5% of its price)
 
 
 class PortfolioConfigError(ValueError):
@@ -198,8 +199,8 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         unknown = sorted(set(table) - (_known(InstrumentSpec) - {"id"}))
         for key in unknown:
             errors.append(f"{label} unknown key '{key}'; allowed: {sorted(_known(InstrumentSpec) - {'id'})}")
-        if table.get("kind", "perp") not in DEFAULT_FEE_PCT:
-            errors.append(f"{label} kind must be 'perp' or 'spot'")
+        if table.get("kind", "perp") not in ("perp", "spot"):
+            errors.append(f"{label} kind must be 'perp' or 'spot' (option contracts are added by option sleeves, not listed here)")
             continue
         if not unknown:
             instruments[instrument_id] = InstrumentSpec(id=instrument_id, **table)

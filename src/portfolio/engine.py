@@ -221,6 +221,7 @@ class PortfolioEngine:
 
         report.adapter_events = self._mark_adapters(prices, now)
         self.book.mark(prices, fx=fx, now=now)
+        self._settle_option_expiries(prices, now)
         self._book_live_funding(now)
         self._flush_tax(now)  # funding booked while marking
         self._check_equity_drift(now)
@@ -271,6 +272,30 @@ class PortfolioEngine:
         self._log_cycle(report)
         self._save()
         return report
+
+    def _settle_option_expiries(self, prices: Mapping[str, float], now: datetime) -> None:
+        """Settle options past their expiry at intrinsic value, at each coin's price from the book's perp or spot marks.
+
+        Paper books settle here; a live Deribit account settles on the exchange, and its adapter's sync is the
+        record there. The realized P&L goes to the tax ledger like any option close.
+        """
+        if not any(spec.kind == "option" for spec in self.book.instruments.values()):
+            return
+        from src.portfolio.exposure_limits import base_coin
+
+        coins: dict[str, float] = {}
+        for instrument, price in prices.items():
+            spec = self.config.instruments.get(instrument)
+            if spec is not None and (spec.kind == "perp" or base_coin(spec.symbol) not in coins):
+                coins[base_coin(spec.symbol)] = float(price)
+        for record in self.book.settle_expired_options(now, coins):
+            realized, fee = float(record["realized"]), float(record["fee"])
+            self._event("INFO", "portfolio_option_expired", f"{record['instrument']} expired at {float(record['intrinsic']):,.2f} intrinsic; realized {realized:+,.2f}",
+                        {key: str(value) for key, value in record.items()}, now)
+            self._tax_derivative(record["instrument"], "REALIZED_PNL", realized, now, {"kind": "option_expiry"})
+            if fee:
+                self._tax_derivative(record["instrument"], "TRADING_FEE", -fee, now, {"kind": "option_delivery_fee"})
+            self._flush_tax(now)
 
     def _sleeve_failed(self, sleeve_id: str, exc: Exception, report: CycleReport, now: datetime) -> None:
         """Hold the sleeve flat this cycle; after SLEEVE_ERROR_LIMIT failures in a row, disable it until restart."""
@@ -325,8 +350,8 @@ class PortfolioEngine:
         """Queue the tax records one fill creates: realized P&L and the fee for a perp; the trade itself for spot (FIFO lots)."""
         if not self.record_tax:
             return
-        spec = self.config.instruments[instrument]
-        if spec.kind == "perp":
+        spec = self.book.instruments.get(instrument) or self.config.instruments[instrument]
+        if spec.kind in ("perp", "option"):  # derivatives: realized P&L and fees (opening an option isn't a taxable event)
             if realized:
                 self._tax_derivative(instrument, "REALIZED_PNL", realized, now, {"order_id": order_id})
             if fee:
@@ -339,7 +364,7 @@ class PortfolioEngine:
     def _tax_derivative(self, instrument: str, transaction_type: str, amount: float, now: datetime, metadata: dict[str, Any]) -> None:
         if not self.record_tax or not amount:
             return
-        spec = self.config.instruments[instrument]
+        spec = self.book.instruments.get(instrument) or self.config.instruments[instrument]
         try:
             from src.data.kraken_futures import venue_symbol_for
 
