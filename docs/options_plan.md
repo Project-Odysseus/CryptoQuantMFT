@@ -236,3 +236,48 @@ don't yet beat simple ones out of sample.
   Short-vol ideas stay research-only until the capital grows.
 - **Tax:** confirm how Skatteetaten treats option premiums, expiries and exercise before the first option trade
   (as for perp P&L, `TODO.MD` section 4).
+
+## 9. Venue layout (agreed 2026-09-27)
+
+**Trend on Kraken Futures; options and their delta hedges on Deribit; one portfolio book across both.** Binance and
+Bybit are left out: Binance doesn't offer derivatives to EEA retail, Bybit's EU availability is limited, and every
+extra venue spreads collateral and adds exchange risk.
+
+```
+                         ┌──────────── one portfolio book (this repo) ─────────────┐
+ trend sleeves ─────────►│ targets ─► netting per underlying (BTC, ETH)            │
+ option sleeves ────────►│    "BTC delta" = Kraken perps + Deribit perps + options │
+ (tail hedge, covered    │ ─► exposure risk overlay: delta, vega, gamma limits,    │
+  call, short vol...)    │    worst-case scenario loss                             │
+                         │ ─► order planner picks the venue per order:             │
+                         │      trend trades   → Kraken Futures                    │
+                         │      option trades + their delta hedges → Deribit       │
+                         └──────────────────────────┬──────────────────────────────┘
+                              Kraken adapter ◄──────┴──────► Deribit adapter
+                              (USD margin)                   (own margin: USDC first)
+```
+
+- **Options on Deribit** (the deepest crypto options market; the models, surface and recorder already use its data).
+- **Their delta hedges on Deribit too.** An option and the perp hedging it share margin in one Deribit account. A
+  hedge on Kraken would put the two legs in separate accounts: in a sharp move one needs margin while the other
+  holds the profit, and a transfer between exchanges is too slow to save the short leg.
+- **One risk view, two margin views.** The book shows delta, gamma, vega, theta and the scenario grid per
+  underlying across both venues (`src/portfolio/exposure.py`). Each venue must survive on its own collateral, so
+  limits and margin checks also apply per venue.
+- **USDC-settled (linear) options first:** the book stays in dollars like the Kraken side, and the smallest contract
+  is 0.01 BTC. BTC-settled (inverse) options would make the collateral itself a BTC exposure.
+- **Order:** record chains; research (O4, O5); the Deribit adapter on the testnet with fake money; then live, behind
+  the same gates as perps. No orders are sent until the testnet step is explicitly started.
+
+What each building block is and where it lives:
+
+| Block | Module | Status |
+| --- | --- | --- |
+| Pricing, validation gate, SVI market surface | `src/options/` | built |
+| Exposures and scenario grid across instruments | `src/portfolio/exposure.py` | built |
+| Deribit read-only connection | `src/execution/deribit_client.py`, `--deribit-check` | built, live key read-only |
+| Listed contracts and a picker (delta, tenor, liquidity) with roll rules | `src/options/contracts.py` | building now |
+| Exposure limits (`[risk.exposure]`) | `src/portfolio/exposure_limits.py` | building now |
+| Option positions in the book: marks, expiry settlement, realized P&L for tax | `src/portfolio/book.py` | building now |
+| Deribit trading adapter (testnet by default, no orders sent until approved) | `src/execution/deribit_adapter.py` | building now |
+| Option sleeves wired into the engine (structure intents) | engine plan E4 | next |
