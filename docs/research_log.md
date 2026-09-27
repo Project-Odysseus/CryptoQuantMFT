@@ -6,6 +6,51 @@ accident.
 
 ---
 
+## 2026-09-27: How many independent bets are the 13 strategies, and which features can pay for a trade?
+
+First studies under the new governance (frozen final holdout from 2026-01-01; data to 2025-12-31).
+
+**Strategy clusters** (`scripts/research/strategy_clusters.py`): every catalog strategy at its defaults,
+long/short, 4h bars on the BTC and ETH perps, 2020-2025, daily returns before costs, clustered at correlation 0.7.
+
+| Cluster | Members (mean correlation) | Sharpe of the best, before costs |
+| --- | --- | --- |
+| Trend | donchian_breakout, keltner_breakout, moving_average_crossover, trend_tstat (0.81) | keltner 0.80 |
+| Volume momentum | volume_confirmed_momentum, _biased (0.81) | biased 1.06 |
+| Singletons | volatility_squeeze (0.73 with trend), ema_vwap, momentum_breakout, signal_trend, trend_pullback | |
+| Reversion | band_reversion, rsi_reversion | both negative |
+
+- **The 13 strategies are worth 3.1 independent bets** (effective number from the correlation eigenvalues).
+- The two reversion strategies are **the trend bet with the sign flipped** (correlation -0.6 to -0.87 with the
+  trend cluster), which is why they lose whenever trend wins. They add no diversification, only the opposite bet.
+- More price-only variants would add trials, not bets. New bets need new information: positioning, cross-sectional
+  ranks, carry, order flow.
+
+**IC decay by horizon** (`scripts/research/feature_decay.py`): the 21 features of the positioning study on 1h
+bars, BTC and ETH, 2020-2025. Each feature at the horizon where its IC peaks, averaged over the two coins; the edge is
+how far the best quintile's forward return sits from the average, against a ~20 bps taker round trip.
+
+| Feature | Peak horizon | IC | t (non-overlapping) | Best quintile edge | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Past 4h return (vol-scaled) | 1h | -0.054 | -12.2 | 0.8 bps | real, too small for costs |
+| Taker buy share, 1h / 4h | 1h | -0.036 / -0.033 | -8.0 / -7.6 | 0.8 bps | real, too small for costs |
+| Past 1d return | 4h | -0.045 | -5.1 | 1.2 bps | real, too small for costs |
+| Funding z-score (30d) | 1d | -0.047 | -2.1 | 29 bps | **the one candidate** |
+| DVOL change 1d | 3d | +0.071 | 1.7 | 71 bps | noise alone |
+| Retail / top-trader long-short | 7d | -0.085 / -0.073 | -1.2 / -0.9 | 150 / 107 bps | noise alone |
+| 13 others | | | below 1.7 | | noise |
+
+- **This explains every failed intraday study at once:** short-horizon price and flow effects are strongly
+  significant (short-term reversal) but worth under 1 bp per trade, against a 20 bps round trip. No entry rule can
+  turn that into money at taker costs.
+- **Crowding is the only direction with room:** funding extremes predict the next day's return by more than the
+  cost. The long-horizon crowding and implied-vol features have big bucket edges but only ~300 independent weeks, so
+  each is noise alone; combined (the crowding composite, 2026-09-26 entry) they were more convincing.
+- Next: build candidates from features, not rules: the funding z-score and a crowding composite as sleeves, tested
+  against the trial ledger's count, and only then against the frozen holdout.
+
+---
+
 ## 2026-09-27: EMA x VWAP (an Instagram day-trading rule) on BTC and ETH perpetuals, 15m and 1h
 
 **Question:** the rule enters long when a candle closes up through the VWAP and exits when a candle closes back

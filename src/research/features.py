@@ -146,3 +146,30 @@ def seasonality(frame: pd.DataFrame, *, by: str = "hour", horizon: int = 1) -> p
     table["t_stat"] = data.groupby("key")["forward"].apply(lambda values: _t_stat(values.to_numpy()[::horizon]))
     table["years_positive"] = (table.drop(columns=["all", "t_stat"]) > 0).sum(axis=1)
     return table
+
+
+def ic_decay(feature: np.ndarray, close: np.ndarray, horizons: dict[str, int], *, round_trip_bps: float, buckets: int = 5) -> pd.DataFrame:
+    """How a feature's information fades with the holding period, next to the cost of acting on it.
+
+    For each horizon (label -> bars): the IC, its t-stat on non-overlapping
+    samples, and the forward return (bps) of the top and bottom buckets over
+    the average. A bucket that beats the average by less than `round_trip_bps`
+    can't pay for one trade in and out. The horizon where the IC peaks is the
+    feature's natural holding period; if no bucket clears the cost there,
+    trading rules built on it will lose, however they are tuned.
+    """
+    rows = []
+    for label, horizon in horizons.items():
+        forward = forward_return(close, horizon)
+        frame = pd.DataFrame({"feature": feature, "forward": forward}).dropna()
+        if len(frame) < 10 * buckets:
+            continue
+        ic = information_coefficient(frame["feature"].to_numpy(), frame["forward"].to_numpy())
+        independent = max(len(frame) // horizon, 1)
+        frame["bucket"] = pd.qcut(frame["feature"], buckets, labels=False, duplicates="drop")
+        average = frame["forward"].mean()
+        top = (frame.loc[frame["bucket"] == frame["bucket"].max(), "forward"].mean() - average) * BPS
+        bottom = (frame.loc[frame["bucket"] == frame["bucket"].min(), "forward"].mean() - average) * BPS
+        rows.append({"horizon": label, "bars": horizon, "ic": ic, "ic_t": ic * np.sqrt(independent), "top_vs_avg_bps": top, "bottom_vs_avg_bps": bottom,
+                     "best_edge_bps": max(abs(top), abs(bottom)), "clears_round_trip": max(abs(top), abs(bottom)) > round_trip_bps})
+    return pd.DataFrame(rows)
