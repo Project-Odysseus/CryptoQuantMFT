@@ -39,6 +39,7 @@ import pandas as pd
 from src.research import CostSettings, load_bars, simulate_fills
 from src.research.catalog import build_strategy
 from src.research.volatility import (
+from src.research.governance import write_manifest
     DAYS_PER_YEAR,
     daily_forecast_to_bars,
     daily_realized_variance,
@@ -106,6 +107,7 @@ def main() -> None:
     args = parser.parse_args()
     out = Path(args.out) if args.out else Path("data/research") / f"volatility_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     out.mkdir(parents=True, exist_ok=True)
+    write_manifest(out, args=args)  # commit, arguments and frozen-holdout state, for reproducing the run
     pd.set_option("display.width", 240)
     costs = CostSettings.perp()
 

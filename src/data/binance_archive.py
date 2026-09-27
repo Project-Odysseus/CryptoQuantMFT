@@ -39,6 +39,8 @@ from typing import Any
 import pandas as pd
 from loguru import logger
 
+from src.research.governance import trim_bars, trim_frame
+
 ARCHIVE_URL = "https://data.binance.vision/"
 LISTING_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 CACHE_DIR = Path("data/historical_cache/binance_um")
@@ -208,7 +210,8 @@ def load_panel(dataset: str = "klines_1d", *, cache_dir: Path | str = CACHE_DIR)
     frames = [frame for frame in frames if not frame.empty]
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True).sort_values(["date", "symbol"]).reset_index(drop=True)
+    panel = pd.concat(frames, ignore_index=True).sort_values(["date", "symbol"]).reset_index(drop=True)
+    return trim_frame(panel, column="date", label=f"binance {dataset}").reset_index(drop=True)  # without the frozen final holdout
 
 
 def base_asset(symbol: str) -> str:
@@ -275,5 +278,6 @@ def load_klines(symbol: str, interval: str, months: list[str], *, market: str = 
     if not frames:
         return []
     data = pd.concat(frames).drop_duplicates("timestamp").sort_values("timestamp")
-    return [OHLCVBar(exchange=f"binance_{market}", symbol=symbol, interval_seconds=seconds, timestamp=row.timestamp.to_pydatetime(), open=float(row.open),
-                     high=float(row.high), low=float(row.low), close=float(row.close), volume=float(row.volume)) for row in data.itertuples()]
+    return trim_bars([OHLCVBar(exchange=f"binance_{market}", symbol=symbol, interval_seconds=seconds, timestamp=row.timestamp.to_pydatetime(), open=float(row.open),
+                     high=float(row.high), low=float(row.low), close=float(row.close), volume=float(row.volume)) for row in data.itertuples()],
+                     label=f"binance {market} {symbol} {interval}")  # without the frozen final holdout

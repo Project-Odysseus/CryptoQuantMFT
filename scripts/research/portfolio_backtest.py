@@ -37,6 +37,7 @@ import pandas as pd
 from src.portfolio.allocation import ALLOCATION_METHODS
 from src.portfolio.backtest import PortfolioBacktest, daily_returns, period_metrics, prepare_inputs, run_book
 from src.portfolio.config import load_portfolio_config
+from src.research.governance import write_manifest
 
 
 def _table(rows: list[dict[str, object]]) -> pd.DataFrame:
@@ -79,6 +80,7 @@ def main() -> None:
     correlation = pd.DataFrame(sleeve_returns).corr()
     out = args.out or Path("data/research") / f"portfolio_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
     out.mkdir(parents=True, exist_ok=True)
+    write_manifest(out, args=args)  # commit, arguments and frozen-holdout state, for reproducing the run
     pd.DataFrame(sleeve_rows).to_csv(out / "sleeves.csv", index=False)
     pd.DataFrame(book_rows).to_csv(out / "books.csv", index=False)
     correlation.to_csv(out / "correlation.csv")

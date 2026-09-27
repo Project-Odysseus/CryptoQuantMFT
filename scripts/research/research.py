@@ -31,6 +31,7 @@ import pandas as pd
 
 from src.research import CATALOG, CostSettings, FillModel, catalog_table, compare, load_bars, plot_heatmap, plot_run, run_strategy, summarize, sweep, sweep_axes
 from src.research.engine import split_index, warmup_bars
+from src.research.governance import write_manifest
 
 DEFAULT_SYMBOLS = ["BTC/EUR", "ETH/EUR", "SOL/EUR"]
 SUMMARY_COLUMNS = ["strategy", "interval", "long_only", "combos", "share_positive_is", "median_is", "median_ho", "best_params", "best_is", "best_neighbors_is", "best_ho", "best_ho_return", "rank_corr", "buy_hold_is", "buy_hold_ho"]
@@ -147,6 +148,7 @@ def _cmd_sweep(args: argparse.Namespace) -> None:
 
 def _write_outputs(results: pd.DataFrame, output_dir: Path, args: argparse.Namespace, *, heatmaps: bool) -> pd.DataFrame:
     output_dir.mkdir(parents=True, exist_ok=True)
+    write_manifest(output_dir, args=args)  # commit, arguments and frozen-holdout state, for reproducing the run
     results.to_csv(output_dir / "results.csv", index=False)
     summary = summarize(results, metric=args.metric)
     summary.to_csv(output_dir / "summary.csv", index=False)

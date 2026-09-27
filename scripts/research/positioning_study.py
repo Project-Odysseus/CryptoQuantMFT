@@ -38,6 +38,7 @@ from src.data.positioning import load_positioning
 from src.research import CostSettings, FillModel, load_bars, simulate_fills
 from src.research.features import bars_frame, bucket_table, forward_return, ic_by_year, information_coefficient, past_return, volatility_scaled, zscore
 from src.research.forecast import threshold_positions, walk_forward_ridge
+from src.research.governance import write_manifest
 
 DAY = 24
 EXECUTION_VARIANTS = {
@@ -138,6 +139,7 @@ def main() -> None:
     args = parser.parse_args()
     out = Path(args.out) if args.out else Path("data/research") / f"positioning_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     out.mkdir(parents=True, exist_ok=True)
+    write_manifest(out, args=args)  # commit, arguments and frozen-holdout state, for reproducing the run
     pd.set_option("display.width", 230)
 
     feature_rows, forecast_rows, composite_rows = [], [], []

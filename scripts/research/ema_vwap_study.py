@@ -30,6 +30,7 @@ import pandas as pd
 
 from src.research import CostSettings, load_bars, summarize, sweep
 from src.storage.bar_aggregator import OHLCVBar
+from src.research.governance import write_manifest
 
 MINUTES = {"3m": 3, "15m": 15, "1h": 60}
 BINANCE_COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT", "DOTUSDT"]
@@ -78,6 +79,7 @@ def main() -> None:
 
     out = args.out or Path("data/research") / f"ema_vwap_{datetime.now(timezone.utc):%Y%m%dT%H%M%S}"
     out.mkdir(parents=True, exist_ok=True)
+    write_manifest(out, args=args)  # commit, arguments and frozen-holdout state, for reproducing the run
     frames = []
     for interval in args.intervals:
         data = {symbol: load(symbol, interval, args.days, source=args.source, market=args.market, months=args.months) for symbol in symbols}

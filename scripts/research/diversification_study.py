@@ -46,11 +46,11 @@ from src.portfolio.sleeves import SleeveSpec
 from src.research.portfolio import PortfolioCosts, liquid_universe, rank_weights, simulate_portfolio, slippage_by_liquidity
 from src.research.stats import deflated_sharpe_ratio, sharpe_per_period
 from src.storage.bar_aggregator import OHLCVBar
+from src.research.governance import record_trials, total_trials, write_manifest
 
 HOLDOUT = pd.Timestamp("2024-10-01", tz="UTC")  # the split the perp and portfolio studies use
 XS_HOLDOUT = pd.Timestamp("2024-01-01", tz="UTC")  # the split the cross-sectional study used
 XS_START = pd.Timestamp("2020-06-01", tz="UTC")
-EARLIER_TRIALS = 32  # the cross-sectional study: 8 features x 2 rebalance intervals x 2 universes
 EXCLUDED_BASES = {"BTC", "ETH", "USDC", "USDT", "DAI", "FDUSD", "TUSD", "BUSD", "PAXG", "XAUT"}
 
 
@@ -128,6 +128,7 @@ def main() -> None:
     args = parser.parse_args()
     out = args.out or Path("data/research") / f"diversification_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
     out.mkdir(parents=True, exist_ok=True)
+    write_manifest(out, args=args)  # commit, arguments and frozen-holdout state, for reproducing the run
     pd.set_option("display.width", 220)
 
     klines = load_panel("klines_1d", cache_dir=CACHE_DIR)
@@ -188,7 +189,8 @@ def main() -> None:
     grid = pd.DataFrame(grid_rows)
     best = grid.loc[grid["is_sharpe"].idxmax()]
     is_returns = {key: series[(series.index >= XS_START) & (series.index < XS_HOLDOUT)] for key, series in grid_returns.items()}
-    trials = len(grid) + EARLIER_TRIALS
+    record_trials("diversification_study.taker_buy_grid", len(grid), family="cross_sectional")
+    trials = total_trials()  # every configuration ever tried, from the trial ledger (src/research/governance.py)
     variance = float(np.var([sharpe_per_period(series) for series in is_returns.values()]))
     deflated = deflated_sharpe_ratio(is_returns[best["config"]].to_numpy(), trials=trials, sharpe_variance=variance)
     print(f"\nPart 2: taker-buy share, {len(grid)} configurations on the Kraken-listed universe (in-sample {XS_START:%Y-%m} to 2023, holdout 2024 on):")

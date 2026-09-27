@@ -34,6 +34,7 @@ from src.backtest.indicators import rolling_max, rolling_min, rolling_std
 from src.research import CostSettings, FillModel, load_bars, simulate_fills
 from src.research.features import bars_frame, bucket_table, forward_return, ic_by_year, information_coefficient, past_return, seasonality, volatility_scaled, zscore
 from src.research.forecast import threshold_positions, walk_forward_ridge
+from src.research.governance import write_manifest
 
 BARS_PER_HOUR = {"15m": 4, "1h": 1}
 # How each position change is executed. "maker fee at close" is the old optimistic shortcut (maker fee, always
@@ -87,6 +88,7 @@ def main() -> None:
     horizon = args.horizon_hours * per_hour
     out = Path(args.out) if args.out else Path("data/research") / f"intraday_{args.interval}_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     out.mkdir(parents=True, exist_ok=True)
+    write_manifest(out, args=args)  # commit, arguments and frozen-holdout state, for reproducing the run
     pd.set_option("display.width", 220)
 
     raw = {symbol: load_bars(symbol, args.interval, source="perp") for symbol in args.symbols}

@@ -36,6 +36,7 @@ from src.backtest.strategies import make_long_only, make_regime_gated
 from src.data.historical import load_ohlcv_csv, load_or_fetch_kraken_history
 from src.research.catalog import CATALOG, StrategySpec, build_strategy
 from src.research.execution import FillModel, simulate_fills
+from src.research.governance import data_fingerprint, record_trials, trim_bars
 
 INTERVALS: dict[str, int] = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400, "1w": 604800}
 KRAKEN_MAX_CANDLES = 720
@@ -141,13 +142,28 @@ def load_bars(
     source: str = "spot",
     start: datetime | None = None,
 ) -> list[Any]:
-    """Load bars for one symbol, from a CSV if given, otherwise from Kraken (cached locally).
+    """Load bars for one symbol, from a CSV if given, otherwise from Kraken (cached locally), without the frozen final holdout.
 
     Kraken's public API only returns the most recent 720 candles, so by
     default this asks for exactly that much: 30 days of 1h, 120 days of 4h
     or ~2 years of daily bars. For more history, download Kraken's OHLCVT
-    CSV files and pass `csv_path`.
+    CSV files and pass `csv_path`. The most recent stretch is cut off (see
+    `src/research/governance.py`) unless the final holdout is unlocked.
     """
+    bars = _load_bars_raw(symbol, interval, lookback_days=lookback_days, refresh=refresh, csv_path=csv_path, source=source, start=start)
+    return trim_bars(bars, label=f"{symbol} {interval} {source}")
+
+
+def _load_bars_raw(
+    symbol: str,
+    interval: str | int = "4h",
+    *,
+    lookback_days: int | None = None,
+    refresh: bool = False,
+    csv_path: str | Path | None = None,
+    source: str = "spot",
+    start: datetime | None = None,
+) -> list[Any]:
     interval_seconds = parse_interval(interval)
     if source == "perp":
         # Kraken Futures perpetual trade candles, 2020-02-26 onwards for BTC/USD and ETH/USD (see HISTORY_VENUE_SYMBOLS).
@@ -389,7 +405,12 @@ def sweep(
         builder = _build_from_factory(strategy)
         name = strategy.__name__
     jobs = [(name, builder, combo) for combo in combos]
-    return _run_jobs(data, jobs, long_only=long_only, costs=costs, holdout_fraction=holdout_fraction, measure_start=measure_start, progress=progress, fills=fills)
+    results = _run_jobs(data, jobs, long_only=long_only, costs=costs, holdout_fraction=holdout_fraction, measure_start=measure_start, progress=progress, fills=fills)
+    sides = [long_only] if isinstance(long_only, bool) else list(long_only)
+    resolved = costs or CostSettings()
+    record_trials(name, len(combos) * len(sides), family=spec.family, data=data_fingerprint(data),
+                  details={"symbols": sorted(data), "fee_pct": resolved.fee_pct, "sides": sides, "combos": len(combos)})
+    return results
 
 
 def summarize(results: pd.DataFrame, metric: str = "sharpe") -> pd.DataFrame:

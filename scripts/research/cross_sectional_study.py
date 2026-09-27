@@ -46,6 +46,7 @@ import pandas as pd
 
 from src.data.binance_archive import CACHE_DIR, base_asset, kraken_perp_bases, load_panel, update_cache
 from src.research.portfolio import PortfolioCosts, cross_sectional_ic, liquid_universe, rank_weights, simulate_portfolio, slippage_by_liquidity
+from src.research.governance import write_manifest
 
 START = pd.Timestamp("2020-06-01", tz="UTC")
 HOLDOUT = pd.Timestamp("2024-01-01", tz="UTC")
@@ -107,6 +108,7 @@ def main() -> None:
     args = parser.parse_args()
     out = Path(args.out) if args.out else Path("data/research") / f"cross_sectional_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     out.mkdir(parents=True, exist_ok=True)
+    write_manifest(out, args=args)  # commit, arguments and frozen-holdout state, for reproducing the run
     pd.set_option("display.width", 240)
     if args.download:
         update_cache(cache_dir=args.cache_dir)

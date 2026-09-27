@@ -34,6 +34,7 @@ import pandas as pd
 
 from src.data.positioning import load_series
 from src.research.carry import carry_backtest, daily_funding
+from src.research.governance import write_manifest
 
 VENUE_FEES_PCT = {  # (spot leg, perp leg), taker, entry tier
     "binance": (0.10, 0.05),
@@ -79,6 +80,7 @@ def main() -> None:
     args = parser.parse_args()
     out = Path(args.out) if args.out else Path("data/research") / f"carry_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     out.mkdir(parents=True, exist_ok=True)
+    write_manifest(out, args=args)  # commit, arguments and frozen-holdout state, for reproducing the run
     pd.set_option("display.width", 220)
 
     level_rows, rows = [], []

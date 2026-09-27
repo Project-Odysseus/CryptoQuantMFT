@@ -396,3 +396,20 @@ row naming those columns. `--lookback-days` trims it.
   `--bar-interval 4h` (or `1d`, ...) builds bars of that length regardless of the polling interval, the strategy
   only acts when a bar completes, and `--warmup-bars 200` loads recent history at startup so long windows work
   from the first cycle. Kraken spot OHLC only goes back 720 candles, which caps warmup at 30 days of 1h bars.
+
+## Governance: the frozen holdout, the trial ledger, manifests (2026-09-27)
+
+`src/research/governance.py` enforces three habits.
+
+- **Frozen final holdout.** Research loaders (`load_bars`, the portfolio backtest's loader, the Binance archive)
+  drop everything from **2026-01-01** on. A series that starts after 2025-01-01 (3-minute candles, recordings)
+  keeps its own last 25% frozen instead. A study's usual in-sample/holdout split now runs inside the remaining
+  data. Only a finished candidate gets one look at the frozen data, as a final test:
+  `with final_holdout("reason"):` in code, or `CQM_FINAL_HOLDOUT="reason" python scripts/...`. Every look is
+  logged. Decide from that one look; if you then change the candidate, paper trading is the next honest test.
+- **Trial ledger.** Every `sweep()` appends the configurations it ran (parameter sets x sides) to
+  `data/research/trial_ledger.jsonl`, with the commit and a data fingerprint. Scripts that test configurations
+  another way call `record_trials(...)`. Use `total_trials()` as `trials` in `deflated_sharpe_ratio`: it includes
+  an estimated 1,180 configurations tried before the ledger existed.
+- **Manifests.** Every study script writes `manifest.json` next to its outputs (commit, `+dirty` if uncommitted
+  changes, arguments, holdout state).

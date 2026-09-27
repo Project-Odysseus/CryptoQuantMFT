@@ -39,3 +39,13 @@ def _isolated_runtime_storage(monkeypatch: pytest.MonkeyPatch, tmp_path_factory:
     storage = tmp_path_factory.mktemp("runtime_storage")
     monkeypatch.setattr(settings, "database_path", storage / "test.db")
     monkeypatch.setattr(main, "PERP_SANDBOX_STATE_DIR", storage)
+
+
+@pytest.fixture(autouse=True)
+def _research_governance_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Tests use their own trial ledger, and dated test data isn't cut by the frozen final holdout.
+
+    The governance tests clear CQM_FINAL_HOLDOUT themselves to check the freeze.
+    """
+    monkeypatch.setenv("CQM_TRIAL_LEDGER", str(tmp_path_factory.mktemp("ledger") / "trials.jsonl"))
+    monkeypatch.setenv("CQM_FINAL_HOLDOUT", "tests")
