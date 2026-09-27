@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     )
     deribit_client_secret: str = Field(
         default="",
+        validation_alias=AliasChoices("DERIBIT_CLIENT_SECRET", "DERIBIT_SECRET"),  # either name, like KRAKEN_SECRET
         description="Deribit API client secret.",
     )
     deribit_testnet: bool = Field(
