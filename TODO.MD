@@ -113,7 +113,8 @@ Kraken spot and Kraken Futures keys are configured (2026-09-26). Put keys in `.e
 permission, and never print them.
 - [ ] Binance, Bybit, OKX read-only keys: the real fee tiers, to replace the assumed fees in backtests
 - [ ] Trading keys and an adapter per venue, only after a strategy has passed paper and dry-run on that venue
-- [ ] Deribit: options trading, and testnet keys for O7
+- [x] Deribit live key, read-only (account read, trade read, no wallet), checked with `--deribit-check` (2026-09-27)
+- [ ] Deribit testnet keys (test.deribit.com, a separate account) for O7 paper trading; trade read+write only there
 
 ## 8. Housekeeping
 
