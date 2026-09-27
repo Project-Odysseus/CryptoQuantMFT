@@ -143,4 +143,5 @@ Orders go through the adapters, never directly from a strategy. More in [`CLAUDE
 | [`docs/options_plan.md`](docs/options_plan.md) | Options: pricing models, the test gate, strategy design notes |
 | [`docs/research_log.md`](docs/research_log.md) | Every study and what it found, newest first |
 | [`docs/research_guide.md`](docs/research_guide.md) | How to research a strategy without fooling yourself |
+| [`docs/data_inventory.md`](docs/data_inventory.md) | What data each research mechanism needs, what we have, what to get |
 | [`docs/perpetual_futures.md`](docs/perpetual_futures.md) | Perps: contracts, margin, funding, Kraken specifics |

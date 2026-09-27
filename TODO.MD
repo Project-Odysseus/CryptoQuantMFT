@@ -86,8 +86,14 @@ direction is in `aspirations.md`.
 - [ ] Order-flow features after ~4 weeks of recording (trade-flow and book imbalance, liquidation bursts, 1m-1h). Needs the recorder running (section 3)
 - [ ] OKX funding and OI in the recorder
 - [ ] HAR volatility forecast in the runtime (needs 1h bars and a year of history at startup; EWMA is used now)
-- [ ] Calendar and event features (CPI, FOMC, option expiries, CME weekend gaps)
-- [ ] A never-touched final holdout for strategy selection (the deflated Sharpe is done)
+- [x] Research governance (2026-09-27, `src/research/governance.py`): a frozen final holdout from 2026-01-01, a global
+  trial ledger for the deflated Sharpe, and run manifests. Also strategy clustering (13 strategies = 3.1 bets) and IC
+  decay by horizon (only the funding z-score clears costs). Data plan: `docs/data_inventory.md`
+- [ ] Paper vs backtest: after a few weeks of paper trading, replay `run_book` over the same bars and track the gap in
+  fills, slippage and timing (the real cost model, and the first sign of decay)
+- [ ] Binance `metrics` (OI, long/short ratios) for the Kraken-listed coins, to extend the crowding study beyond BTC/ETH
+- [ ] Small free daily series: US spot ETF flows, stablecoin supply, the Coinbase premium, an event calendar (CPI, FOMC, expiries)
+- [ ] Candidates from features: a funding z-score sleeve and a crowding composite, sized against `total_trials()`
 - [ ] Maker-first execution (post-only limits, then taker after a timeout): the lever most likely to make intraday edges tradable
 - [ ] A live performance review script: equity vs BTC buy-and-hold, trade durations, slippage vs expected price, alpha decay, cost-adjusted P&L
 - [x] Strategy design notes for options, options + perps and spot: `docs/options_plan.md`, section 8 (2026-09-26). Next from it: the tail-hedge vs lower-scale study and the spot-vs-perp venue rule for long holds
