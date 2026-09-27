@@ -34,6 +34,7 @@ import zipfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from loguru import logger
@@ -231,3 +232,48 @@ def kraken_perp_bases() -> set[str]:
             bases.add("BTC" if base == "XBT" else base)
             bases.add(base_asset(base + "USDT"))
     return bases
+
+
+INTRADAY_PATHS = {
+    "futures": "data/futures/um/monthly/klines/{symbol}/{interval}/{symbol}-{interval}-{month}.zip",
+    "spot": "data/spot/monthly/klines/{symbol}/{interval}/{symbol}-{interval}-{month}.zip",
+}
+INTERVAL_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600}
+
+
+def load_klines(symbol: str, interval: str, months: list[str], *, market: str = "futures", cache_dir: Path | str = CACHE_DIR) -> list[Any]:
+    """Intraday candles for whole months (e.g. ["2026-06", "2026-07"]) from the archive, as OHLCVBar, oldest first.
+
+    `market` is "futures" (USDT-margined perpetuals) or "spot". Each month is
+    downloaded once (a few hundred KB to a few MB) and cached as parquet
+    under `<cache_dir>/klines_<interval>/<market>/`. Months not in the
+    archive (not yet published, or before the listing) are skipped.
+    """
+    from src.storage.bar_aggregator import OHLCVBar
+
+    if market not in INTRADAY_PATHS:
+        raise ValueError(f"market must be one of {sorted(INTRADAY_PATHS)}")
+    seconds = INTERVAL_SECONDS[interval]
+    folder = Path(cache_dir) / f"klines_{interval}" / market
+    folder.mkdir(parents=True, exist_ok=True)
+    frames = []
+    for month in months:
+        path = folder / f"{symbol}-{month}.parquet"
+        if not path.exists():
+            payload = _fetch(ARCHIVE_URL + INTRADAY_PATHS[market].format(symbol=symbol, interval=interval, month=month))
+            if payload is None:
+                logger.warning("binance_klines_missing symbol={} interval={} month={} market={}", symbol, interval, month, market)
+                continue
+            raw = _read_zip_csv(payload, KLINE_COLUMNS)
+            opened = pd.to_numeric(raw["open_time"], errors="coerce")
+            unit = "us" if opened.max() > 1e14 else "ms"
+            frame = pd.DataFrame({"timestamp": pd.to_datetime(opened, unit=unit, utc=True)})
+            for column in ("open", "high", "low", "close", "volume"):
+                frame[column] = pd.to_numeric(raw[column], errors="coerce")
+            frame.dropna().to_parquet(path, index=False)
+        frames.append(pd.read_parquet(path))
+    if not frames:
+        return []
+    data = pd.concat(frames).drop_duplicates("timestamp").sort_values("timestamp")
+    return [OHLCVBar(exchange=f"binance_{market}", symbol=symbol, interval_seconds=seconds, timestamp=row.timestamp.to_pydatetime(), open=float(row.open),
+                     high=float(row.high), low=float(row.low), close=float(row.close), volume=float(row.volume)) for row in data.itertuples()]

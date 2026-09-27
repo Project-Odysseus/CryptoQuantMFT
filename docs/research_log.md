@@ -43,6 +43,29 @@ long/short x taker and maker costs, Kraken perp candles 2020-02 to 2026-09, last
 
 Same conclusion as the earlier intraday study: short-horizon price rules on BTC and ETH don't clear Kraken's costs.
 
+**Follow-up (same day): the posted version, 3-minute candles, on ten coins, perps and spot.** Kraken perp 1-minute
+candles resampled to 3m (BTC, ETH, 2026-06-29 to 09-27), and Binance's archive of 3m candles for BTC, ETH, SOL, XRP,
+DOGE, ADA, LINK, AVAX, LTC and DOT (June-August 2026, perps and spot), priced at Kraken's fees (perps 0.05% taker /
+0.02% maker, spot 0.40% / 0.25%). Reproduce with `--intervals 3m --days 90 --allow-download`, and `--source binance
+--market futures|spot --intervals 3m --allow-download`.
+
+| Data (3m) | Side | Positive combos | Median Sharpe IS / HO, taker | Median, maker | Avg trade after taker costs | Buy and hold IS / HO |
+| --- | --- | --- | --- | --- | --- | --- |
+| Kraken perps, BTC+ETH | long only | 0 of 24 | -21.8 / -25.5 | -4.5 / -5.8 | -0.20% | 5.0 / 3.1 |
+| Kraken perps, BTC+ETH | long/short | 0 of 24 | -28.7 / -35.4 | -7.2 / -11.0 | -0.20% | |
+| Binance perps, 10 coins | long only | 0 of 24 | -18.5 / -18.7 | -5.8 / -4.2 | -0.21% | -1.5 / 4.2 |
+| Binance perps, 10 coins | long/short | 0 of 24 | -24.0 / -26.1 | -6.2 / -7.0 | -0.21% | |
+| Binance spot, 10 coins | long only | 0 of 24 | -43.6 / -43.8 | -32.8 / -32.7 | -1.01% | -1.5 / 4.2 |
+| Binance spot, 10 coins | long/short | 0 of 24 | -58.1 / -58.5 | -42.7 / -44.0 | -1.01% | |
+
+- **No edge before costs.** In every data set the average trade after costs equals minus the round-trip cost, give
+  or take 0.01%: the 3-minute signal is worth about -0.01% a trade before fees, on every coin and both sides. No fee
+  level can fix that; it is noise that trades 300-600 times per coin in three months.
+- **Spot is far worse** only because Kraken's spot fee is eight times the perp fee.
+- **Verdict: drop it.** The 3m version as posted, the slower 15m/1h versions and the short leg were all tested; none
+  beats holding, and none has an edge before costs at 3m. Such posts usually show a few hand-picked winning trades,
+  not a year of every trade.
+
 ---
 
 ## 2026-09-27: Does Kraken's minimum lot break the live BTC book at small capital?
