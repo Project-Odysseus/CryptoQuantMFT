@@ -276,8 +276,8 @@ What each building block is and where it lives:
 | Pricing, validation gate, SVI market surface | `src/options/` | built |
 | Exposures and scenario grid across instruments | `src/portfolio/exposure.py` | built |
 | Deribit read-only connection | `src/execution/deribit_client.py`, `--deribit-check` | built, live key read-only |
-| Listed contracts and a picker (delta, tenor, liquidity) with roll rules | `src/options/contracts.py` | building now |
-| Exposure limits (`[risk.exposure]`) | `src/portfolio/exposure_limits.py` | building now |
-| Option positions in the book: marks, expiry settlement, realized P&L for tax | `src/portfolio/book.py` | building now |
-| Deribit trading adapter (testnet by default, no orders sent until approved) | `src/execution/deribit_adapter.py` | building now |
-| Option sleeves wired into the engine (structure intents) | engine plan E4 | next |
+| USDC-settled chains; a contract picker (delta, tenor, liquidity) with roll rules | `src/options/deribit.py`, `src/options/contracts.py` | built |
+| Exposure limits (`[risk.exposure]`) and how much of a proposal fits (`scale_for_limits`) | `src/portfolio/exposure_limits.py` | built, not yet enforced by the engine |
+| Option positions in the book: premium, marks, expiry at intrinsic, restarts; derivative tax records | `src/portfolio/book.py`, `engine.py` | built |
+| Deribit trading adapter: labelled limit orders, fills and fees settled by label, never resent, cancels, positions; refuses live unless allowed | `src/execution/deribit_adapter.py` | built, tested against a fake exchange only; no command sends orders |
+| Option sleeves in the config and engine (structure intents: pick, size by exposure, roll), marks from recorded chains, the adapter wired for testnet | engine plan E4 | next |

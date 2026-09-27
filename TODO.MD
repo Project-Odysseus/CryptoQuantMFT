@@ -102,7 +102,10 @@ direction is in `aspirations.md`.
 
 - [x] Foundation and research framework (2026-09-26): pricing on the forward, the validation gate, the notebook's PDE model fixed and ported, calibration in vol points, the SVI surface, Deribit chain storage, exposures and scenarios, and `notebooks/options_research.ipynb`
 - [ ] O1: start `--record-option-chains` on the always-on machine
-- [ ] O3b: exposure limits (`[risk.exposure]`) in the risk overlay, and an exposure section on the dashboard
+- [x] Options building blocks (2026-09-27): USDC-settled chains, a contract picker with roll rules, exposure limits
+  (`[risk.exposure]`), option positions in the book with expiry and tax, and a Deribit trading adapter (fake-exchange tests only)
+- [ ] O3b: enforce `[risk.exposure]` in the engine, and an exposure section on the dashboard
+- [ ] E4: option sleeves (tail hedge first) in the config and engine, marked from recorded USDC chains, paper first
 - [ ] O4: the IV vs realized-vol premium study
 - [ ] O5: option instruments and sleeves in the portfolio (research first)
 - [ ] O7: Deribit testnet paper trading. O8: live (needs Deribit keys, Norway eligibility, and more capital: the smallest BTC option is 0.1 BTC, the smallest linear USDC option 0.01 BTC)

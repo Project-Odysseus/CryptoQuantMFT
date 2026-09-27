@@ -79,11 +79,16 @@ class DeribitClient:
         self.scope = str(result.get("scope", ""))
         return result
 
-    def private(self, method: str, params: dict[str, Any] | None = None) -> Any:
-        """A private read (e.g. ``private/get_account_summary``), signing in first if needed."""
+    def private(self, method: str, params: dict[str, Any] | None = None, *, retry: bool = True) -> Any:
+        """A private call (e.g. ``private/get_account_summary``), signing in first if needed.
+
+        Reads and cancels are retried on temporary failures. Order placement passes `retry=False`: a timed-out
+        order may already be live, so it is looked up by its label instead of being sent again.
+        """
         if self._token is None or time.monotonic() >= self._expires_at:
             self.authenticate()
-        return retry_call(lambda: self._get(method, params or {}, {"Authorization": f"Bearer {self._token}"}), label=f"deribit {method}", sleep=self.sleep)
+        call = lambda: self._get(method, params or {}, {"Authorization": f"Bearer {self._token}"})  # noqa: E731
+        return retry_call(call, label=f"deribit {method}", sleep=self.sleep) if retry else call()
 
     def permissions(self) -> dict[str, str]:
         """The key's permission groups from its scope, e.g. {"account": "read", "trade": "read_write", "wallet": "none"}."""
