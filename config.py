@@ -49,6 +49,18 @@ class Settings(BaseSettings):
         default="",
         description="API secret for Kraken Futures (derivatives).",
     )
+    deribit_client_id: str = Field(
+        default="",
+        description="Deribit API client id (options). Read-only scope is enough for research and checks.",
+    )
+    deribit_client_secret: str = Field(
+        default="",
+        description="Deribit API client secret.",
+    )
+    deribit_testnet: bool = Field(
+        default=False,
+        description="Use test.deribit.com (a separate account and separate keys) instead of the live exchange.",
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
         default="INFO",
         description="Application-wide log level for the runtime logger.",

@@ -1874,6 +1874,49 @@ def kill_switch_reset() -> int:
     return 0
 
 
+def deribit_check(*, client: Any = None) -> int:
+    """Sign in to Deribit read-only and report the key's permissions, balances and positions (no orders)."""
+    from src.execution.deribit_client import DeribitClient
+
+    if client is None:
+        if not settings.deribit_client_id or not settings.deribit_client_secret:
+            print("Deribit keys are not set. Add to .env: DERIBIT_CLIENT_ID=... and DERIBIT_CLIENT_SECRET=... "
+                  "(and DERIBIT_TESTNET=true for test.deribit.com keys). Give the key wallet:none.")
+            return 2
+        client = DeribitClient(client_id=settings.deribit_client_id, client_secret=settings.deribit_client_secret, testnet=settings.deribit_testnet)
+    try:
+        client.authenticate()
+    except Exception as exc:  # noqa: BLE001 - report any sign-in failure plainly
+        print(f"Deribit sign-in FAILED ({'testnet' if client.testnet else 'live'}): {exc}")
+        return 1
+    permissions = client.permissions()
+    print(f"Deribit {'TESTNET' if client.testnet else 'live'}: signed in. Key permissions: "
+          + (", ".join(f"{name} {level}" for name, level in sorted(permissions.items())) or client.scope))
+    problems = []
+    if permissions.get("wallet", "none") != "none":
+        problems.append(f"the key has wallet:{permissions['wallet']}: it can move funds. Create a new key with wallet set to none")
+    if permissions.get("trade") == "read_write":
+        print("  Note: this key can trade. Research and checks only need trade:read; trading will go through the live gates, testnet first.")
+    held = {}
+    for currency in ("BTC", "ETH", "USDC", "USDT"):
+        try:
+            summary = client.account_summary(currency)
+        except Exception as exc:  # noqa: BLE001 - a currency without a sub-account is not an error
+            print(f"  {currency}: no account summary ({exc})")
+            continue
+        positions = client.positions(currency)
+        held[currency] = len(positions)
+        print(f"  {currency}: equity {float(summary.get('equity', 0.0)):.8f}, available {float(summary.get('available_funds', 0.0)):.8f}, "
+              f"margin balance {float(summary.get('margin_balance', 0.0)):.8f}, open positions {len(positions)}")
+    TradeLogger(database_path=settings.database_path).log_event(
+        timestamp=datetime.now(timezone.utc), level="WARNING" if problems else "INFO", event_type="deribit_check",
+        message="Deribit read-only check" + (" with problems" if problems else " passed"), source="main",
+        metadata={"testnet": client.testnet, "permissions": permissions, "positions": held, "problems": problems})
+    for problem in problems:
+        print(f"  PROBLEM: {problem}")
+    return 1 if problems else 0
+
+
 def _portfolio_live_refusal(args: argparse.Namespace, config: Any) -> str | None:
     """Why a live portfolio must not start (None when every gate passes). The same gates as single-strategy live, plus a money cap."""
     if not args.enable_live_trading:
@@ -2079,6 +2122,7 @@ def main() -> None:
     parser.add_argument("--option-chain-snapshot", nargs="*", metavar="CURRENCY", default=None, help="Fetch and store one Deribit option chain snapshot per currency (default BTC ETH), then exit. Public data, no keys")
     parser.add_argument("--record-option-chains", nargs="*", metavar="CURRENCY", default=None, help="Record Deribit option chains (default BTC ETH) every --option-chain-interval seconds until Ctrl-C, into data/options/deribit/")
     parser.add_argument("--option-chain-interval", type=float, default=3600.0, help="Seconds between option chain snapshots (default 3600)")
+    parser.add_argument("--deribit-check", action="store_true", help="Read-only Deribit check: sign in with DERIBIT_CLIENT_ID/SECRET, show the key's permissions, balances and positions. Places no orders")
     parser.add_argument("--futures-live-test", action="store_true", help="REAL ORDERS: buy the smallest --futures-symbol size on Kraken Futures and close it right away, checking fills, positions, the tax ledger and Telegram. Needs --enable-live-trading and --live-confirmation")
     parser.add_argument("--futures-venue-check", action="store_true", help="Non-destructive: fetch Kraken Futures public specs, fees, live mark price and funding history for --futures-symbol and print them (no credentials, no orders)")
     parser.add_argument("--futures-verify-credentials", action="store_true", help="Non-destructive: call Kraken Futures private read-only endpoints (accounts, open positions, open orders) with KRAKEN_FUTURES_API_KEY/SECRET and print the result. Places no orders")
@@ -2157,6 +2201,9 @@ def main() -> None:
 
     if args.futures_live_test:
         raise SystemExit(futures_live_test(args))
+
+    if args.deribit_check:
+        raise SystemExit(deribit_check())
 
     if args.option_chain_snapshot is not None or args.record_option_chains is not None:
         raise SystemExit(option_chains(args))

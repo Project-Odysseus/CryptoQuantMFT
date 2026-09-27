@@ -229,6 +229,9 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
   `portfolio_daily_summary`).
 - **Late fills:** an IOC order with no fill after 3 checks and 15 s is written off, but watched for another hour.
   If its fill then appears in Kraken's `/fills`, it is booked normally and Telegram gets a `late_fill` alert.
+- **Deribit:** keys go in `.env` as `DERIBIT_CLIENT_ID` and `DERIBIT_CLIENT_SECRET` (add `DERIBIT_TESTNET=true` for
+  test.deribit.com keys, which are separate). `python main.py --deribit-check` signs in read-only, prints the key's
+  permissions, balances and positions, and fails if the key can move funds (`wallet` must be none).
 - **Retries:** temporary exchange failures (timeouts, dropped connections, HTTP 429/5xx, Kraken's `EService` and
   rate-limit errors) are retried up to 3 times with backoff (0.5 s, 1 s), logged as `http_retry`. Only reads and
   cancels are retried. An order that times out is never resent; it is found later by its client order id.
