@@ -1,0 +1,22 @@
+# Runs the test suite on every push and pull request. Uses environment.yml (the same conda env as locally).
+# Tests that need downloaded research data (data/ is not in git) skip themselves; nothing here needs API keys,
+# and no test places real orders.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          cache-environment: true
+      - name: Run tests
+        shell: bash -el {0}
+        run: python -m pytest -q
