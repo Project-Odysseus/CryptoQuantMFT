@@ -75,6 +75,7 @@ class CycleReport:
     mismatches: dict[str, dict[str, float]] = field(default_factory=dict)
     adapter_events: list[dict[str, Any]] = field(default_factory=list)
     sleeve_errors: dict[str, str] = field(default_factory=dict)
+    cooldowns: dict[str, str] = field(default_factory=dict)  # instrument -> ISO time its rejection cooldown ends
 
 
 def build_paper_adapters(
@@ -191,6 +192,8 @@ class PortfolioEngine:
         self.equity_drift_alerted = False
         self.book_id = uuid.uuid4().hex[:10]  # part of every client order id; kept in the checkpoint
         self.sleeve_error_counts: dict[str, int] = {}
+        self.rejection_streak: dict[str, int] = {}  # consecutive rejected orders per instrument (survives restarts)
+        self.cooldown_until: dict[str, str] = {}  # instrument -> ISO time until which only reductions are sent
         self.disabled_sleeves: set[str] = set()
         self.cycle = 0
         self.restored = self._load()
@@ -427,10 +430,13 @@ class PortfolioEngine:
         plan = plan_orders(self.book.units(), report.adjusted, prices=prices, equity=equity, instruments=self.config.instruments, band=self.config.rebalance_band,
                            small_lot_cap=self.config.small_lot_cap(equity))
         busy = {meta["instrument"] for meta in self.pending_orders.values()}
+        cooling = self._cooldowns(now)
         orders = []
         for order in plan.orders:
             if order.instrument in busy:  # never stack a second order on one whose fill isn't settled
                 plan.skipped.append(SkippedChange(order.instrument, "order_pending", self.book.weights().get(order.instrument, 0.0), order.target_weight))
+            elif order.instrument in cooling and not order.reduce_only:  # repeated rejections: only reductions until the cooldown ends
+                plan.skipped.append(SkippedChange(order.instrument, "rejection_cooldown", self.book.weights().get(order.instrument, 0.0), order.target_weight))
             elif self.unreconciled and not order.reduce_only:  # an unknown state: only reductions until resolved
                 plan.skipped.append(SkippedChange(order.instrument, "unreconciled", self.book.weights().get(order.instrument, 0.0), order.target_weight))
             else:
@@ -439,6 +445,26 @@ class PortfolioEngine:
         for number, order in enumerate(orders):
             self._execute(order, number=number, attribution=attribution.get(order.instrument, {}), report=report, now=now)
         self._settle_pending(report, now)
+        report.cooldowns = dict(self._cooldowns(now))
+
+    def _cooldowns(self, now: datetime) -> dict[str, str]:
+        """Active rejection cooldowns; expired ones are dropped (the streak stays, so one more rejection restarts it)."""
+        for instrument, until in list(self.cooldown_until.items()):
+            if now >= datetime.fromisoformat(until):
+                del self.cooldown_until[instrument]
+                self._event("INFO", "portfolio_rejection_cooldown_ended", f"{instrument}: rejection cooldown over, orders resume",
+                            {"instrument": instrument}, now)
+        return dict(self.cooldown_until)
+
+    def _note_rejection(self, instrument: str, now: datetime) -> None:
+        """Count a rejection; at the configured streak, start (or restart) the instrument's cooldown."""
+        streak = self.rejection_streak[instrument] = self.rejection_streak.get(instrument, 0) + 1
+        after = self.config.risk.rejection_cooldown_after
+        if after and streak >= after and instrument not in self.cooldown_until:
+            until = now + timedelta(hours=self.config.risk.rejection_cooldown_hours)
+            self.cooldown_until[instrument] = until.isoformat()
+            self._event("WARNING", "portfolio_rejection_cooldown", f"{instrument}: {streak} rejected orders in a row; only reductions until {until:%Y-%m-%d %H:%M} UTC",
+                        {"instrument": instrument, "streak": streak, "until": until.isoformat()}, now)
 
     def _execute(self, order: PlannedOrder, *, number: int, attribution: Mapping[str, float], report: CycleReport, now: datetime) -> None:
         spec = self.config.instruments[order.instrument]
@@ -456,12 +482,14 @@ class PortfolioEngine:
             rejection = {"order_id": order_id, "instrument": order.instrument, "side": order.side, "units": str(order.units), "reason": order.reason, "message": result.message}
             report.rejected.append(rejection)
             self._event("WARNING", "portfolio_order_rejected", f"{order.side} {order.units} {order.instrument} rejected: {result.message}", rejection, now)
+            self._note_rejection(order.instrument, now)
             return
         self._book_fill(meta, filled_size=float(result.filled_size), fill_price=float(result.fill_price), fee=float(result.fee), report=report, now=now)
 
     def _book_fill(self, meta: Mapping[str, Any], *, filled_size: float, fill_price: float, fee: float, report: CycleReport, now: datetime) -> None:
         """Book one fill (immediate or settled later): the book, the tax ledger, the trade log, the event log and Telegram."""
         instrument = meta["instrument"]
+        self.rejection_streak.pop(instrument, None)  # the exchange takes orders again
         spec = self.config.instruments[instrument]
         drivers = dict(meta.get("sleeves", {}))
         strategy_id = next(iter(drivers)) if len(drivers) == 1 else "portfolio"
@@ -738,6 +766,8 @@ class PortfolioEngine:
             "last_grid_bar": self.last_grid_bar.isoformat() if self.last_grid_bar else None,
             "last_grid_close": self.last_grid_close,
             "disabled_sleeves": sorted(self.disabled_sleeves),
+            "rejection_streak": self.rejection_streak,
+            "cooldown_until": self.cooldown_until,
             "last_decisions": self.last_decisions,
             "pending_tax": self.pending_tax,
             "pending_orders": self.pending_orders,
@@ -774,6 +804,8 @@ class PortfolioEngine:
         self.written_off_orders = dict(payload.get("written_off_orders", {}))
         self.unreconciled = dict(payload.get("unreconciled", {}))
         self.funding_booked_until = dict(payload.get("funding_booked_until", {}))
+        self.rejection_streak = {key: int(value) for key, value in dict(payload.get("rejection_streak", {})).items()}
+        self.cooldown_until = dict(payload.get("cooldown_until", {}))
         self.book_id = str(payload.get("book_id", self.book_id))
         return True
 

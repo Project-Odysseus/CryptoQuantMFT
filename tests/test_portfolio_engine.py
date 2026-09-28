@@ -255,3 +255,66 @@ def test_paper_runs_never_write_the_tax_ledger(tmp_path) -> None:
     for index in range(FIRST, 260):
         engine.run_cycle(bars_until(index), now=_now(index))
     assert logger.list_tax_events() == [] and engine.pending_tax == []
+
+
+def test_repeated_rejections_pause_new_risk_on_that_instrument_but_not_reductions(tmp_path) -> None:
+    """After 3 rejections in a row on BTC, only BTC reductions are sent for the cooldown; ETH is untouched; restarts keep it."""
+    import inspect
+
+    from src.execution.adapters import ExecutionReport
+
+    config = _config()
+    engine = _engine(config, tmp_path, state=True)
+    adapter = engine.adapters["kraken_futures"]
+    real_submit = adapter.submit_order
+    reject_btc = {"on": True}
+    sent: list[tuple[str, bool]] = []
+
+    def flaky_submit(**kwargs: Any) -> ExecutionReport:
+        symbol, reduce_only = kwargs.get("symbol"), bool(kwargs.get("reduce_only"))
+        if symbol == "BTC/USD":
+            sent.append((kwargs["side"], reduce_only))
+            if reject_btc["on"] and not reduce_only:
+                return ExecutionReport(order_id=kwargs["order_id"], status="REJECTED", message="insufficientAvailableFunds")
+        return real_submit(**kwargs)
+
+    flaky_submit.__signature__ = inspect.signature(real_submit)  # the engine checks it accepts reduce_only
+    adapter.submit_order = flaky_submit
+
+    rejections, cooled_at, skipped_for_cooldown = 0, None, 0
+    for index in range(FIRST, LAST):
+        until = engine.cooldown_until.get(BTC)
+        cooling = until is not None and datetime.fromisoformat(until) > _now(index)
+        before = len(sent)
+        report = engine.run_cycle(bars_until(index), now=_now(index))
+        if cooling:
+            assert all(reduce_only for _, reduce_only in sent[before:])  # nothing that adds BTC risk while cooling
+        rejections += len([r for r in report.rejected if r["instrument"] == BTC])
+        skipped_for_cooldown += sum(1 for skip in report.skipped if skip.reason == "rejection_cooldown")
+        assert all(r["instrument"] == BTC for r in report.rejected)  # ETH trades normally
+        if report.cooldowns and cooled_at is None:
+            cooled_at = index
+            assert BTC in report.cooldowns and rejections == 3
+            # a restart mid-cooldown keeps it
+            engine = PortfolioEngine(config, adapters=engine.adapters, book=engine.book, state_path=tmp_path / "engine.json")
+            assert engine.cooldown_until.keys() == {BTC} and engine.rejection_streak[BTC] == 3
+        if cooled_at is not None and index > cooled_at + 40:
+            break
+    assert cooled_at is not None and skipped_for_cooldown > 0
+    # after the first cooldown, at most one probe per 24h (6 bars) reaches the exchange and is rejected
+    assert rejections <= 3 + (index - cooled_at) // 6 + 1
+
+    reject_btc["on"] = False  # the exchange accepts again: after the cooldown BTC trades, and a fill resets the streak
+    for step in range(index + 1, min(index + 60, LAST)):
+        report = engine.run_cycle(bars_until(step), now=_now(step))
+        if any(fill["instrument"] == BTC for fill in report.fills) and not report.cooldowns:
+            break
+    assert BTC not in engine.rejection_streak
+
+
+def test_the_cooldown_settings_are_validated() -> None:
+    from src.portfolio.risk import PortfolioRiskConfig
+
+    assert PortfolioRiskConfig(rejection_cooldown_after=0).rejection_cooldown_after == 0  # off
+    with pytest.raises(ValueError, match="rejection_cooldown"):
+        PortfolioRiskConfig(rejection_cooldown_hours=0)

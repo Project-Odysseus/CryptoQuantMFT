@@ -234,6 +234,13 @@ class PortfolioRuntime:
                                 {"instrument": action.instrument})
             for key in [name for name in self._active_alerts if name.startswith("risk_limit:") and name not in acting]:
                 self._clear(key)
+        for instrument, until in report.cooldowns.items():
+            self._alert(f"rejection_cooldown:{instrument}", f"{instrument}: repeated order rejections; only reductions are sent until {until[:16].replace('T', ' ')} UTC.",
+                        {"instrument": instrument, "until": until})
+        if report.decided:
+            for key in [name for name in self._active_alerts if name.startswith("rejection_cooldown:")]:
+                if key.split(":", 1)[1] not in report.cooldowns:
+                    self._clear(key)
         for rejection in report.rejected:  # one message per rejection, never "active"
             key = f"order_rejected:{rejection['order_id']}"
             self._alert(key, f"Order rejected: {rejection['side']} {rejection['units']} {rejection['instrument']}: {rejection['message']}", rejection)

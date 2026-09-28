@@ -47,7 +47,7 @@ direction is in `aspirations.md`.
   dead process or machine can't lose more than that. All stops are checked by the running process today (`aspirations.md` 1)
 - [ ] Kill criteria per sleeve, written before live (e.g. live Sharpe over 6 months, drawdown vs backtest) and checked by the
   performance review, so a decaying sleeve is flagged by rule rather than by feel (`aspirations.md` 3)
-- [ ] A cooldown after repeated order rejections. Rejections alert, but trading doesn't pause automatically
+- [x] A cooldown after repeated order rejections (2026-09-28): 3 in a row on an instrument -> only reductions on it for 24 hours
 - [x] The open items in `todo_important.md` (all done 2026-09-27)
 
 ## 2. Portfolio (plan: `docs/portfolio_plan.md`)

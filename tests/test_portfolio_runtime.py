@@ -344,3 +344,17 @@ def test_a_daily_summary_is_sent_once_per_utc_day(tmp_path) -> None:
     assert len(summaries) == 2
     assert summaries[0]["message"].startswith("Daily summary 2023-") and "Equity" in summaries[0]["message"] and "Open problems" in summaries[0]["message"]
     assert len(logger.list_events(event_types=["portfolio_daily_summary"])) == 2
+
+
+def test_a_rejection_cooldown_alerts_once_when_it_starts_and_once_when_it_ends(tmp_path) -> None:
+    from src.portfolio.engine import CycleReport
+
+    runtime, _logger, notifier = _runtime(tmp_path)
+    now = T0
+    cooling = CycleReport(timestamp=now, decided=True, equity=1.0, cooldowns={BTC: "2024-01-02T04:00:00+00:00"})
+    runtime._watch(cooling, {}, [])
+    runtime._watch(cooling, {}, [])  # still active: no second message
+    runtime._watch(CycleReport(timestamp=now, decided=True, equity=1.0), {}, [])
+    kinds = [alert["event_type"] for alert in notifier.alerts]
+    assert kinds == ["rejection_cooldown", "rejection_cooldown_resolved"]
+    assert "2024-01-02 04:00 UTC" in notifier.alerts[0]["message"]

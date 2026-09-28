@@ -187,7 +187,8 @@ Plan and status: `docs/portfolio_plan.md`.
   chain snapshots (`deribit.py`). Design: `docs/options_plan.md`.
 - `src/portfolio/runtime.py`: `PortfolioRuntime`, the loop. It fetches, finds stale instruments, runs a cycle,
   alerts once per problem, writes snapshots to SQLite (`portfolio_snapshots`), checks the kill switch and handles
-  SIGTERM.
+  SIGTERM. Repeated order rejections on an instrument put it in a reduce-only cooldown (`PortfolioEngine._note_rejection`,
+  `[risk] rejection_cooldown_*`), kept in the checkpoint.
 
 ## 4. How the pieces actually work together
 

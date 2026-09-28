@@ -49,6 +49,11 @@ class PortfolioRiskConfig:
     drawdown_derisk_floor: float = 0.5
     stale_after_bars: int = 2
     max_gross_notional: float | None = None  # total position value cap in money (base currency); required for live trading
+    # After this many rejected orders in a row on one instrument, stop sending orders that add to it for
+    # `rejection_cooldown_hours` (reductions still go out). Hours, not minutes: the book decides once per bar (4h), so
+    # a shorter pause would end before the next decision. A fill resets the count. 0 switches it off.
+    rejection_cooldown_after: int = 3
+    rejection_cooldown_hours: float = 24.0
     # Limits on what the book is exposed to, per underlying, as shares of equity ([risk.exposure]; see exposure_limits.py)
     exposure: dict[str, float] = field(default_factory=dict)
 
@@ -68,6 +73,8 @@ class PortfolioRiskConfig:
                 raise ValueError(f"risk.max_venue_exposure.{venue} must be above 0")
         if self.stale_after_bars < 1:
             raise ValueError("risk.stale_after_bars must be at least 1")
+        if self.rejection_cooldown_after < 0 or not self.rejection_cooldown_hours > 0:
+            raise ValueError("risk.rejection_cooldown_after must be 0 (off) or more, and risk.rejection_cooldown_hours above 0")
         if self.max_gross_notional is not None and not self.max_gross_notional > 0:
             raise ValueError("risk.max_gross_notional must be above 0 (money, in the base currency)")
         from src.portfolio.exposure_limits import EXPOSURE_LIMIT_KEYS

@@ -24,6 +24,8 @@ max_instrument_weight = 1.0
 max_drawdown = 0.40               # kill: flatten and stay flat until --portfolio-reset-peak
 daily_loss_limit = 0.10
 stale_after_bars = 2
+rejection_cooldown_after = 3      # this many rejected orders in a row on one instrument: only reductions on it for...
+rejection_cooldown_hours = 24     # ...this long, then one more try (0 for _after switches it off)
 max_gross_notional = 15           # USD: room for one 0.0001 BTC lot (~8 USD), never two
 
 [instruments."kraken_futures:BTC/USD"]

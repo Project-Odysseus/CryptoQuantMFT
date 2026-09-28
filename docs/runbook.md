@@ -210,6 +210,10 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
   sent once when a problem starts and once when it clears, for: stale or failing market data per instrument, a risk
   limit acting, rejected orders, reconciliation mismatches, a sleeve disabled after 3 failing cycles, and failed
   cycles (the runtime stops itself after 5 in a row).
+- **Rejection cooldown:** after 3 rejected orders in a row on one instrument (`[risk] rejection_cooldown_after`), the
+  book sends only reductions on it for 24 hours (`rejection_cooldown_hours`), then tries once more; a fill resets the
+  count. It survives restarts and alerts when it starts and ends. Rejections usually mean margin, size or account
+  problems: check `--preflight` and the account before it ends.
 - **Kill switch:** `python main.py --kill-switch` from any terminal. It works with or without a runtime running:
   it marks the switch active (every runtime stops; a running portfolio also closes its positions at its next cycle),
   cancels every open order on Kraken spot and Kraken Futures, and closes every Kraken Futures position with
