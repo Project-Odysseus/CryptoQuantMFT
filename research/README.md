@@ -1,12 +1,13 @@
 # Hypothesis research: H1 crowding, H2 liquidation overshoot, H3 variance risk premium
 
 Pre-registered tests of three mechanism-driven hypotheses on BTC, ETH and SOL (spot and USDT perps), run
-2026-09-28 on development data to 2025-12-31. The frozen holdout (2026-01-01 on) has **not** been opened.
+2026-09-28 on development data to 2025-12-31. The frozen holdout (2026-01-01 on) was opened once, with approval,
+for the only development survivor (H1b carry); it failed.
 
 | | Hypothesis | Verdict (development) | Report |
 | --- | --- | --- | --- |
 | H1a | High funding z (crowded longs) predicts lower 1-7d returns | **FAIL**: the sign is reversed; tilt fails placebo | [H1](reports/H1.md) |
-| H1b | Timed delta-neutral carry clears 4 legs of costs | **PASS at Binance fees, pending holdout**; regime-dependent, ~0 in 2025; marginal at Kraken fees | [H1](reports/H1.md) |
+| H1b | Timed delta-neutral carry clears 4 legs of costs | Passed development at Binance fees; **FAILED the holdout** (-0.10% Jan-Aug 2026: funding stayed far below the hurdle) | [H1](reports/H1.md) |
 | H2 | Liquidation cascades revert (PROXY events) | **FAIL** (proxy): indistinguishable from vol-matched baseline, loses at stressed costs | [H2](reports/H2.md) |
 | H3-P1 | IV exceeds later realized vol | **FAIL as registered**: yes for BTC (+6 pts, t 3.4), no for ETH | [H3](reports/H3.md) |
 | H3-A1 | IV sizing beats realized-vol sizing | **FAIL** (killed): +0.02 Sharpe, worse matched drawdown | [H3](reports/H3.md) |
@@ -16,9 +17,9 @@ Trials logged to `data/research/trial_ledger.jsonl`: H1 12, H2 3, H3 4 (ledger t
 
 ## What this means for deployment
 
-1. **Nothing is ready to trade.** The one survivor, timed carry, needs the holdout, and on the venue you trade
-   (Kraken) its 0.40% spot fee leaves only the 30-day-hold version above 2x costs. Its money came from bull-market
-   funding (2020-21, 2024); in 2025 it earned ~0. Expect the same in the 2026 holdout.
+1. **Nothing is ready to trade.** The one development survivor, timed carry, earned nothing in the holdout: it only
+   pays when funding runs well above ~10% a year (2020-21, 2024). On Kraken its 0.40% spot fee makes it marginal
+   even then. Treat it as a regime trade to revisit if funding rises, not as a sleeve to build now.
 2. **Keep the runtime's EWMA sizing.** IV sizing didn't earn its complexity (H3-A1), and a DVOL-spike risk-off
    filter hurt.
 3. **Don't build a funding-crowding filter on the trend book.** That roadmap item assumed the contrarian sign,
@@ -26,12 +27,10 @@ Trials logged to `data/research/trial_ledger.jsonl`: H1 12, H2 3, H3 4 (ledger t
 
 ## Suggested next steps, in order
 
-1. **Approve (or not) one holdout look** for H1b "carry, Binance fees, 14-day hold", the pre-registered middle
-   configuration. If it's positive, carry becomes a candidate sleeve: uncorrelated with the trend book (-0.06
-   daily, -0.05 on the book's worst days), lifting the book's development Sharpe from 0.73 to 0.86 at 30% notional
-   per coin (`scripts/research/combine_sleeves.py`). It needs a spot + perp venue with low spot fees (Binance or
-   Bybit trading keys) and a two-leg sleeve type in the portfolio engine, so it is a build, not a config change.
-2. **Keep the collectors running** (`scripts/collectors/run_collectors.sh`, liquidations + hourly option chains),
+1. ~~Holdout look for H1b~~ done 2026-09-28: failed. In development carry was uncorrelated with the trend book (-0.06)
+   and lifted its Sharpe from 0.73 to 0.86 (`scripts/research/combine_sleeves.py`), so it is worth revisiting in a
+   high-funding regime; building it would need a low-fee spot + perp venue and a two-leg sleeve type.
+2. **Keep the collectors running** (now a LaunchAgent: `deploy/launchd/com.cryptoquant.collectors.plist`) (`scripts/collectors/run_collectors.sh`, liquidations + hourly option chains),
    ideally on the always-on machine. They are the only route to testing H2 on real liquidations (6-12 months) and
    H3's term structure and phase-B bid/ask economics (3-12 months). Phase B (short BTC vol) is the most promising
    lead here: the BTC premium is consistent, but it shrank to 1.7 points in 2025 and has to beat Deribit's spreads.

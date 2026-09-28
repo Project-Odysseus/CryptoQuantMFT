@@ -70,7 +70,8 @@ direction is in `aspirations.md`.
 - [ ] Security: allow the API keys only from the server's IP; confirm neither Kraken key can withdraw; document key rotation and incident response
 - [ ] Single-strategy runtime, only if it keeps running unattended: bounded memory (`RuntimeOrchestrator.history`, and paper `run()` replaying every bar), bars from exchange candles, and HTTP off the event loop, as the portfolio feed does
 - [ ] Recorders on the server: option chains first (small); the order-flow recorder needs disk or compression first (several GB a day).
-  A light liquidations + hourly option-chain collector exists (`scripts/collectors/run_collectors.sh`, running locally since 2026-09-28)
+  A light liquidations + hourly option-chain collector runs as a LaunchAgent on the Mac since 2026-09-28
+  (`deploy/launchd/com.cryptoquant.collectors.plist`); move it to the always-on machine with the rest
 
 ## 4. Tax (Norway)
 
@@ -97,8 +98,8 @@ direction is in `aspirations.md`.
 - [ ] Small free daily series: US spot ETF flows, stablecoin supply, the Coinbase premium, an event calendar (CPI, FOMC, expiries)
 - [ ] Candidates from features: a funding z-score sleeve and a crowding composite, sized against `total_trials()`.
   The funding z-score tilt failed its placebo (H1, 2026-09-28)
-- [ ] H1b timed carry: one holdout look for "Binance fees, 14-day hold" (needs the owner's approval), then, if it
-  holds, a two-leg (spot + perp) sleeve type and a low-fee venue (Binance/Bybit trading keys, section 7)
+- [x] H1b timed carry: one holdout look for "Binance fees, 14-day hold" (2026-09-28): failed (-0.10% Jan-Aug 2026, funding
+  far below the hurdle). Revisit only if funding runs above ~10-15% a year again
 - [ ] H2 v2 on real liquidations after 6-12 months of `scripts/collectors/run_collectors.sh`: first check that proxy
   events line up with liquidation notional > 5x median
 - [ ] H3 phase B scoping (BTC short vol, defined risk): bid/ask economics on ~3 months of recorded hourly chains, or

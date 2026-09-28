@@ -26,9 +26,13 @@ Also found and fixed: DVOL was aligned at its candle open, so hourly features co
 implied vol (`positioning.load_positioning`); and raw `asi8` comparisons across ms/us/ns timestamps silently
 dropped funding in the first H2/H3 runs (now always compared in ns).
 
+**Holdout (one approved look, 2026-09-28):** carry at Binance fees, 14-day hold, Jan-Aug 2026: **-0.10%** pooled
+(pass needed > 0). Funding averaged 2.5%/yr on BTC against a 9.9% hurdle, so the rule sat out seven months and lost
+its one August round trip to costs. Always-on carry made +0.5%. H1b fails; carry is a regime trade for high-funding
+markets only.
+
 What this changes: don't build the funding-crowding filter on the trend rules (the sign is reversed at these
-horizons); keep EWMA sizing; carry is the one candidate, pending a single holdout look and a low-fee spot + perp
-venue. Liquidations and option chains are now being recorded for the real H2 and H3 phase-B tests.
+horizons); keep EWMA sizing; don't build a carry sleeve now. Liquidations and option chains are now being recorded for the real H2 and H3 phase-B tests.
 
 ---
 
