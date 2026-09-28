@@ -164,3 +164,21 @@ def test_a_narrowly_quoted_slice_keeps_flat_wings_instead_of_extrapolating_its_c
     surface = SVISurface(slices=(steep, SVISlice(t=34 / 365, a=-0.037, b=0.128, rho=-0.442, m=-0.192, s=0.418, k_low=-0.43, k_high=0.31)))
     checks = validate_model(surface, forward=F, strikes=[F * m for m in (0.45, 0.55, 0.7, 0.85, 1.0, 1.2, 1.5)], expiries=[25 / 365, 30 / 365], tolerance=2e-4)
     assert all(check.passed for check in checks), [check for check in checks if not check.passed]
+
+
+def test_record_chains_retries_a_failed_snapshot_within_the_round(tmp_path, monkeypatch) -> None:
+    chain = pd.DataFrame({"instrument": ["BTC-X"], "strike": [1.0]})
+    outcomes = iter([OSError("network down"), OSError("network down"), chain])
+    calls = []
+
+    def flaky(currency: str) -> pd.DataFrame:
+        calls.append(currency)
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome.assign(currency=currency)
+
+    monkeypatch.setattr(deribit, "save_chain", lambda frame, root: tmp_path / "x.parquet")
+    monkeypatch.setattr(deribit, "fetch_chain", flaky)
+    saved = asyncio.run(deribit.record_chains(("BTC",), every_seconds=10, root=tmp_path, iterations=1, retry_seconds=0.01))
+    assert saved == 1 and calls == ["BTC", "BTC", "BTC"]  # two failures retried inside the round, no hour lost

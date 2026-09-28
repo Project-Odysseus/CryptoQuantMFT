@@ -134,29 +134,45 @@ def latest_chain(currency: str = "BTC", *, root: Path | str = CHAIN_ROOT) -> pd.
 
 
 async def record_chains(currencies: Iterable[str] = ("BTC", "ETH", "USDC"), *, every_seconds: float = 3600.0, root: Path | str = CHAIN_ROOT,
-                        iterations: int = 0, stop: asyncio.Event | None = None) -> int:
+                        iterations: int = 0, stop: asyncio.Event | None = None, retry_seconds: float = 60.0) -> int:
     """Snapshot each currency every `every_seconds` until stopped (or `iterations` rounds); returns snapshots saved.
 
-    The request runs in a worker thread. A failing currency or round is
-    logged and retried next round, and never stops the recorder.
+    The request runs in a worker thread. A currency that fails (e.g. the network is down) is logged and retried every
+    `retry_seconds` until it succeeds or the next round is due, so a short outage costs minutes, not a whole round.
+    Nothing stops the recorder; rounds stay on their original schedule.
     """
     stop = stop or asyncio.Event()
+    loop = asyncio.get_running_loop()
     saved = rounds = 0
+
+    async def wait(seconds: float) -> None:
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=max(0.0, seconds))
+        except asyncio.TimeoutError:
+            pass
+
     while not stop.is_set() and (iterations == 0 or rounds < iterations):
-        for currency in currencies:
-            try:
-                chain = await asyncio.to_thread(fetch_chain, currency)
-                if not chain.empty:
-                    path = save_chain(chain, root)
-                    saved += 1
-                    logger.info("option_chain_saved currency={} contracts={} path={}", currency, len(chain), path)
-            except Exception as exc:  # noqa: BLE001 - the recorder must outlive a bad request
-                logger.warning("option_chain_failed currency={} error={!r}", currency, exc)
+        next_round = loop.time() + every_seconds
+        pending = list(currencies)
+        while pending and not stop.is_set():
+            failed = []
+            for currency in pending:
+                try:
+                    chain = await asyncio.to_thread(fetch_chain, currency)
+                    if not chain.empty:
+                        path = save_chain(chain, root)
+                        saved += 1
+                        logger.info("option_chain_saved currency={} contracts={} path={}", currency, len(chain), path)
+                except Exception as exc:  # noqa: BLE001 - the recorder must outlive a bad request
+                    logger.warning("option_chain_failed currency={} error={!r}", currency, exc)
+                    failed.append(currency)
+            pending = failed
+            if pending and loop.time() + retry_seconds < next_round:
+                await wait(retry_seconds)
+            else:
+                break
         rounds += 1
         if iterations and rounds >= iterations:
             break
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=every_seconds)
-        except asyncio.TimeoutError:
-            pass
+        await wait(next_round - loop.time())
     return saved
