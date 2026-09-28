@@ -319,4 +319,9 @@ def describe(config: PortfolioConfig) -> str:
     daily = f"daily loss limit {risk.daily_loss_limit:.0%}" if risk.daily_loss_limit is not None else "no daily loss limit"
     daily += f"; positions at most {risk.max_gross_notional:,.0f} {config.base_currency} in total" if risk.max_gross_notional else ""
     lines.append(f"Risk: gross <= {risk.max_gross_exposure:g}x, net <= {risk.max_net_exposure:g}x, per instrument <= {risk.max_instrument_weight:g}x{venues}; {derisk}; {daily}")
+    stop = (f"a reduce-only stop resting on the exchange {risk.exchange_stop_pct:.0%} beyond each position's price" if risk.exchange_stop_pct is not None
+            else "no exchange stop (live: nothing caps the loss if the process dies)")
+    cooldown = (f"after {risk.rejection_cooldown_after} rejected orders in a row, only reductions on that instrument for {risk.rejection_cooldown_hours:g}h"
+                if risk.rejection_cooldown_after else "no rejection cooldown")
+    lines.append(f"Safety: {stop}; {cooldown}")
     return "\n".join(lines)

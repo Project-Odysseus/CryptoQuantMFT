@@ -47,12 +47,26 @@ class FakeKraken:
         self.delay_fills = False  # when set, new fills stay out of /fills until release_fills()
         self.hidden_fills: list[dict[str, Any]] = []
         self.realized = 0.0
+        self.resting: list[dict[str, Any]] = []  # stop orders waiting for their trigger
+        self.refuse_stops = False
 
     def __call__(self, method: str, url: str, headers: dict[str, str], body: bytes | None) -> dict[str, Any]:
         path, _, query = url.partition("?")
         endpoint = path.rsplit("/", 1)[-1]
         params = dict(urllib.parse.parse_qsl(body.decode() if body else query))
         self.requests.append({"endpoint": endpoint, "params": params})
+        if endpoint == "sendorder" and params.get("orderType") == "stp":
+            if self.refuse_stops:
+                return {"result": "success", "sendStatus": {"status": "invalidPrice"}}
+            order_id = f"stop-uuid-{len(self.requests)}"
+            self.resting.append({"order_id": order_id, "cliOrdId": params["cliOrdId"], "symbol": params["symbol"], "side": params["side"],
+                                 "size": float(params["size"]), "stopPrice": float(params["stopPrice"]), "triggerSignal": params["triggerSignal"],
+                                 "reduceOnly": params["reduceOnly"] == "true"})
+            return {"result": "success", "sendStatus": {"status": "placed", "order_id": order_id}}
+        if endpoint == "cancelorder":
+            before = len(self.resting)
+            self.resting = [o for o in self.resting if o["order_id"] != params.get("order_id") and o["cliOrdId"] != params.get("cliOrdId")]
+            return {"result": "success", "cancelStatus": {"status": "cancelled" if len(self.resting) < before else "notFound"}}
         if endpoint == "sendorder":
             size, entry = self.positions.get(params["symbol"], [0.0, 0.0])
             signed = float(params["size"]) * (1 if params["side"] == "buy" else -1)
@@ -66,7 +80,9 @@ class FakeKraken:
         if endpoint == "fills":
             return {"result": "success", "fills": list(self.fills)}
         if endpoint == "openorders":
-            return {"result": "success", "openOrders": []}
+            return {"result": "success", "openOrders": [{"order_id": o["order_id"], "cliOrdId": o["cliOrdId"], "symbol": o["symbol"], "side": o["side"],
+                                                         "orderType": "stp", "stopPrice": o["stopPrice"], "unfilledSize": o["size"], "reduceOnly": o["reduceOnly"],
+                                                         "triggerSignal": o["triggerSignal"], "status": "untouched"} for o in self.resting]}
         if endpoint == "openpositions":
             return {"result": "success", "openPositions": [{"symbol": symbol, "side": "long" if size > 0 else "short", "size": abs(size), "price": entry,
                                                             "unrealizedFunding": 0.0} for symbol, (size, entry) in self.positions.items() if size]}
@@ -76,6 +92,7 @@ class FakeKraken:
             used = sum(abs(size) * self.prices[symbol] / 2.0 for symbol, (size, _entry) in self.positions.items())
             return {"result": "success", "accounts": {"flex": {"marginEquity": equity, "availableMargin": equity - used, "totalUnrealized": unrealized}}}
         if endpoint == "cancelallorders":
+            self.resting = []
             return {"result": "success", "cancelStatus": {"status": "cancelled"}}
         raise AssertionError(f"unexpected endpoint {endpoint}")
 
@@ -95,10 +112,25 @@ class FakeKraken:
         else:
             self.positions[symbol] = [new, entry]
         self.collateral -= abs(signed) * price * 0.0005  # the taker fee Kraken charges (our estimate uses the same rate)
-        fill = {"cliOrdId": cli_ord_id, "order_id": f"uuid-{len(self.fills) + len(self.hidden_fills) + 1}", "symbol": symbol, "size": abs(signed), "price": price,
+        number = len(self.fills) + len(self.hidden_fills) + 1
+        fill = {"cliOrdId": cli_ord_id, "order_id": f"uuid-{number}", "fill_id": f"fill-{number}", "symbol": symbol, "size": abs(signed), "price": price,
                 "side": "buy" if signed > 0 else "sell", "fillType": "taker"}
         (self.hidden_fills if self.delay_fills else self.fills).append(fill)
         return fill["order_id"]  # unique, as Kraken's order ids are
+
+    def trigger_stops(self) -> list[dict[str, Any]]:
+        """Fire every resting stop whose mark has crossed it: a reduce-only market fill at the current price."""
+        fired = []
+        for order in list(self.resting):
+            mark = self.prices[order["symbol"]]
+            if (order["side"] == "sell" and mark <= order["stopPrice"]) or (order["side"] == "buy" and mark >= order["stopPrice"]):
+                self.resting.remove(order)
+                size, _entry = self.positions.get(order["symbol"], [0.0, 0.0])
+                closable = min(order["size"], abs(size)) if size and (size > 0) == (order["side"] == "sell") else 0.0
+                if closable:
+                    self._fill(order["symbol"], closable if order["side"] == "buy" else -closable, order["cliOrdId"])
+                    fired.append(order)
+        return fired
 
     def release_fills(self) -> None:
         self.fills += self.hidden_fills
@@ -183,8 +215,8 @@ def test_sync_adopts_krakens_positions_and_reports_changes_we_did_not_make() -> 
     assert event["type"] == "liquidation" and event["symbol"] == "BTC/USD"
 
 
-def _live_engine(fake: FakeKraken, tmp_path, *, logger=None, notifier=None, funding=None) -> PortfolioEngine:
-    config = _config()
+def _live_engine(fake: FakeKraken, tmp_path, *, logger=None, notifier=None, funding=None, config=None) -> PortfolioEngine:
+    config = config or _config()
     book = PortfolioBook.from_config(config)
     engine = PortfolioEngine(config, adapters={"kraken_futures": _adapter(fake)}, book=book, trade_logger=logger, notifier=notifier, mode="live",
                              state_path=tmp_path / "engine.json", record_tax=logger is not None, funding_source=funding or (lambda venue_symbol: []))
@@ -408,3 +440,116 @@ def test_written_off_orders_survive_a_restart_and_are_still_settled(tmp_path) ->
     assert _book_matches_kraken(restarted, fake)
     sent = [params["cliOrdId"] for params in fake.sent_orders()]
     assert len(sent) == len(set(sent))  # nothing was resent after the restart
+
+
+
+def _stop_config(pct: float = 0.2):
+    from dataclasses import replace
+
+    config = _config()
+    return replace(config, risk=replace(config.risk, exchange_stop_pct=pct))
+
+
+def test_every_open_position_has_one_reduce_only_stop_resting_on_kraken(tmp_path) -> None:
+    fake = FakeKraken()
+    engine = _live_engine(fake, tmp_path, config=_stop_config(0.2))
+    seen_positions = 0
+    for index in range(FIRST, 330):
+        report = _cycle(engine, fake, index)
+        assert report.rejected == [] and report.mismatches == {}
+        by_symbol: dict[str, list[dict[str, Any]]] = {}
+        for order in fake.resting:
+            by_symbol.setdefault(order["symbol"], []).append(order)
+        for venue_symbol, (size, _entry) in fake.positions.items():
+            orders = by_symbol.get(venue_symbol, [])
+            assert len(orders) == 1, (index, venue_symbol, orders)
+            stop = orders[0]
+            assert stop["reduceOnly"] and stop["triggerSignal"] == "mark" and stop["size"] == pytest.approx(abs(size))
+            assert stop["side"] == ("sell" if size > 0 else "buy")
+            instrument = BTC if venue_symbol == "PF_XBTUSD" else ETH
+            anchor = engine.stop_anchors[instrument]
+            assert stop["stopPrice"] == pytest.approx(anchor["reference_price"] * (0.8 if size > 0 else 1.2), abs=0.11)
+            seen_positions += 1
+        assert set(by_symbol) <= set(fake.positions)  # no stop left behind for a closed position
+    assert seen_positions > 50
+    # a replacement is placed before the stop it replaces is cancelled
+    sequence = [(r["endpoint"], r["params"].get("orderType")) for r in fake.requests if r["endpoint"] in {"sendorder", "cancelorder"}]
+    for position, (endpoint, _kind) in enumerate(sequence):
+        if endpoint == "cancelorder" and position > 0:
+            assert ("sendorder", "stp") in sequence[:position]
+
+
+def test_a_stop_that_fires_while_the_process_is_down_is_booked_once_and_the_sleeves_stay_out(tmp_path) -> None:
+    fake = FakeKraken()
+    logger = TradeLogger(tmp_path / "trades.db")
+    engine = _live_engine(fake, tmp_path, config=_stop_config(0.2))
+    index = FIRST
+    while "PF_XBTUSD" not in fake.positions or fake.positions["PF_XBTUSD"][0] <= 0:
+        _cycle(engine, fake, index)
+        index += 1
+        assert index < 400, "the test data never opened a BTC long"
+    # the process dies; BTC crashes 30% below the stop's reference and the stop fires on Kraken
+    reference = engine.stop_anchors[BTC]["reference_price"]
+    fake.prices["PF_XBTUSD"] = reference * 0.7
+    assert len(fake.trigger_stops()) == 1 and "PF_XBTUSD" not in fake.positions
+    # restart from the checkpoint
+    restarted = PortfolioEngine(engine.config, adapters={"kraken_futures": _adapter(fake)}, book=PortfolioBook.from_config(engine.config), trade_logger=logger,
+                                mode="live", state_path=tmp_path / "engine.json", record_tax=False, funding_source=lambda venue_symbol: [])
+    assert restarted.restored
+    btc_sleeves = [sleeve_id for sleeve_id, spec in restarted.sleeves.items() if spec.instrument == BTC]
+    report = restarted.run_cycle(bars_until(index), now=_now(index))
+    stop_fills = [fill for fill in report.fills if fill["reason"] == "exchange_stop"]
+    assert len(stop_fills) == 1 and stop_fills[0]["side"] == "sell" and stop_fills[0]["price"] == pytest.approx(reference * 0.7)
+    assert float(restarted.book.units().get(BTC, 0)) == 0.0 and report.mismatches == {} and restarted.unreconciled == {}
+    assert all(restarted.states[s].weight == 0.0 for s in btc_sleeves)
+    assert any(restarted.states[s].reentry_block == "long" for s in btc_sleeves)
+    # booked exactly once, and no BTC long is bought back while the sleeves' signals are still long
+    for later in range(index + 1, index + 12):
+        report = _cycle(restarted, fake, later)
+        assert not [fill for fill in report.fills if fill["reason"] == "exchange_stop"]
+        blocked = [s for s in btc_sleeves if restarted.states[s].reentry_block == "long"]
+        if blocked:
+            assert not [fill for fill in report.fills if fill["instrument"] == BTC and fill["side"] == "buy" and len(fill["sleeves"]) == 1
+                        and next(iter(fill["sleeves"])) in blocked]
+    assert [row for row in logger.list_trades(limit=100) if row["side"] == "sell"]
+
+
+def test_a_stop_that_kraken_refuses_keeps_the_old_one_and_alerts_once(tmp_path) -> None:
+    from test_portfolio_engine import RecordingNotifier
+
+    # the adapter: a refused replacement leaves the old stop resting
+    fake = FakeKraken()
+    adapter = _adapter(fake)
+    fake.positions["PF_XBTUSD"] = [0.01, 50_000.0]
+    placed = adapter.sync_protective_stops({"BTC/USD": ("sell", 0.01, 40_000.0)}, now=T0)
+    assert [a["action"] for a in placed] == ["placed"] and fake.resting[0]["stopPrice"] == 40_000.0
+    assert [a["action"] for a in adapter.sync_protective_stops({"BTC/USD": ("sell", 0.01, 40_000.0)}, now=T0)] == ["kept"]
+    fake.refuse_stops = True
+    refused = adapter.sync_protective_stops({"BTC/USD": ("sell", 0.02, 39_000.0)}, now=T0)
+    assert [a["action"] for a in refused] == ["failed"] and len(fake.resting) == 1 and fake.resting[0]["stopPrice"] == 40_000.0
+    fake.refuse_stops = False
+    replaced = adapter.sync_protective_stops({"BTC/USD": ("sell", 0.02, 39_000.0)}, now=T0)
+    assert [a["action"] for a in replaced] == ["placed", "cancelled"] and [o["stopPrice"] for o in fake.resting] == [39_000.0]
+    assert [a["action"] for a in adapter.sync_protective_stops({"BTC/USD": None}, now=T0)] == ["cancelled"] and fake.resting == []
+
+    # the engine: one alert per episode (from the first refused sync until a sync needs no stop or succeeds), not per cycle
+    fake = FakeKraken()
+    notifier = RecordingNotifier()
+    engine = _live_engine(fake, tmp_path, config=_stop_config(0.2), notifier=notifier)
+    fake.refuse_stops = True
+    episodes, failing_cycles, alerted_before = 0, 0, False
+    for index in range(FIRST, 330):
+        report = _cycle(engine, fake, index)
+        failing_cycles += any(action["action"] == "failed" for action in report.stop_actions)
+        episodes += engine.stop_failure_alerted and not alerted_before  # a sync needing no stop (all flat) ends an episode
+        alerted_before = engine.stop_failure_alerted
+    assert fake.positions and failing_cycles > episodes >= 1  # it traded, every stop was refused, and failures persisted
+    assert [alert["event_type"] for alert in notifier.alerts].count("exchange_stop_failed") == episodes
+
+
+def test_no_stops_are_sent_unless_configured(tmp_path) -> None:
+    fake = FakeKraken()
+    engine = _live_engine(fake, tmp_path)
+    for index in range(FIRST, 260):
+        _cycle(engine, fake, index)
+    assert not [order for order in fake.sent_orders() if order.get("orderType") == "stp"]

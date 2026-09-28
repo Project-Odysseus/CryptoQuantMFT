@@ -155,6 +155,16 @@ finds the fill on Kraken by client id instead of sending again. Kraken's positio
 truth, and the book is reconciled every cycle. Fees are estimated from the contract's taker rate, and funding from
 Kraken's published hourly rates; the equity-drift check catches what those estimates miss.
 
+**Exchange stops (`[risk] exchange_stop_pct`):** with it set, every open perp position has one reduce-only
+stop-market order resting on Kraken, triggered by the mark price, that far beyond the price when the position last
+changed (0.20 in `portfolio.btc_live.toml`: a 20% adverse move). It is the loss cap if the process, the machine or the
+network dies; while the runtime is alive the strategies' own exits normally act long before it. It moves only when
+the position changes (not a trailing stop). A replacement is placed before the old stop is cancelled. If a stop
+fires, even while the runtime is down, the next cycle books the fill (book, tax, Telegram `exchange_stop_filled`) and
+keeps that instrument's sleeves out until their signal leaves that side, like a sleeve's own stop. If Kraken refuses
+a stop, `exchange_stop_failed` alerts once and every cycle retries. You can see the stops in Kraken's open orders
+(client ids `cqm-<book>-stop-...`); don't cancel them by hand while a position is open. Paper runs don't place them.
+
 ## Choosing capital and size (portfolio)
 
 ```bash

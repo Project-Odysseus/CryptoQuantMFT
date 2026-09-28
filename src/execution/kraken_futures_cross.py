@@ -20,6 +20,13 @@ account. It follows the same rules as the single-contract adapter:
   `/openpositions` and `/accounts`, which are the source of truth.
 - Kraken's fills carry no fee, so fees are estimated from each contract's
   taker rate and flagged as estimates.
+- **Protective stops rest on Kraken** (`sync_protective_stops`): one reduce-only
+  stop-market order per open position, triggered by the mark price, so a dead
+  process or machine can't lose more than the stop distance. Their client ids
+  carry the book's prefix plus `-stop-<contract>-`, which is how they are found
+  again after a restart. A replacement is placed before the old stop is
+  cancelled, so a position is never left unprotected in between. Their fills
+  are read from `/fills` (`protective_stop_fills`) and booked by the engine.
 
 Endpoints and fields follow Kraken's Derivatives REST spec; the tests use
 a fake that replays those shapes. Verify credentials and permissions with
@@ -30,6 +37,7 @@ from __future__ import annotations
 
 import math
 import time
+from decimal import Decimal
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
@@ -45,6 +53,7 @@ from src.execution.kraken_futures_adapter import (
 from src.execution.perps import PerpContract
 
 LATE_FILL_WATCH_SECONDS = 3600.0  # a written-off order is still watched this long: a fill that shows up late is booked
+STOP_TAG = "stop"
 
 
 class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
@@ -103,6 +112,8 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
         self.unrealized_funding: dict[str, float] = {}
         self.foreign_positions: dict[str, float] = {}  # positions in contracts this portfolio doesn't trade
         self._last_synced_positions: dict[str, float] | None = None
+        self._stop_counter = 0
+        self._stop_fills_seen: set[str] = set()  # stop fills already folded into the local positions (this process)
 
     # --- views -----------------------------------------------------------------------------------------------------
 
@@ -295,6 +306,115 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
         return ExecutionReport(order_id=order_id, status=order.status, fill_price=order.fill_price, filled_size=order.filled_size, fee=order.fee, message=order.message)
+
+    # --- protective stops resting on the exchange ----------------------------------------------------------------
+
+    def _stop_prefix(self, symbol: str | None = None) -> str:
+        base = f"{self.client_id_prefix}-{STOP_TAG}-"
+        return base if symbol is None else f"{base}{self.contracts[symbol].venue_symbol}-"
+
+    def _format_price(self, symbol: str, price: float, *, side: str) -> str:
+        """A stop price on the contract's tick grid, rounded away from the market (a sell stop down, a buy stop up)."""
+        tick = self.contracts[symbol].tick_size or 0.01
+        ticks = math.floor(price / tick + 1e-9) if side == "sell" else math.ceil(price / tick - 1e-9)
+        decimals = max(0, -Decimal(str(tick)).normalize().as_tuple().exponent)  # 0.5 -> 1 decimal, 0.01 -> 2, 1 -> 0
+        return f"{ticks * tick:.{decimals}f}"
+
+    def protective_stops(self) -> dict[str, list[dict[str, Any]]]:
+        """This book's resting stop orders per runtime symbol, read from Kraken's open orders."""
+        out: dict[str, list[dict[str, Any]]] = {}
+        for item in self._client.call("GET", "openorders").get("openOrders", []):
+            client_id = str(item.get("cliOrdId") or "")
+            for symbol in self.contracts:
+                if client_id.startswith(self._stop_prefix(symbol)):
+                    out.setdefault(symbol, []).append({
+                        "cli_ord_id": client_id, "order_id": item.get("order_id"), "side": str(item.get("side", "")),
+                        "size": float(item.get("unfilledSize") or item.get("size") or 0.0), "stop_price": float(item.get("stopPrice") or 0.0)})
+        return out
+
+    def sync_protective_stops(self, desired: Mapping[str, tuple[str, float, float] | None], *, now: datetime) -> list[dict[str, Any]]:
+        """Make the resting stops match `desired`: symbol -> (side, size, stop price), or None for no stop.
+
+        Symbols missing from `desired` are left as they are (e.g. while an order on them is pending). A stop already
+        resting with the same side, size and price is kept. Otherwise the new stop is placed first and the old ones
+        are cancelled only once it is accepted, so the position is never unprotected; if placing fails, the old stop
+        stays. Returns one record per action: placed, kept, cancelled or failed.
+        """
+        existing = self.protective_stops()
+        actions: list[dict[str, Any]] = []
+        for symbol, want in desired.items():
+            if symbol not in self.contracts:
+                continue
+            current = existing.get(symbol, [])
+            if want is None:
+                for order in current:
+                    actions.append(self._cancel_stop(symbol, order, "position closed"))
+                continue
+            side, size, stop_price = want
+            contract = self.contracts[symbol]
+            rounded = math.floor(size / contract.size_step + 1e-9) * contract.size_step
+            price_text = self._format_price(symbol, stop_price, side=side)
+            same = [order for order in current if order["side"] == side and abs(order["size"] - rounded) < contract.size_step / 2.0
+                    and abs(order["stop_price"] - float(price_text)) < (contract.tick_size or 0.01) / 2.0]
+            if same:
+                actions.append({"action": "kept", "symbol": symbol, "side": side, "size": rounded, "stop_price": float(price_text)})
+                for order in current:
+                    if order is not same[0]:
+                        actions.append(self._cancel_stop(symbol, order, "duplicate"))
+                continue
+            if rounded < contract.min_size:
+                actions.append({"action": "failed", "symbol": symbol, "message": f"size {size} is below the contract minimum"})
+                continue
+            self._stop_counter += 1
+            client_id = f"{self._stop_prefix(symbol)}{int(now.timestamp())}-{self._stop_counter}"[:100]
+            params = {"orderType": "stp", "symbol": contract.venue_symbol, "side": side, "size": self._format_size(symbol, rounded),
+                      "stopPrice": price_text, "triggerSignal": "mark", "reduceOnly": "true", "cliOrdId": client_id}
+            try:
+                status = str((self._client.call("POST", "sendorder", params).get("sendStatus") or {}).get("status", ""))
+            except Exception as exc:  # noqa: BLE001 - keep the old stop; the next sync retries (a duplicate is cancelled then)
+                actions.append({"action": "failed", "symbol": symbol, "message": f"{type(exc).__name__}: {exc}"})
+                continue
+            if status != "placed":
+                actions.append({"action": "failed", "symbol": symbol, "message": f"Kraken Futures did not place the stop: {status or 'no status'}"})
+                continue
+            actions.append({"action": "placed", "symbol": symbol, "side": side, "size": rounded, "stop_price": float(price_text), "cli_ord_id": client_id})
+            for order in current:
+                actions.append(self._cancel_stop(symbol, order, "replaced"))
+        return actions
+
+    def _cancel_stop(self, symbol: str, order: Mapping[str, Any], why: str) -> dict[str, Any]:
+        params = {"order_id": order["order_id"]} if order.get("order_id") else {"cliOrdId": order["cli_ord_id"]}
+        try:
+            status = str((self._client.call("POST", "cancelorder", params).get("cancelStatus") or {}).get("status", ""))
+        except Exception as exc:  # noqa: BLE001 - reported; the next sync tries again
+            return {"action": "failed", "symbol": symbol, "message": f"cancel failed: {type(exc).__name__}: {exc}"}
+        return {"action": "cancelled", "symbol": symbol, "why": why, "stop_price": order.get("stop_price"), "status": status}
+
+    def protective_stop_fills(self) -> list[dict[str, Any]]:
+        """Fills of this book's protective stops in Kraken's recent fills, oldest first, with an estimated fee.
+
+        Each has `fill_id` (to book it once), `symbol`, `side`, `size`, `price`, `fee`. Fills this process hasn't
+        seen are also added to the local positions (once the account has been synced), so the next sync doesn't
+        mistake them for someone else's trade.
+        """
+        prefix = self._stop_prefix()
+        out = []
+        for fill in self._client.call("GET", "fills").get("fills", []):
+            if not str(fill.get("cliOrdId") or "").startswith(prefix):
+                continue
+            symbol = self.by_venue_symbol.get(str(fill.get("symbol")))
+            if symbol is None:
+                continue
+            size, price = float(fill["size"]), float(fill["price"])
+            fill_id = str(fill.get("fill_id") or f"{fill.get('order_id')}:{size}:{price}")
+            side = str(fill.get("side") or "")
+            if fill_id not in self._stop_fills_seen:
+                self._stop_fills_seen.add(fill_id)
+                if self._last_synced_positions is not None:
+                    self._positions[symbol] = self._positions.get(symbol, 0.0) + (size if side == "buy" else -size)
+            out.append({"fill_id": fill_id, "symbol": symbol, "side": side, "size": size, "price": price,
+                        "fee": size * price * self.contracts[symbol].taker_fee_rate, "fee_estimated": True, "time": fill.get("fillTime")})
+        return out
 
     # --- account -------------------------------------------------------------------------------------------------
 

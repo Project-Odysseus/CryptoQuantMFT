@@ -76,6 +76,7 @@ class CycleReport:
     adapter_events: list[dict[str, Any]] = field(default_factory=list)
     sleeve_errors: dict[str, str] = field(default_factory=dict)
     cooldowns: dict[str, str] = field(default_factory=dict)  # instrument -> ISO time its rejection cooldown ends
+    stop_actions: list[dict[str, Any]] = field(default_factory=list)  # exchange stops placed, kept, cancelled or failed
 
 
 def build_paper_adapters(
@@ -194,6 +195,11 @@ class PortfolioEngine:
         self.sleeve_error_counts: dict[str, int] = {}
         self.rejection_streak: dict[str, int] = {}  # consecutive rejected orders per instrument (survives restarts)
         self.cooldown_until: dict[str, str] = {}  # instrument -> ISO time until which only reductions are sent
+        # Exchange stops: per instrument the position size and stop price they were set for, and stop fills booked
+        self.stop_anchors: dict[str, dict[str, Any]] = {}
+        self.stop_fills_booked: list[str] = []
+        self.stops_verified = False  # the first sync after a start also cancels stops left for positions now closed
+        self.stop_failure_alerted = False
         self.disabled_sleeves: set[str] = set()
         self.cycle = 0
         self.restored = self._load()
@@ -221,6 +227,7 @@ class PortfolioEngine:
         report = CycleReport(timestamp=now, decided=False, equity=0.0)
         self._flush_tax(now)
         self._settle_pending(report, now)
+        self._book_stop_fills(report, now)  # before the account sync, so a stop fill isn't taken for someone else's trade
 
         report.adapter_events = self._mark_adapters(prices, now)
         self.book.mark(prices, fx=fx, now=now)
@@ -252,6 +259,7 @@ class PortfolioEngine:
         stale = sorted(set(stale) | {instrument for instrument, series in grid.items() if series[-1].timestamp < latest})
         new_grid_bars = sorted({bar.timestamp for series in grid.values() for bar in series if self.last_grid_bar is None or bar.timestamp > self.last_grid_bar})
         if not new_grid_bars:
+            self._sync_stops(prices, report, now)
             report.equity = float(self.book.equity())
             self._save()
             return report
@@ -272,6 +280,7 @@ class PortfolioEngine:
         self._decide_and_trade(report, scales=scales, prices=prices, stale=stale, now=now)
         report.mismatches = self.reconcile()
         self.unreconciled = dict(report.mismatches)
+        self._sync_stops(prices, report, now)
         report.equity = float(self.book.equity())
         self._log_cycle(report)
         self._save()
@@ -446,6 +455,104 @@ class PortfolioEngine:
             self._execute(order, number=number, attribution=attribution.get(order.instrument, {}), report=report, now=now)
         self._settle_pending(report, now)
         report.cooldowns = dict(self._cooldowns(now))
+
+    # --- exchange stops ----------------------------------------------------------------------------------------------
+
+    def _sync_stops(self, prices: Mapping[str, float], report: CycleReport, now: datetime) -> None:
+        """Keep one reduce-only stop resting on each live venue for every open perp position (`[risk] exchange_stop_pct`).
+
+        A stop is set at `exchange_stop_pct` beyond the price when the position last changed, and moved only when the
+        position changes (so it caps the loss from that point; it is not a trailing stop). Instruments with an order
+        still pending are left alone until it settles. The adapter talks to the exchange only when a position
+        changed, on decision bars, and on the first cycle after a start.
+        """
+        pct = self.config.risk.exchange_stop_pct
+        if pct is None:
+            return
+        pending = {meta["instrument"] for meta in self.pending_orders.values()}
+        units = self.book.units()
+        for venue, adapter in self.adapters.items():
+            sync = getattr(adapter, "sync_protective_stops", None)
+            if not callable(sync):
+                continue
+            desired: dict[str, tuple[str, float, float] | None] = {}
+            changed = False
+            for instrument, spec in self.config.instruments.items():
+                if spec.venue != venue or spec.kind != "perp" or instrument in pending:
+                    continue
+                held = units.get(instrument, Decimal(0))
+                anchor = self.stop_anchors.get(instrument)
+                if not held:
+                    changed |= self.stop_anchors.pop(instrument, None) is not None
+                    desired[spec.symbol] = None
+                    continue
+                if anchor is None or anchor["units"] != str(held):
+                    price = float(prices.get(instrument) or self.book.marks.get(instrument, 0))
+                    if price <= 0:
+                        continue
+                    long = held > 0
+                    anchor = {"units": str(held), "side": "sell" if long else "buy", "stop": price * (1 - pct) if long else price * (1 + pct),
+                              "reference_price": price, "set_at": now.isoformat()}
+                    self.stop_anchors[instrument] = anchor
+                    changed = True
+                desired[spec.symbol] = (anchor["side"], abs(float(held)), float(anchor["stop"]))
+            if not (changed or report.decided or not self.stops_verified):
+                continue
+            try:
+                actions = sync(desired, now=now)
+            except Exception as exc:  # noqa: BLE001 - the positions stay; the next cycle retries
+                actions = [{"action": "failed", "symbol": "*", "message": f"{type(exc).__name__}: {exc}"}]
+            self.stops_verified = True
+            report.stop_actions += [{**action, "venue": venue} for action in actions]
+            for action in actions:
+                if action["action"] in {"placed", "cancelled"}:
+                    self._event("INFO", f"portfolio_exchange_stop_{action['action']}", f"exchange stop {action['action']}: {action}", action, now)
+            failures = [action for action in actions if action["action"] == "failed"]
+            if failures:
+                self._event("ERROR", "portfolio_exchange_stop_failed", f"exchange stop not in place: {failures}", {"failures": failures}, now)
+                if self.notifier is not None and not self.stop_failure_alerted:
+                    self.notifier.send_alert(event_type="exchange_stop_failed", message=f"Protective stop not in place on {venue}: {failures[0]['message']}. Retrying each cycle.",
+                                             metadata={"failures": failures})
+                self.stop_failure_alerted = True
+            elif self.stop_failure_alerted:
+                self.stop_failure_alerted = False
+                self._event("INFO", "portfolio_exchange_stop_restored", "exchange stops are in place again", {}, now)
+
+    def _book_stop_fills(self, report: CycleReport, now: datetime) -> None:
+        """Book fills of exchange stops that fired (even while this process was down) and keep the sleeves from buying back.
+
+        Each fill goes through the normal path (book, tax, trade log, Telegram) once: booked fill ids are kept in the
+        checkpoint. Every sleeve holding that side is closed in its own state and blocked from re-entering until its
+        signal leaves that side, as after a sleeve's own stop.
+        """
+        if self.config.risk.exchange_stop_pct is None and not self.stop_anchors:
+            return
+        for venue, adapter in self.adapters.items():
+            read = getattr(adapter, "protective_stop_fills", None)
+            if not callable(read) or not any(self.config.instruments[i].venue == venue for i in self.stop_anchors):
+                continue
+            instruments = {spec.symbol: instrument for instrument, spec in self.config.instruments.items() if spec.venue == venue}
+            for fill in read():
+                instrument = instruments.get(fill["symbol"])
+                if fill["fill_id"] in self.stop_fills_booked or instrument is None:
+                    continue
+                meta = {"order_id": f"stop-{fill['fill_id']}"[:100], "instrument": instrument, "side": fill["side"], "units": str(fill["size"]),
+                        "price": fill["price"], "reason": "exchange_stop", "reduce_only": True, "sleeves": {}, "submitted_at": now.isoformat()}
+                self._book_fill(meta, filled_size=float(fill["size"]), fill_price=float(fill["price"]), fee=float(fill["fee"]), report=report, now=now)
+                self.stop_fills_booked = (self.stop_fills_booked + [fill["fill_id"]])[-500:]
+                closed_side = "long" if fill["side"] == "sell" else "short"
+                for sleeve_id, spec in self.sleeves.items():
+                    state = self.states[sleeve_id]
+                    if spec.instrument == instrument and ((state.weight > 0) if closed_side == "long" else (state.weight < 0)):
+                        SleeveRunner._close_position(state, float(fill["price"]))
+                        state.reentry_block = closed_side
+                        self.last_decisions[sleeve_id] = {"action": "stop", "reason": "exchange_stop", "bar": now.isoformat()}
+                if not self.book.units().get(instrument):
+                    self.stop_anchors.pop(instrument, None)
+                message = f"Exchange stop fired: {fill['side']} {fill['size']} {instrument} at {fill['price']:,.2f}; its sleeves stay out until their signal resets."
+                self._event("ERROR", "portfolio_exchange_stop_filled", message, {**fill, "instrument": instrument}, now)
+                if self.notifier is not None:
+                    self.notifier.send_alert(event_type="exchange_stop_filled", message=message, metadata={"instrument": instrument})
 
     def _cooldowns(self, now: datetime) -> dict[str, str]:
         """Active rejection cooldowns; expired ones are dropped (the streak stays, so one more rejection restarts it)."""
@@ -692,6 +799,7 @@ class PortfolioEngine:
                 "units": float(position.units) if position else 0.0, "price": float(self.book.marks.get(instrument, 0)),
                 "realized_pnl": float(position.realized_pnl) if position else 0.0, "fees": float(position.fees) if position else 0.0,
                 "funding": float(position.funding) if position else 0.0,
+                "exchange_stop": self.stop_anchors.get(instrument, {}).get("stop"),
             }
         sleeves = {}
         for sleeve_id, spec in self.sleeves.items():
@@ -768,6 +876,8 @@ class PortfolioEngine:
             "disabled_sleeves": sorted(self.disabled_sleeves),
             "rejection_streak": self.rejection_streak,
             "cooldown_until": self.cooldown_until,
+            "stop_anchors": self.stop_anchors,
+            "stop_fills_booked": self.stop_fills_booked,
             "last_decisions": self.last_decisions,
             "pending_tax": self.pending_tax,
             "pending_orders": self.pending_orders,
@@ -806,6 +916,8 @@ class PortfolioEngine:
         self.funding_booked_until = dict(payload.get("funding_booked_until", {}))
         self.rejection_streak = {key: int(value) for key, value in dict(payload.get("rejection_streak", {})).items()}
         self.cooldown_until = dict(payload.get("cooldown_until", {}))
+        self.stop_anchors = dict(payload.get("stop_anchors", {}))
+        self.stop_fills_booked = list(payload.get("stop_fills_booked", []))
         self.book_id = str(payload.get("book_id", self.book_id))
         return True
 

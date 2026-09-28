@@ -43,8 +43,9 @@ direction is in `aspirations.md`.
 - [ ] Run it live (runbook, "Live portfolio trading"). In the first week, check the dashboard, drift alerts and the tax queue daily
 - [x] Trigger the kill switch once against a real open position at minimum size (2026-09-26: `--kill-switch` now closes Kraken Futures positions and cancels orders on its own; verified live against a 0.0001 BTC long). In the first live week, trigger it once more while the book runs
 - [ ] Funding and fees from Kraken's account log. They are estimated from the public hourly rates and the taker rate for now; the equity-drift alert catches gaps. Also needed for exact tax records (section 4)
-- [ ] A catastrophe stop resting on Kraken for every open position (reduce-only stop, well beyond the strategy stops), so a
-  dead process or machine can't lose more than that. All stops are checked by the running process today (`aspirations.md` 1)
+- [x] A catastrophe stop resting on Kraken for every open position (2026-09-28, `[risk] exchange_stop_pct`, 20% in the BTC book):
+  reduce-only stop-market on the mark price, replaced before cancelled, fills booked even after downtime, sleeves kept out after.
+  Tested against the fake Kraken only: watch the first live placement in Kraken's open orders
 - [ ] Kill criteria per sleeve, written before live (e.g. live Sharpe over 6 months, drawdown vs backtest) and checked by the
   performance review, so a decaying sleeve is flagged by rule rather than by feel (`aspirations.md` 3)
 - [x] A cooldown after repeated order rejections (2026-09-28): 3 in a row on an instrument -> only reductions on it for 24 hours

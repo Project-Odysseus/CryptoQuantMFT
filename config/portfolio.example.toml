@@ -25,6 +25,7 @@ daily_loss_limit = 0.06          # past this loss within a UTC day, positions ma
 stale_after_bars = 2
 rejection_cooldown_after = 3      # this many rejected orders in a row on one instrument: only reductions on it for...
 rejection_cooldown_hours = 24     # ...this long, then one more try (0 for _after switches it off)
+# exchange_stop_pct = 0.20        # live only: a reduce-only stop resting on the exchange per position (runbook, "Exchange stops")
 # max_gross_notional = 3000      # the most money the book may hold in positions (base currency); required for --runtime live
 
 # Exposure limits per underlying, as shares of equity (src/portfolio/exposure_limits.py). They matter once option

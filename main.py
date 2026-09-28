@@ -2085,8 +2085,17 @@ def preflight(path: str) -> int:
             return CheckResult(SKIP, "TELEGRAM_BOT_TOKEN/CHAT_ID not set: trade messages and alerts won't arrive")
         return CheckResult(PASS if telegram_test() == 0 else FAIL, "a TEST message was sent")
 
+    def exchange_stop() -> CheckResult:
+        from src.portfolio.config import load_portfolio_config as load
+
+        pct = load(path).risk.exchange_stop_pct
+        if pct is None:
+            return CheckResult(SKIP, "[risk] exchange_stop_pct not set: nothing caps the loss if the process dies (runbook, \"Exchange stops\")")
+        return CheckResult(PASS, f"a reduce-only stop rests on Kraken {pct:.0%} beyond each position's price")
+
     checks = [
         Check("portfolio config", config_check),
+        Check("exchange stop", exchange_stop),
         Check("kill switch", kill_switch_check),
         Check("database", lambda: check_database(settings.database_path)),
         Check("clock vs Kraken", check_clock),

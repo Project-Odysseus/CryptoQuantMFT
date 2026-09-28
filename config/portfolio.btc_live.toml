@@ -26,6 +26,8 @@ daily_loss_limit = 0.10
 stale_after_bars = 2
 rejection_cooldown_after = 3      # this many rejected orders in a row on one instrument: only reductions on it for...
 rejection_cooldown_hours = 24     # ...this long, then one more try (0 for _after switches it off)
+exchange_stop_pct = 0.20          # a reduce-only stop resting on Kraken 20% beyond the price when the position last changed:
+                                  # the loss cap if this process or machine dies (runbook, "Exchange stops")
 max_gross_notional = 15           # USD: room for one 0.0001 BTC lot (~8 USD), never two
 
 [instruments."kraken_futures:BTC/USD"]

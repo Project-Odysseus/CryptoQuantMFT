@@ -54,6 +54,9 @@ class PortfolioRiskConfig:
     # a shorter pause would end before the next decision. A fill resets the count. 0 switches it off.
     rejection_cooldown_after: int = 3
     rejection_cooldown_hours: float = 24.0
+    # A reduce-only stop resting on the exchange for every open perp position, this far (a fraction of price) beyond
+    # the price when the position last changed: the loss cap if the process or machine dies. None: no exchange stops.
+    exchange_stop_pct: float | None = None
     # Limits on what the book is exposed to, per underlying, as shares of equity ([risk.exposure]; see exposure_limits.py)
     exposure: dict[str, float] = field(default_factory=dict)
 
@@ -73,6 +76,8 @@ class PortfolioRiskConfig:
                 raise ValueError(f"risk.max_venue_exposure.{venue} must be above 0")
         if self.stale_after_bars < 1:
             raise ValueError("risk.stale_after_bars must be at least 1")
+        if self.exchange_stop_pct is not None and not 0.01 <= self.exchange_stop_pct <= 0.9:
+            raise ValueError("risk.exchange_stop_pct must be between 0.01 and 0.9 (a fraction of price), or left out")
         if self.rejection_cooldown_after < 0 or not self.rejection_cooldown_hours > 0:
             raise ValueError("risk.rejection_cooldown_after must be 0 (off) or more, and risk.rejection_cooldown_hours above 0")
         if self.max_gross_notional is not None and not self.max_gross_notional > 0:
