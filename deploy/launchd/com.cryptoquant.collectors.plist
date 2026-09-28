@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Research collectors (liquidations + hourly Deribit option chains) as a macOS LaunchAgent: starts at login, restarted
+  if it exits. Public data only, no keys, no orders. The Mac must be awake to record (sleep leaves gaps; they show in
+  `python main.py --market-data-status`).
+    install:  cp deploy/launchd/com.cryptoquant.collectors.plist ~/Library/LaunchAgents/
+              launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cryptoquant.collectors.plist
+    status:   launchctl print gui/$(id -u)/com.cryptoquant.collectors | head -20
+    remove:   launchctl bootout gui/$(id -u)/com.cryptoquant.collectors && rm ~/Library/LaunchAgents/com.cryptoquant.collectors.plist
+  Paths are this machine's; edit them for another one.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.cryptoquant.collectors</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/Sakarias/Odysseus/CryptoQuantMFT/scripts/collectors/run_collectors.sh</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHON</key><string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin/python</string>
+    <key>PATH</key><string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT/logs/collectors/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT/logs/collectors/launchd.err.log</string>
+</dict>
+</plist>

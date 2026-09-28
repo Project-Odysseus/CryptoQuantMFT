@@ -88,3 +88,13 @@ ADDENDUM 1 (2026-09-28, data cleaning, written before any H1 result was computed
   and 2024-07-10..13). An OI value older than 1 day at T counts as missing.
 - Bybit's early OI (2020-2021) shows large swings (e.g. tripling on 2021-05-19) that can't be verified. Not filtered;
   reported as a limitation.
+
+ADDENDUM 2 (2026-09-28, holdout evaluation plan, written after owner approval and BEFORE the holdout was opened)
+- One look, one configuration: rule (b) carry, Binance fees, expected_hold_days = 14 (the pre-registered middle
+  configuration). No other H1 configuration is evaluated on the holdout.
+- The state machine runs continuously through the development data into the holdout (a position open on
+  2025-12-31 carries over), exactly as a live sleeve would. Only days from 2026-01-01 are scored.
+- Holdout window: 2026-01-01 to the last full month in the Binance monthly archive (2026-08-31).
+- PASS if the pooled (equal-weight BTC/ETH/SOL) net return on notional over the holdout is > 0. Also reported,
+  not part of the pass rule: net at 2x costs, per coin, time in position, entries, funding vs costs, always-on carry.
+- Whatever the outcome, this configuration is not re-tuned on the holdout. A changed rule goes to paper trading.
