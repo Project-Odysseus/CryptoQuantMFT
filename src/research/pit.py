@@ -52,9 +52,14 @@ def holdout_start() -> pd.Timestamp:
     return pd.Timestamp(governance.FINAL_HOLDOUT_START)
 
 
+def _utc(value: Any) -> pd.Timestamp:
+    stamp = pd.Timestamp(value)
+    return stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
+
+
 def check_end(end: Any) -> None:
     """Refuse an explicit request for holdout data while the holdout is locked."""
-    if end is not None and pd.Timestamp(end, tz="UTC") > holdout_start() and not governance.unlocked_reason():
+    if end is not None and _utc(end) > holdout_start() and not governance.unlocked_reason():
         raise HoldoutLocked(f"end={end} is inside the frozen holdout (from {holdout_start():%Y-%m-%d}); "
                             "unlock with governance.final_holdout(reason) only for a finished candidate's final test")
 
@@ -71,7 +76,7 @@ def lock(frame: pd.DataFrame, *, label: str, end: Any = None) -> pd.DataFrame:
     else:
         keep &= (available < holdout_start()).to_numpy()
     if end is not None:
-        keep &= (available <= pd.Timestamp(end, tz="UTC")).to_numpy()
+        keep &= (available <= _utc(end)).to_numpy()
     return frame[keep].reset_index(drop=True)
 
 
@@ -200,6 +205,7 @@ def load_open_interest(coin: str, venue: str, *, end: Any = None) -> pd.DataFram
     else:
         raise ValueError(f"no open interest for venue {venue!r}")
     frame["available_at"] = frame["timestamp"] + lag
+    frame = frame[frame["oi"] > 0]  # Binance's archive has days of zeros (e.g. 2022-03-07/08, 2024-07-10..13): missing, not flat
     return lock(frame.dropna(subset=["oi"]).sort_values("timestamp").reset_index(drop=True), label=f"pit {coin} {venue} oi", end=end)
 
 
