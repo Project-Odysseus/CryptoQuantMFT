@@ -42,7 +42,12 @@ direction is in `aspirations.md`.
   bar close, fills, reconciliation, tax rows, Telegram
 - [ ] Run it live (runbook, "Live portfolio trading"). In the first week, check the dashboard, drift alerts and the tax queue daily
 - [x] Trigger the kill switch once against a real open position at minimum size (2026-09-26: `--kill-switch` now closes Kraken Futures positions and cancels orders on its own; verified live against a 0.0001 BTC long). In the first live week, trigger it once more while the book runs
-- [ ] Funding and fees from Kraken's account log. They are estimated from the public hourly rates and the taker rate for now; the equity-drift alert catches gaps
+- [ ] Funding and fees from Kraken's account log. They are estimated from the public hourly rates and the taker rate for now; the equity-drift alert catches gaps. Also needed for exact tax records (section 4)
+- [ ] A catastrophe stop resting on Kraken for every open position (reduce-only stop, well beyond the strategy stops), so a
+  dead process or machine can't lose more than that. All stops are checked by the running process today (`aspirations.md` 1)
+- [ ] Kill criteria per sleeve, written before live (e.g. live Sharpe over 6 months, drawdown vs backtest) and checked by the
+  performance review, so a decaying sleeve is flagged by rule rather than by feel (`aspirations.md` 3)
+- [ ] A cooldown after repeated order rejections. Rejections alert, but trading doesn't pause automatically
 - [x] The open items in `todo_important.md` (all done 2026-09-27)
 
 ## 2. Portfolio (plan: `docs/portfolio_plan.md`)
@@ -50,10 +55,9 @@ direction is in `aspirations.md`.
 - [x] Phases 0-4: the sizing contract, research backtester, pure core (config, sleeves, allocation, netting, risk overlay, order planner, research/runtime parity), stateful book with paper execution and restarts, and the `--portfolio` runtime with candles, snapshots, dashboard and alerts (2026-09-26)
 - [x] Phase 6 live path: a multi-contract Kraken Futures adapter, async fills, restart-safe client ids, a reconciliation block, adopt-exchange, funding, tax, the live gates and a money cap, plus the first real round trip (2026-09-26)
 - [x] Sizing: the `[portfolio] scale` knob and `scripts/research/risk_budget.py` (2026-09-26)
-- [ ] Phase 5: the paper soak (see section 1)
 - [ ] Basket sleeves (plan 7.4), so the taker-buy cross-sectional book can run: Binance public daily klines for the signal and Kraken perps for orders. Check Kraken's minimum sizes for a 30-50 coin basket at our capital
-- [ ] A cooldown after repeated order rejections. Rejections alert, but trading doesn't pause automatically
-- [ ] Phase 7 enhancements: portfolio vol targeting, correlation-aware caps, regime filters as sleeve inputs. Sleeve health (disable after 3 failing cycles) is already done
+- [ ] Phase 7 enhancements: portfolio vol targeting, correlation-aware caps, regime filters as sleeve inputs. Sleeve health (disable
+  after 3 failing cycles) and risk-parity/HRP allocation (2026-09-28, no gain yet: the sleeves are too correlated) are done
 
 ## 2b. One engine for every strategy type (plan: `docs/engine_plan.md`)
 
@@ -72,24 +76,23 @@ direction is in `aspirations.md`.
   The nightly job exists (`deploy/backup.sh`); still needs an off-machine `BACKUP_REMOTE`
 - [ ] Security: allow the API keys only from the server's IP; confirm neither Kraken key can withdraw; document key rotation and incident response
 - [ ] Single-strategy runtime, only if it keeps running unattended: bounded memory (`RuntimeOrchestrator.history`, and paper `run()` replaying every bar), bars from exchange candles, and HTTP off the event loop, as the portfolio feed does
-- [ ] Recorders on the server: option chains first (small); the order-flow recorder needs disk or compression first (several GB a day).
-  A light liquidations + hourly option-chain collector runs as a LaunchAgent on the Mac since 2026-09-28
-  (`deploy/launchd/com.cryptoquant.collectors.plist`); move it to the always-on machine with the rest
+- [ ] Recorders on the server (also options O1): the light liquidations + hourly option-chain collector runs as a LaunchAgent on
+  the Mac since 2026-09-28 and moves with `deploy/setup.sh`. The full order-flow recorder (several GB a day) can go on the
+  desktop's HDD; it's what the order-flow research in section 5 waits for
 
 ## 4. Tax (Norway)
 
 - [x] Norges Bank FX with a cache, the ledger schema, realization-time events (spot FIFO; perp realized P&L, fees and funding), the EUR pool and currency gains, year-end holdings, and exports with a Skattemelding summary. Validated with real spot (2026-09-18/25) and futures (2026-09-26) trades
 - [ ] January 2027: export the first real trading year, spot-check it against Kraken's history, and run the Dec 31 valuation checklist
-- [ ] Confirm how Skatteetaten treats derivative flows (perp P&L and funding) before filing
-- [ ] Exact funding from Kraken's account log (section 1)
+- [ ] Confirm how Skatteetaten treats derivative flows (perp P&L and funding) before filing (ask during 2026; filing is spring 2027)
+- Exact funding and fees from Kraken's account log: tracked in section 1
 
 ## 5. Research roadmap (findings: `docs/research_log.md`)
 
-- [ ] Crowding (funding, OI, long/short ratios) as a filter on the daily trend rules. H1 (2026-09-28, `research/reports/H1.md`)
-  found the contrarian sign reversed for OI-weighted funding z at 1-7 days: don't build the funding filter as planned
-- [ ] Funding and OI as ranking signals in the cross-sectional work, and as carry timing
+- [ ] Funding and OI as ranking signals in the cross-sectional work (carry timing was tested in H1: a regime trade, failed its holdout)
 - [ ] Altcoin carry across the Binance archive (data downloaded 2026-09-26): basis from the premium index, and a cross-coin rule
-- [ ] Order-flow features after ~4 weeks of recording (trade-flow and book imbalance, liquidation bursts, 1m-1h). Needs the recorder running (section 3)
+- [ ] Order-flow features after ~4 weeks of recording (trade-flow and book imbalance, liquidation bursts, 1m-1h). Needs the full
+  order-flow recorder running (section 3), not just the light collector
 - [ ] OKX funding and OI in the recorder
 - [ ] HAR volatility forecast in the runtime (needs 1h bars and a year of history at startup; EWMA is used now)
 - [x] Research governance (2026-09-27, `src/research/governance.py`): a frozen final holdout from 2026-01-01, a global
@@ -99,8 +102,7 @@ direction is in `aspirations.md`.
   fills, slippage and timing (the real cost model, and the first sign of decay)
 - [ ] Binance `metrics` (OI, long/short ratios) for the Kraken-listed coins, to extend the crowding study beyond BTC/ETH
 - [ ] Small free daily series: US spot ETF flows, stablecoin supply, the Coinbase premium, an event calendar (CPI, FOMC, expiries)
-- [ ] Candidates from features: a funding z-score sleeve and a crowding composite, sized against `total_trials()`.
-  The funding z-score tilt failed its placebo (H1, 2026-09-28)
+- [ ] A crowding-composite sleeve, sized against `total_trials()` (the funding z-score alone failed its placebo in H1, 2026-09-28)
 - [x] H1b timed carry: one holdout look for "Binance fees, 14-day hold" (2026-09-28): failed (-0.10% Jan-Aug 2026, funding
   far below the hurdle). Revisit only if funding runs above ~10-15% a year again
 - [ ] H2 v2 on real liquidations after 6-12 months of `scripts/collectors/run_collectors.sh`: first check that proxy
@@ -109,15 +111,15 @@ direction is in `aspirations.md`.
   Tardis history. Needs the owner's approval
 - [ ] CPI release dates into `research/data/` by hand (bls.gov blocks scripts), to complete H2's news split
 - [ ] Maker-first execution (post-only limits, then taker after a timeout): the lever most likely to make intraday edges tradable
-- [ ] A live performance review script: equity vs BTC buy-and-hold, trade durations, slippage vs expected price, alpha decay, cost-adjusted P&L.
-  Done 2026-09-28: `scripts/research/performance_review.py` (book vs buy-and-hold from the runtime's snapshots: beta, alpha, capture,
-  fees, funding, sleeve P&L). Still open: slippage vs decision price, trade durations, alpha decay (need weeks of fills)
+- [x] A live performance review (2026-09-28, `scripts/research/performance_review.py`): the book vs buy-and-hold from the runtime's
+  snapshots (beta, alpha, capture), fees, funding and sleeve P&L
+- [ ] The rest of the review, after weeks of fills: slippage vs decision price, trade durations, alpha decay
 - [x] Strategy design notes for options, options + perps and spot: `docs/options_plan.md`, section 8 (2026-09-26). Next from it: the tail-hedge vs lower-scale study and the spot-vs-perp venue rule for long holds
 
 ## 6. Options (plan: `docs/options_plan.md`)
 
 - [x] Foundation and research framework (2026-09-26): pricing on the forward, the validation gate, the notebook's PDE model fixed and ported, calibration in vol points, the SVI surface, Deribit chain storage, exposures and scenarios, and `notebooks/options_research.ipynb`
-- [ ] O1: start `--record-option-chains` on the always-on machine
+- [x] O1: option chains recorded hourly since 2026-09-28 (the collectors; moves to the always-on machine with section 3)
 - [x] Options building blocks (2026-09-27): USDC-settled chains, a contract picker with roll rules, exposure limits
   (`[risk.exposure]`), option positions in the book with expiry and tax, and a Deribit trading adapter (fake-exchange tests only)
 - [ ] O3b: enforce `[risk.exposure]` in the engine, and an exposure section on the dashboard
@@ -139,10 +141,14 @@ permission, and never print them.
 ## 8. Housekeeping
 
 - [ ] A `--preflight` command that runs every non-destructive check at once (Kraken spot validate-only, futures read-only, the Telegram test, `--portfolio-check`)
-- [ ] CLI smoke tests for `--demo-backtest` and `--walk-forward`
+- [ ] CLI smoke tests for `--demo-backtest` and `--walk-forward` (and fix `--walk-forward`'s fold accounting: `code-optimize.md`)
+- [ ] Split `main.py` (~2,400 lines) into command modules, and `Decimal` wherever money is booked (`aspirations.md` 8)
 - [ ] Standing rule: keep `README.md`, `docs/runbook.md` and `docs/architecture-map.md` in sync with runtime changes
 
 ## Deferred or not planned (kept for the record)
+
+- **A funding-crowding filter on the trend rules** (2026-09-28): H1 found the contrarian sign reversed for OI-weighted funding
+  z at 1-7 days (`research/reports/H1.md`). Not built.
 
 - **Dated-futures scaffolding** (`src/execution/contracts/`, `src/execution/sizing/`, `config/contracts.yaml`, `docs/FUTURES_GUIDE.md`, three unit tests): superseded by perpetuals and the portfolio. The placeholder integration test was removed on 2026-09-26.
 - **Firi (NOK) trading and Kraken/Firi counterparty monitoring**: all trading is on Kraken.

@@ -588,8 +588,8 @@ ledger written).
 - [x] 4.2 `--portfolio` runtime (2026-09-26): `main.py --runtime paper|live_dry_run --portfolio PATH` (live is refused) runs `PortfolioRuntime` (`src/portfolio/runtime.py`). `--runtime-iterations 0` runs until Ctrl-C/SIGTERM, with a clean checkpoint. The kill switch flattens everything and stops the loop. `--portfolio-reset-peak` re-arms the book after the drawdown kill. Mock runs use a temp state folder. Tests are in `tests/test_portfolio_runtime.py`.
 - [x] 4.3 Persistence and reporting (2026-09-26): a `portfolio_snapshots` table (on every decision, and hourly), decisions and fills as operational events, and `main.py --portfolio PATH --dashboard` (instruments' target vs actual, sleeves' own and allocated weight, P&L and last action, the residual, acting risk limits, recent alerts). A daily summary per sleeve is still to do.
 - [x] 4.4 Alerts (2026-09-26): stale or failing data per instrument, risk limits acting, rejected orders, reconciliation mismatches, sleeves disabled after 3 failing cycles, and repeated cycle errors. Each is sent once when it starts and once when it clears.
-- [ ] 5 `live_dry_run` soak
-- [ ] 6 Live readiness (user go-ahead). Built and tested against a fake Kraken (2026-09-26, see Phase 6); a first real run at minimum size is left.
+- [ ] 5 `live_dry_run` soak (tracked in `TODO.MD` section 1)
+- [ ] 6 Live readiness (user go-ahead; tracked in `TODO.MD` section 1). Built and tested against a fake Kraken (2026-09-26, see Phase 6); a first real run at minimum size is left.
 - [ ] 7 Enhancements
 
 **Open decisions for the user** (don't block on them; use the default and note it):
