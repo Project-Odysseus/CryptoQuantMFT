@@ -65,3 +65,16 @@ params = { short_window = 8, long_window = 96 }
 long_only = true
 sizing = "vol_target"
 sizing_params = { target_annual_vol = 0.5 }
+
+# Kill criteria, fixed before going live (a pre-registration). `scripts/research/performance_review.py` flags a sleeve whose
+# live Sharpe falls more than `decay_z` standard errors below these after `min_days`, any negative Sharpe after
+# `floor_days`, and a book drawdown beyond `max_drawdown_multiple` x the backtest's worst. It flags; you decide.
+[review]
+source = "scripts/research/portfolio_backtest.py config/portfolio.btc_live.toml, 2026-09-28: holdout 2024-10-01..2025-12-31 Sharpes; drawdown the worse of in-sample and holdout"
+backtest_sharpe = { btc_ma_1d = 1.02, btc_keltner_ls = 0.41, btc_ma_4h = 0.19 }
+book_backtest_sharpe = 1.02
+book_backtest_max_drawdown = 0.17
+min_days = 90
+floor_days = 365
+decay_z = 2.0
+max_drawdown_multiple = 1.5

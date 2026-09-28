@@ -165,6 +165,17 @@ keeps that instrument's sleeves out until their signal leaves that side, like a 
 a stop, `exchange_stop_failed` alerts once and every cycle retries. You can see the stops in Kraken's open orders
 (client ids `cqm-<book>-stop-...`); don't cancel them by hand while a position is open. Paper runs don't place them.
 
+**Kill criteria (`[review]` in the portfolio config):** written before going live, like a pre-registration: each
+sleeve's and the book's backtest Sharpe and the book's worst backtest drawdown (`portfolio.btc_live.toml` has them,
+from the 2026-09-28 backtest). `python scripts/research/performance_review.py` compares the live book with them and
+flags, never disables:
+- a live Sharpe more than 2 standard errors below the backtest's, after 90 days (the standard error over 6 months is
+  about 1.4 Sharpe points, so a plain "negative for 6 months" rule would mostly flag noise);
+- a negative live Sharpe after 365 days;
+- a book drawdown beyond 1.5x the backtest's worst (17%), well before the 40% kill.
+A flag means: stop adding capital, check the sleeve against its backtest over the same days, and decide. Don't
+move the numbers after seeing live results; if the research is redone, write the new numbers with the date and why.
+
 ## Choosing capital and size (portfolio)
 
 ```bash

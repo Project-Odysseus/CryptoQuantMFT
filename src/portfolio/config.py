@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from src.portfolio.allocation import ALLOCATION_METHODS
+from src.portfolio.review import ReviewConfig
 from src.portfolio.risk import PortfolioRiskConfig
 from src.portfolio.sleeves import STOP_KEYS, SleeveSpec
 from src.runtime.config import BAR_INTERVALS
@@ -98,6 +99,7 @@ class PortfolioConfig:
     allocation_lookback_days: int = 90
     allocation_refit_days: int = 30
     risk: PortfolioRiskConfig = field(default_factory=PortfolioRiskConfig)
+    review: ReviewConfig | None = None  # kill criteria, set before live ([review]; src/portfolio/review.py)
     path: str | None = None
 
     def small_lot_cap(self, equity: float) -> float | None:
@@ -129,7 +131,7 @@ class PortfolioConfig:
 
 _PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "scale", "allocation", "allocation_lookback_days", "allocation_refit_days",
                    "small_account_equity", "small_account_max_lot_weight"}
-_TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves"}
+_TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves", "review"}
 
 
 def _known(cls: type) -> set[str]:
@@ -256,6 +258,21 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         if total > 1.0 + 1e-9:
             errors.append(f"[portfolio] allocation = 'fixed' needs sleeve budgets summing to at most 1 (they sum to {total:g})")
 
+    review = None
+    review_raw = dict(raw.get("review", {}) or {})
+    if review_raw:
+        unknown_review = sorted(set(review_raw) - _known(ReviewConfig))
+        for key in unknown_review:
+            errors.append(f"[review] unknown key '{key}'; allowed: {sorted(_known(ReviewConfig))}")
+        sleeve_ids = {sleeve.id for sleeve in sleeves}
+        for sleeve_id in sorted(set(dict(review_raw.get("backtest_sharpe", {}))) - sleeve_ids):
+            errors.append(f"[review] backtest_sharpe names '{sleeve_id}', which is not a sleeve")
+        if not unknown_review:
+            try:
+                review = ReviewConfig(**{**review_raw, "backtest_sharpe": {k: float(v) for k, v in dict(review_raw.get("backtest_sharpe", {})).items()}})
+            except (TypeError, ValueError) as exc:
+                errors.append(f"[review] {exc}")
+
     if errors:
         source = f" in {path}" if path else ""
         raise PortfolioConfigError(f"{len(errors)} problem(s){source}:\n" + "\n".join(f"  - {error}" for error in errors))
@@ -273,6 +290,7 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         allocation_lookback_days=int(portfolio.get("allocation_lookback_days", 90)),
         allocation_refit_days=int(portfolio.get("allocation_refit_days", 30)),
         risk=risk,
+        review=review,
         path=path,
     )
 
@@ -324,4 +342,12 @@ def describe(config: PortfolioConfig) -> str:
     cooldown = (f"after {risk.rejection_cooldown_after} rejected orders in a row, only reductions on that instrument for {risk.rejection_cooldown_hours:g}h"
                 if risk.rejection_cooldown_after else "no rejection cooldown")
     lines.append(f"Safety: {stop}; {cooldown}")
+    if config.review is not None:
+        review = config.review
+        refs = ", ".join(f"{sleeve} {value:g}" for sleeve, value in review.backtest_sharpe.items())
+        lines.append(f"Kill criteria: flag a Sharpe {review.decay_z:g} standard errors below the backtest's ({refs}; book {review.book_backtest_sharpe}) "
+                     f"after {review.min_days} days, a negative one after {review.floor_days}, a drawdown beyond {review.max_drawdown_multiple:g}x "
+                     f"{review.book_backtest_max_drawdown}")
+    else:
+        lines.append("Kill criteria: none ([review]; set them before going live)")
     return "\n".join(lines)

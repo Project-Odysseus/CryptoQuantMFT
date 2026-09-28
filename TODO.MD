@@ -46,8 +46,9 @@ direction is in `aspirations.md`.
 - [x] A catastrophe stop resting on Kraken for every open position (2026-09-28, `[risk] exchange_stop_pct`, 20% in the BTC book):
   reduce-only stop-market on the mark price, replaced before cancelled, fills booked even after downtime, sleeves kept out after.
   Tested against the fake Kraken only: watch the first live placement in Kraken's open orders
-- [ ] Kill criteria per sleeve, written before live (e.g. live Sharpe over 6 months, drawdown vs backtest) and checked by the
-  performance review, so a decaying sleeve is flagged by rule rather than by feel (`aspirations.md` 3)
+- [x] Kill criteria per sleeve, written before live (2026-09-28, `[review]` in `portfolio.btc_live.toml`, checked by
+  `performance_review.py`): a Sharpe 2 standard errors below the backtest's after 90 days, negative after a year, or a book
+  drawdown beyond 1.5x the backtest's worst
 - [x] A cooldown after repeated order rejections (2026-09-28): 3 in a row on an instrument -> only reductions on it for 24 hours
 - [x] The open items in `todo_important.md` (all done 2026-09-27)
 
