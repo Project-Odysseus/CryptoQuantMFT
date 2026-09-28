@@ -109,7 +109,9 @@ direction is in `aspirations.md`.
   Tardis history. Needs the owner's approval
 - [ ] CPI release dates into `research/data/` by hand (bls.gov blocks scripts), to complete H2's news split
 - [ ] Maker-first execution (post-only limits, then taker after a timeout): the lever most likely to make intraday edges tradable
-- [ ] A live performance review script: equity vs BTC buy-and-hold, trade durations, slippage vs expected price, alpha decay, cost-adjusted P&L
+- [ ] A live performance review script: equity vs BTC buy-and-hold, trade durations, slippage vs expected price, alpha decay, cost-adjusted P&L.
+  Done 2026-09-28: `scripts/research/performance_review.py` (book vs buy-and-hold from the runtime's snapshots: beta, alpha, capture,
+  fees, funding, sleeve P&L). Still open: slippage vs decision price, trade durations, alpha decay (need weeks of fills)
 - [x] Strategy design notes for options, options + perps and spot: `docs/options_plan.md`, section 8 (2026-09-26). Next from it: the tail-hedge vs lower-scale study and the spot-vs-perp venue rule for long holds
 
 ## 6. Options (plan: `docs/options_plan.md`)

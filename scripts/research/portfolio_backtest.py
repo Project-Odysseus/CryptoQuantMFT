@@ -9,7 +9,10 @@ on perps. Then it prints:
 2. the book under `fixed`, `equal` and `inverse_vol` allocation with the
    config's risk limits, plus the config's own method without them;
 3. the correlation of the sleeves' daily returns (two sleeves on BTC and
-   ETH are not two independent bets).
+   ETH are not two independent bets);
+4. each sleeve and book against buy-and-hold of the benchmark instrument
+   (BTC by default): beta, alpha, correlation, information ratio and
+   up/down capture, in-sample and holdout.
 
 Choose the allocation by in-sample numbers. The holdout (from
 --holdout-start, the split the perp studies in docs/research_log.md use)
@@ -20,7 +23,7 @@ Usage:
     python scripts/research/portfolio_backtest.py config/portfolio.example.toml --funding-pct-per-day 0.03
 
 Writes data/research/portfolio_<timestamp>/ (sleeves.csv, books.csv,
-correlation.csv, weights.csv, equity.csv).
+correlation.csv, benchmark.csv, weights.csv, equity.csv).
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ import pandas as pd
 from src.portfolio.allocation import ALLOCATION_METHODS
 from src.portfolio.backtest import PortfolioBacktest, daily_returns, period_metrics, prepare_inputs, run_book
 from src.portfolio.config import load_portfolio_config
+from src.research.benchmark import benchmark_metrics
 from src.research.governance import write_manifest
 
 
@@ -47,11 +51,27 @@ def _table(rows: list[dict[str, object]]) -> pd.DataFrame:
     ]
 
 
+def _benchmark_rows(named: dict[str, pd.Series], benchmark: pd.Series, holdout: pd.Timestamp) -> pd.DataFrame:
+    """Benchmark metrics per series and period ("is" before the holdout, "ho" from it)."""
+    rows = []
+    for name, series in named.items():
+        for period, part in (("is", series[series.index < holdout]), ("ho", series[series.index >= holdout])):
+            metrics = benchmark_metrics(part, benchmark)
+            rows.append({"series": name, "period": period, **{key: metrics[key] for key in ("beta", "alpha_ann", "correlation", "information_ratio", "up_capture", "down_capture")}})
+    return pd.DataFrame(rows)
+
+
+def _default_benchmark(instruments: list[str]) -> str:
+    """BTC's instrument if the book has one, else the first instrument."""
+    return next((instrument for instrument in instruments if "BTC" in instrument.upper() or "XBT" in instrument.upper()), instruments[0])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("config", help="Portfolio TOML file")
     parser.add_argument("--holdout-start", default="2024-10-01", help="First day of the holdout (UTC)")
     parser.add_argument("--funding-pct-per-day", type=float, default=0.01, help="Funding longs pay on perps, %% of notional per day")
+    parser.add_argument("--benchmark", default=None, help="Instrument id whose buy-and-hold is the benchmark (default: the book's BTC instrument)")
     parser.add_argument("--out", type=Path, default=None, help="Output folder (default data/research/portfolio_<timestamp>)")
     args = parser.parse_args()
 
@@ -78,12 +98,16 @@ def main() -> None:
     book_rows += period_metrics(unlimited, holdout, label=f"{config.allocation} without risk limits")
 
     correlation = pd.DataFrame(sleeve_returns).corr()
+    benchmark_id = args.benchmark or _default_benchmark(list(inputs.prices.columns))
+    benchmark = inputs.prices[benchmark_id].resample("1D").last().pct_change().dropna()
+    versus = _benchmark_rows(sleeve_returns | {f"book: {name}": daily_returns(book) for name, book in books.items()}, benchmark, holdout)
     out = args.out or Path("data/research") / f"portfolio_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
     out.mkdir(parents=True, exist_ok=True)
     write_manifest(out, args=args)  # commit, arguments and frozen-holdout state, for reproducing the run
     pd.DataFrame(sleeve_rows).to_csv(out / "sleeves.csv", index=False)
     pd.DataFrame(book_rows).to_csv(out / "books.csv", index=False)
     correlation.to_csv(out / "correlation.csv")
+    versus.to_csv(out / "benchmark.csv", index=False)
     main_book = books[config.allocation]
     main_book.targets.to_csv(out / "weights.csv")
     pd.DataFrame({name: book.result.equity for name, book in books.items()}).to_csv(out / "equity.csv")
@@ -95,6 +119,8 @@ def main() -> None:
         print(_table(book_rows).round(2).to_string())
         print("\nCorrelation of the sleeves' daily returns:")
         print(correlation.round(2).to_string())
+        print(f"\nAgainst buy-and-hold of {benchmark_id} (daily returns; alpha is annualised):")
+        print(versus.pivot_table(index="series", columns="period", values=["beta", "alpha_ann", "down_capture"], sort=False).round(2).to_string())
     print(f"\nWrote {out}")
 
 
