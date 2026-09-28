@@ -49,12 +49,21 @@ class FakeKraken:
         self.realized = 0.0
         self.resting: list[dict[str, Any]] = []  # stop orders waiting for their trigger
         self.refuse_stops = False
+        self.fee_rate = 0.0005  # what Kraken really charges (the adapter estimates the contract's taker rate)
+        self.log: list[dict[str, Any]] = []  # the account log: two entries per fill, as Kraken writes them
+        self.unrealized_funding: dict[str, float] = {}  # accrues per position; realized into the log at the next fill
+        self.now = T0
 
     def __call__(self, method: str, url: str, headers: dict[str, str], body: bytes | None) -> dict[str, Any]:
         path, _, query = url.partition("?")
         endpoint = path.rsplit("/", 1)[-1]
         params = dict(urllib.parse.parse_qsl(body.decode() if body else query))
         self.requests.append({"endpoint": endpoint, "params": params})
+        if endpoint == "account-log":
+            entries = sorted(self.log, key=lambda e: e["id"], reverse=params.get("sort", "desc") == "desc")
+            if "from" in params:
+                entries = [e for e in entries if e["id"] >= int(params["from"])]
+            return {"accountUid": "fake", "logs": entries[: int(params.get("count", 500))]}
         if endpoint == "sendorder" and params.get("orderType") == "stp":
             if self.refuse_stops:
                 return {"result": "success", "sendStatus": {"status": "invalidPrice"}}
@@ -85,9 +94,9 @@ class FakeKraken:
                                                          "triggerSignal": o["triggerSignal"], "status": "untouched"} for o in self.resting]}
         if endpoint == "openpositions":
             return {"result": "success", "openPositions": [{"symbol": symbol, "side": "long" if size > 0 else "short", "size": abs(size), "price": entry,
-                                                            "unrealizedFunding": 0.0} for symbol, (size, entry) in self.positions.items() if size]}
+                                                            "unrealizedFunding": self.unrealized_funding.get(symbol, 0.0)} for symbol, (size, entry) in self.positions.items() if size]}
         if endpoint == "accounts":
-            unrealized = sum(size * (self.prices[symbol] - entry) for symbol, (size, entry) in self.positions.items())
+            unrealized = sum(size * (self.prices[symbol] - entry) for symbol, (size, entry) in self.positions.items()) + sum(self.unrealized_funding.values())
             equity = self.collateral + unrealized
             used = sum(abs(size) * self.prices[symbol] / 2.0 for symbol, (size, _entry) in self.positions.items())
             return {"result": "success", "accounts": {"flex": {"marginEquity": equity, "availableMargin": equity - used, "totalUnrealized": unrealized}}}
@@ -99,9 +108,13 @@ class FakeKraken:
     def _fill(self, symbol: str, signed: float, cli_ord_id: str) -> str:
         price = self.prices[symbol]
         size, entry = self.positions.get(symbol, [0.0, 0.0])
+        realized_pnl = 0.0
         if size and (size > 0) != (signed > 0):
             closed = min(abs(size), abs(signed))
-            self.collateral += closed * (price - entry) * (1 if size > 0 else -1)
+            realized_pnl = closed * (price - entry) * (1 if size > 0 else -1)
+            self.collateral += realized_pnl
+        realized_funding = self.unrealized_funding.pop(symbol, 0.0)  # Kraken realizes accrued funding at a fill
+        self.collateral += realized_funding
         new = size + signed
         if abs(new) < 1e-12:
             self.positions.pop(symbol, None)
@@ -111,12 +124,24 @@ class FakeKraken:
             self.positions[symbol] = [new, (entry * abs(size) + price * abs(signed)) / abs(new)]
         else:
             self.positions[symbol] = [new, entry]
-        self.collateral -= abs(signed) * price * 0.0005  # the taker fee Kraken charges (our estimate uses the same rate)
+        fee = abs(signed) * price * self.fee_rate
+        self.collateral -= fee
         number = len(self.fills) + len(self.hidden_fills) + 1
         fill = {"cliOrdId": cli_ord_id, "order_id": f"uuid-{number}", "fill_id": f"fill-{number}", "symbol": symbol, "size": abs(signed), "price": price,
-                "side": "buy" if signed > 0 else "sell", "fillType": "taker"}
+                "side": "buy" if signed > 0 else "sell", "fillType": "taker", "realized_funding": realized_funding}
+        stamp = self.now.isoformat().replace("+00:00", "Z")
+        base = {"date": stamp, "info": "futures trade", "contract": symbol.lower(), "execution": fill["fill_id"], "trade_price": price, "margin_account": "flex"}
+        self.log.append({**base, "id": len(self.log) + 1, "asset": symbol.lower(), "old_balance": size, "new_balance": size + signed, "fee": None, "realized_funding": None})
+        rounded_funding = round(realized_funding, 4) if size else 0.0  # the log keeps USD to 4 decimals, as Kraken's does
+        self.log.append({**base, "id": len(self.log) + 1, "asset": "usd", "old_balance": 0.0, "new_balance": 0.0, "fee": fee, "realized_pnl": realized_pnl,
+                         "realized_funding": rounded_funding or None})
         (self.hidden_fills if self.delay_fills else self.fills).append(fill)
         return fill["order_id"]  # unique, as Kraken's order ids are
+
+    def accrue_funding(self, hourly_rate: float, hours: float = 4.0) -> None:
+        """Funding accrues on every position (longs pay a positive rate) into unrealized funding, as on Kraken's flex account."""
+        for symbol, (size, _entry) in self.positions.items():
+            self.unrealized_funding[symbol] = self.unrealized_funding.get(symbol, 0.0) - size * self.prices[symbol] * hourly_rate * hours
 
     def trigger_stops(self) -> list[dict[str, Any]]:
         """Fire every resting stop whose mark has crossed it: a reduce-only market fill at the current price."""
@@ -263,12 +288,17 @@ def test_live_funding_is_booked_from_krakens_hourly_rates_into_book_and_tax(tmp_
     logger.fx_rate_collector = Rates()
     engine = _live_engine(fake, tmp_path, logger=logger, funding=funding)
     for index in range(FIRST, 260):
+        fake.now = _now(index)
+        fake.accrue_funding(0.00001)  # Kraken charges the same rate, at its own marks: the account log trues up the difference
         _cycle(engine, fake, index)
+    engine._flush_tax(_now(260))  # the last cycle's records are written at the start of the next one
     booked = sum(float(position.funding) for position in engine.book.positions.values())
     taxed = [event for event in logger.list_tax_events(transaction_types=["FUNDING_FEE"])]
-    assert booked != 0.0 and len(taxed) > 20
-    assert sum(event["metadata"]["amount"] for event in taxed) == pytest.approx(-booked)
-    assert all(event["metadata"]["estimate"] for event in taxed)
+    estimates = [event for event in taxed if event["metadata"].get("estimate")]
+    true_ups = [event for event in taxed if event["metadata"].get("kind") == "funding_true_up"]
+    assert booked != 0.0 and len(estimates) > 20 and true_ups
+    assert sum(event["metadata"]["amount"] for event in taxed) == pytest.approx(-booked)  # the ledger and the book agree
+    assert abs(sum(event["metadata"]["amount"] for event in true_ups)) < 0.2 * abs(booked)  # estimates were close; the log corrects the rest
 
 
 def test_a_restart_with_an_order_in_flight_settles_it_without_resending(tmp_path) -> None:
@@ -553,3 +583,53 @@ def test_no_stops_are_sent_unless_configured(tmp_path) -> None:
     for index in range(FIRST, 260):
         _cycle(engine, fake, index)
     assert not [order for order in fake.sent_orders() if order.get("orderType") == "stp"]
+
+
+
+def test_fees_and_funding_are_trued_up_from_the_account_log_so_book_and_kraken_agree(tmp_path) -> None:
+    fake = FakeKraken()
+    fake.log.append({"id": 1, "date": "2026-01-01T00:00:00Z", "info": "futures trade", "contract": "pf_xbtusd", "asset": "usd", "execution": "old-test-trade",
+                     "fee": 0.5, "realized_funding": -0.1, "trade_price": 50_000.0})  # before the book existed: never re-booked
+    fake.fee_rate = 0.0004  # Kraken charges less than the 0.05% taker estimate (e.g. a better fee tier)
+    engine = _live_engine(fake, tmp_path)  # funding estimates from public rates: none in this test, so all of it is a true-up
+    engine.record_tax = True
+    last = FIRST
+    for index in range(FIRST, 330):
+        fake.now = _now(index)
+        fake.accrue_funding(0.00002)
+        report = _cycle(engine, fake, index)
+        last = index
+        if index == 260:  # a restart halfway: nothing is booked twice
+            engine = _live_engine(fake, tmp_path)
+            engine.record_tax = True
+    fake.now = _now(last + 1)
+    report = _cycle(engine, fake, last + 1)
+    while not report.decided:
+        last += 1
+        report = _cycle(engine, fake, last + 1)
+    kraken = fake("GET", "https://x/api/v3/accounts", {}, None)["accounts"]["flex"]["marginEquity"]
+    assert float(engine.book.equity()) == pytest.approx(kraken, abs=1e-6)  # to the cent and beyond, fees and funding included
+    fee_ups = [r for r in engine.pending_tax if r["metadata"].get("kind") == "fee_true_up"]
+    funding_ups = [r for r in engine.pending_tax if r["metadata"].get("kind") == "funding_true_up"]
+    assert fee_ups and all(r["amount"] > 0 for r in fee_ups)  # paid less than estimated: the correction is a gain
+    realized_on_kraken = sum(fill.get("realized_funding") or 0.0 for fill in fake.fills)  # full precision (the log is rounded)
+    assert funding_ups and sum(r["amount"] for r in funding_ups) == pytest.approx(realized_on_kraken + sum(fake.unrealized_funding.values()), abs=1e-6)
+    assert not any(r["metadata"].get("execution") == "old-test-trade" for r in fee_ups)
+    assert engine.account_log_last_id["kraken_futures"] == len(fake.log)
+
+
+def test_fees_of_other_senders_are_left_alone(tmp_path) -> None:
+    fake = FakeKraken()
+    fake.fee_rate = 0.0004
+    engine = _live_engine(fake, tmp_path)
+    _cycle(engine, fake, FIRST)  # the first decision starts the log reconciliation
+    fake.now = _now(FIRST + 1)
+    fake._fill("PF_XBTUSD", 0.001, "cqm-kill-20260926T214646-0")  # the kill switch or a manual trade, not this book
+    fake._fill("PF_XBTUSD", -0.001, "cqm-kill-20260926T214647-0")
+    engine.adopt_exchange_state(now=_now(FIRST + 1), reason="test")
+    report = None
+    for index in range(FIRST + 1, FIRST + 12):
+        report = _cycle(engine, fake, index)
+        if report.decided and report.account_log:
+            break
+    assert report is not None and report.account_log["kraken_futures"]["fee_gap"] == 0.0

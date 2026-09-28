@@ -42,7 +42,8 @@ direction is in `aspirations.md`.
   bar close, fills, reconciliation, tax rows, Telegram
 - [ ] Run it live (runbook, "Live portfolio trading"). In the first week, check the dashboard, drift alerts and the tax queue daily
 - [x] Trigger the kill switch once against a real open position at minimum size (2026-09-26: `--kill-switch` now closes Kraken Futures positions and cancels orders on its own; verified live against a 0.0001 BTC long). In the first live week, trigger it once more while the book runs
-- [ ] Funding and fees from Kraken's account log. They are estimated from the public hourly rates and the taker rate for now; the equity-drift alert catches gaps. Also needed for exact tax records (section 4)
+- [x] Funding and fees from Kraken's account log (2026-09-28): real fees per fill and funding trued up on totals each decision bar,
+  into the book and the tax ledger (`fee_true_up` / `funding_true_up`). Checked read-only against the real account's log
 - [x] A catastrophe stop resting on Kraken for every open position (2026-09-28, `[risk] exchange_stop_pct`, 20% in the BTC book):
   reduce-only stop-market on the mark price, replaced before cancelled, fills booked even after downtime, sleeves kept out after.
   Tested against the fake Kraken only: watch the first live placement in Kraken's open orders
@@ -86,7 +87,9 @@ direction is in `aspirations.md`.
 
 - [x] Norges Bank FX with a cache, the ledger schema, realization-time events (spot FIFO; perp realized P&L, fees and funding), the EUR pool and currency gains, year-end holdings, and exports with a Skattemelding summary. Validated with real spot (2026-09-18/25) and futures (2026-09-26) trades
 - [ ] January 2027: export the first real trading year, spot-check it against Kraken's history, and run the Dec 31 valuation checklist
-- [ ] Confirm how Skatteetaten treats derivative flows (perp P&L and funding) before filing (ask during 2026; filing is spring 2027)
+- [ ] Confirm how Skatteetaten treats derivative flows (perp P&L and funding) before filing (ask during 2026; filing is spring 2027).
+  Include the collateral conversions: Kraken pays USD fees and losses by converting EUR collateral (`conversion` entries in the
+  account log), which are EUR disposals the ledger doesn't record yet
 - Exact funding and fees from Kraken's account log: tracked in section 1
 
 ## 5. Research roadmap (findings: `docs/research_log.md`)

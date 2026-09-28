@@ -190,7 +190,8 @@ Plan and status: `docs/portfolio_plan.md`.
   SIGTERM. Repeated order rejections on an instrument put it in a reduce-only cooldown (`PortfolioEngine._note_rejection`,
   `[risk] rejection_cooldown_*`), kept in the checkpoint. With `[risk] exchange_stop_pct`, `PortfolioEngine._sync_stops`
   keeps one reduce-only stop resting on Kraken per open perp position (`KrakenFuturesCrossMarginAdapter.sync_protective_stops`)
-  and `_book_stop_fills` books stops that fired, even during downtime.
+  and `_book_stop_fills` books stops that fired, even during downtime. `_reconcile_account_log` corrects estimated fees
+  and funding from Kraken's account log each decision bar (`KrakenFuturesCrossMarginAdapter.account_log`, `recent_fills`).
 
 ## 4. How the pieces actually work together
 

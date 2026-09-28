@@ -44,6 +44,7 @@ from src.execution.perps import MarginAccountAdapter, PerpContract
 from src.utils.retry import TransientExchangeError, has_transient_marker, retry_call
 
 API_BASE = "https://futures.kraken.com/derivatives"
+HISTORY_BASE = "https://futures.kraken.com"  # the account history API (account log) lives outside /derivatives
 
 # sendorder statuses that mean the order reached the matching engine.
 _ACCEPTED_SEND_STATUSES = {"placed", "partiallyFilled", "filled"}
@@ -103,6 +104,28 @@ class KrakenFuturesPrivateClient:
         if method == "GET" or endpoint in FUTURES_RETRYABLE_POSTS:
             return retry_call(lambda: self._call_once(method, endpoint, params), label=f"kraken_futures {endpoint}", sleep=self.sleep)
         return self._call_once(method, endpoint, params)
+
+    def history(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """A read-only call to Kraken Futures' account history API (`/api/history/v3/<endpoint>`, e.g. `account-log`).
+
+        A different base path from the trading API, signed the same way, and its responses carry no `result` field.
+        Retried on temporary failures like every read.
+        """
+        def once() -> dict[str, Any]:
+            query = urllib.parse.urlencode({key: value for key, value in (params or {}).items() if value is not None}, doseq=True)
+            nonce = self.nonce()
+            path = f"/api/history/v3/{endpoint}"
+            headers = {"APIKey": self.api_key, "Nonce": nonce, "Accept": "application/json", "User-Agent": "CryptoQuantMFT/0.1",
+                       "Authent": sign_request(post_data=query, nonce=nonce, endpoint_path=path, api_secret=self.api_secret)}
+            payload = self.transport("GET", f"{HISTORY_BASE}{path}" + (f"?{query}" if query else ""), headers, None)
+            if not isinstance(payload, dict) or "error" in payload or "errors" in payload:
+                error = payload.get("error") or payload.get("errors") if isinstance(payload, dict) else payload
+                if has_transient_marker(error):
+                    raise TransientExchangeError(f"Kraken Futures history {endpoint} failed: {error}", payload)
+                raise RuntimeError(f"Kraken Futures history {endpoint} failed: {error}")
+            return payload
+
+        return retry_call(once, label=f"kraken_futures history {endpoint}", sleep=self.sleep)
 
     def _call_once(self, method: str, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         post_data = urllib.parse.urlencode({key: value for key, value in (params or {}).items() if value is not None})

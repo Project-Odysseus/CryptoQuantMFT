@@ -416,6 +416,39 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
                         "fee": size * price * self.contracts[symbol].taker_fee_rate, "fee_estimated": True, "time": fill.get("fillTime")})
         return out
 
+    # --- the account log (Kraken's own record of fees and funding) ---------------------------------------------------
+
+    def account_log(self, *, after_id: int | None) -> list[dict[str, Any]]:
+        """Account log entries with an id above `after_id`, oldest first (every page). With None: only the latest entry.
+
+        A trade writes one entry on the contract (the position before and after) and one on the settlement currency
+        (the real `fee`, `realized_pnl`, `realized_funding`); both carry the fill's id as `execution`.
+        """
+        if after_id is None:
+            return list(self._client.history("account-log", {"sort": "desc", "count": 1}).get("logs", []))
+        entries: list[dict[str, Any]] = []
+        start = after_id + 1
+        while True:
+            page = list(self._client.history("account-log", {"from": start, "sort": "asc", "count": 500}).get("logs", []))
+            entries += [entry for entry in page if int(entry.get("id", 0)) > after_id]
+            if len(page) < 500:
+                return sorted(entries, key=lambda entry: int(entry["id"]))
+            start = max(int(entry["id"]) for entry in page) + 1
+
+    def read_unrealized_funding(self) -> dict[str, float]:
+        """Kraken's accrued, not yet realized funding per runtime symbol, read now (negative = owed). Changes no state."""
+        out = {}
+        for position in self._client.call("GET", "openpositions").get("openPositions", []):
+            symbol = self.by_venue_symbol.get(str(position.get("symbol")))
+            if symbol is not None:
+                out[symbol] = float(position.get("unrealizedFunding") or 0.0)
+        return out
+
+    def recent_fills(self) -> dict[str, dict[str, Any]]:
+        """Kraken's recent fills by fill id: the client order id (the account log lacks it) and full-precision
+        `realized_funding` (the log rounds USD amounts to 4 decimals, which erases a small account's funding)."""
+        return {str(fill["fill_id"]): fill for fill in self._client.call("GET", "fills").get("fills", []) if fill.get("fill_id")}
+
     # --- account -------------------------------------------------------------------------------------------------
 
     def sync_account(self) -> dict[str, Any]:

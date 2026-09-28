@@ -77,6 +77,7 @@ class CycleReport:
     sleeve_errors: dict[str, str] = field(default_factory=dict)
     cooldowns: dict[str, str] = field(default_factory=dict)  # instrument -> ISO time its rejection cooldown ends
     stop_actions: list[dict[str, Any]] = field(default_factory=list)  # exchange stops placed, kept, cancelled or failed
+    account_log: dict[str, Any] = field(default_factory=dict)  # what the account-log reconciliation corrected this cycle
 
 
 def build_paper_adapters(
@@ -199,6 +200,14 @@ class PortfolioEngine:
         self.stop_anchors: dict[str, dict[str, Any]] = {}
         self.stop_fills_booked: list[str] = []
         self.stops_verified = False  # the first sync after a start also cancels stops left for positions now closed
+        # Account-log reconciliation (live): the last log entry processed per venue, and funding per instrument in
+        # "received" terms (negative = paid): realized per Kraken, estimated by the book, unrealized at the start, trued up
+        self.account_log_last_id: dict[str, int] = {}
+        self.funding_actual: dict[str, float] = {}
+        self.funding_estimated: dict[str, float] = {}
+        self.funding_baseline: dict[str, float] = {}
+        self.funding_trued_up: dict[str, float] = {}
+        self.unknown_fee_fills: list[str] = []
         self.stop_failure_alerted = False
         self.disabled_sleeves: set[str] = set()
         self.cycle = 0
@@ -230,6 +239,7 @@ class PortfolioEngine:
         self._book_stop_fills(report, now)  # before the account sync, so a stop fill isn't taken for someone else's trade
 
         report.adapter_events = self._mark_adapters(prices, now)
+        self._start_account_log(now)  # before any trade, so the book's own first fills are reconciled
         self.book.mark(prices, fx=fx, now=now)
         self._settle_option_expiries(prices, now)
         self._book_live_funding(now)
@@ -281,6 +291,7 @@ class PortfolioEngine:
         report.mismatches = self.reconcile()
         self.unreconciled = dict(report.mismatches)
         self._sync_stops(prices, report, now)
+        self._reconcile_account_log(report, now)
         report.equity = float(self.book.equity())
         self._log_cycle(report)
         self._save()
@@ -700,10 +711,113 @@ class PortfolioEngine:
             for rate in sorted(rates, key=lambda item: item.timestamp):
                 payment = float(units) * float(mark) * rate.hourly_rate
                 self.book.book_funding(instrument, payment)
+                self.funding_estimated[instrument] = self.funding_estimated.get(instrument, 0.0) - payment  # trued up from the account log
                 self._tax_derivative(instrument, "FUNDING_FEE", -payment, rate.timestamp, {"kind": "funding", "estimate": "public hourly rate x latest mark"})
                 self.funding_booked_until[instrument] = rate.timestamp.isoformat()
         for instrument in [key for key in self.funding_booked_until if key not in self.book.units()]:
             self.funding_booked_until.pop(instrument)
+
+    def _start_account_log(self, now: datetime) -> None:
+        """On a live venue's first cycle, note where its account log ends: entries from before this book aren't ours."""
+        for venue, adapter in self.adapters.items():
+            read = getattr(adapter, "account_log", None)
+            if not getattr(adapter, "live", False) or not callable(read) or venue in self.account_log_last_id:
+                continue
+            try:
+                latest = read(after_id=None)
+                unrealized = adapter.read_unrealized_funding()
+            except Exception as exc:  # noqa: BLE001 - try again next cycle
+                self._event("WARNING", "portfolio_account_log_failed", f"{venue}: account log unreadable ({type(exc).__name__}: {exc})", {}, now)
+                continue
+            self.account_log_last_id[venue] = int(latest[0]["id"]) if latest else 0
+            for instrument, spec in self.config.instruments.items():
+                if spec.venue == venue and spec.kind == "perp":
+                    self.funding_baseline[instrument] = float(unrealized.get(spec.symbol, 0.0))
+            self._event("INFO", "portfolio_account_log_start", f"{venue}: account-log reconciliation starts after entry {self.account_log_last_id[venue]}",
+                        {"venue": venue}, now)
+
+    def _reconcile_account_log(self, report: CycleReport, now: datetime) -> None:
+        """Correct estimated fees and funding with Kraken's account log, on decision bars (live venues only).
+
+        - **Fees:** each fill this book sent (its client id carries the book's prefix) is estimated at the taker rate
+          when it is booked. The log's fee entry for that fill (matched by fill id = `execution`) replaces it: the gap is
+          booked as a fee in the book and a TRADING_FEE record dated at the fill. Fills of other senders (the kill
+          switch, manual trades) keep their own records and aren't touched.
+        - **Funding** belongs to the position, not to a fill, and Kraken realizes it at fills (`realized_funding`).
+          So it is trued up on totals per instrument: realized (full precision from /fills, else the log's rounded
+          figure) plus Kraken's current unrealized funding,
+          minus what the book estimated from public rates and what was trued up before. The gap is booked as funding
+          and a FUNDING_FEE record dated now.
+        - The first run starts from the log's latest entry, so trades from before the book existed aren't re-booked.
+        """
+        for venue, adapter in self.adapters.items():
+            read = getattr(adapter, "account_log", None)
+            if not getattr(adapter, "live", False) or not callable(read):
+                continue
+            instruments = {spec.symbol: instrument for instrument, spec in self.config.instruments.items() if spec.venue == venue and spec.kind == "perp"}
+            contracts = {adapter.contracts[symbol].venue_symbol.lower(): instrument for symbol, instrument in instruments.items() if symbol in adapter.contracts}
+            last = self.account_log_last_id.get(venue)
+            if last is None:
+                continue  # not started yet (`_start_account_log` retries each cycle)
+            try:
+                entries = read(after_id=last)
+                fills = adapter.recent_fills() if any(entry.get("info") == "futures trade" for entry in entries) else {}
+                unrealized = adapter.read_unrealized_funding()  # now: fills this cycle already realized part of it
+            except Exception as exc:  # noqa: BLE001 - estimates stay in place; the next decision bar tries again
+                self._event("WARNING", "portfolio_account_log_failed", f"{venue}: account log unreadable ({type(exc).__name__}: {exc})", {}, now)
+                continue
+            sizes = {entry.get("execution"): abs(float(entry.get("new_balance") or 0.0) - float(entry.get("old_balance") or 0.0))
+                     for entry in entries if entry.get("info") == "futures trade" and str(entry.get("asset", "")).lower() == str(entry.get("contract", "")).lower()}
+            fee_gap, funding_seen, unknown = 0.0, 0.0, []
+            prefix = f"{adapter.client_id_prefix}-"
+            for entry in entries:
+                instrument = contracts.get(str(entry.get("contract") or "").lower())
+                if instrument is None or str(entry.get("asset", "")).lower() == str(entry.get("contract", "")).lower():
+                    continue  # not our contract, or the position entry (the money is on the currency entry)
+                execution = str(entry.get("execution") or "")
+                fill = fills.get(execution) if execution else None
+                realized_value = fill.get("realized_funding") if fill is not None and fill.get("realized_funding") is not None else entry.get("realized_funding")
+                if realized_value is not None:  # full precision from /fills when Kraken still lists the fill
+                    realized = float(realized_value)
+                    self.funding_actual[instrument] = self.funding_actual.get(instrument, 0.0) + realized
+                    funding_seen += realized
+                if entry.get("info") != "futures trade" or entry.get("fee") is None:
+                    continue
+                owner = str(fill.get("cliOrdId") or "") if fill is not None else None
+                if owner is None:
+                    unknown.append(execution)
+                    continue
+                if not owner.startswith(prefix) or execution not in sizes:
+                    continue
+                spec = self.config.instruments[instrument]
+                estimated = sizes[execution] * float(entry.get("trade_price") or 0.0) * adapter.contracts[spec.symbol].taker_fee_rate
+                gap = float(entry["fee"]) - estimated
+                if abs(gap) > 1e-12:
+                    stamp = datetime.fromisoformat(str(entry["date"]).replace("Z", "+00:00"))
+                    self.book.book_fee(instrument, gap)
+                    self._tax_derivative(instrument, "TRADING_FEE", -gap, stamp, {"kind": "fee_true_up", "execution": execution, "log_id": entry.get("id"),
+                                                                                  "actual": float(entry["fee"]), "estimated": estimated})
+                    fee_gap += gap
+            if entries:
+                self.account_log_last_id[venue] = max(int(entry["id"]) for entry in entries)
+            if unknown:
+                self.unknown_fee_fills = (self.unknown_fee_fills + unknown)[-200:]
+                self._event("WARNING", "portfolio_account_log_unmatched", f"{venue}: {len(unknown)} trade fees whose fill is no longer in /fills; left as estimated",
+                            {"executions": unknown[:20]}, now)
+            funding_gap = 0.0
+            for symbol, instrument in instruments.items():
+                actual = self.funding_actual.get(instrument, 0.0) + float(unrealized.get(symbol, 0.0)) - self.funding_baseline.get(instrument, 0.0)
+                gap = actual - self.funding_estimated.get(instrument, 0.0) - self.funding_trued_up.get(instrument, 0.0)
+                if abs(gap) > 1e-9:
+                    self.book.book_funding(instrument, -gap)  # book_funding takes "paid"
+                    self._tax_derivative(instrument, "FUNDING_FEE", gap, now, {"kind": "funding_true_up", "actual_received_total": actual,
+                                                                                "estimated_received_total": self.funding_estimated.get(instrument, 0.0)})
+                    self.funding_trued_up[instrument] = self.funding_trued_up.get(instrument, 0.0) + gap
+                    funding_gap += gap
+            report.account_log[venue] = {"entries": len(entries), "fee_gap": fee_gap, "funding_realized": funding_seen, "funding_gap": funding_gap, "unmatched": len(unknown)}
+            if fee_gap or funding_gap:
+                self._event("INFO", "portfolio_account_log_true_up", f"{venue}: fees {fee_gap:+.6f}, funding {funding_gap:+.6f} from Kraken's account log",
+                            report.account_log[venue], now)
 
     def _check_equity_drift(self, now: datetime) -> None:
         """Compare the book's equity with a live exchange's margin equity; alert once if they drift apart.
@@ -878,6 +992,12 @@ class PortfolioEngine:
             "cooldown_until": self.cooldown_until,
             "stop_anchors": self.stop_anchors,
             "stop_fills_booked": self.stop_fills_booked,
+            "account_log_last_id": self.account_log_last_id,
+            "funding_actual": self.funding_actual,
+            "funding_estimated": self.funding_estimated,
+            "funding_baseline": self.funding_baseline,
+            "funding_trued_up": self.funding_trued_up,
+            "unknown_fee_fills": self.unknown_fee_fills,
             "last_decisions": self.last_decisions,
             "pending_tax": self.pending_tax,
             "pending_orders": self.pending_orders,
@@ -918,6 +1038,10 @@ class PortfolioEngine:
         self.cooldown_until = dict(payload.get("cooldown_until", {}))
         self.stop_anchors = dict(payload.get("stop_anchors", {}))
         self.stop_fills_booked = list(payload.get("stop_fills_booked", []))
+        self.account_log_last_id = {venue: int(value) for venue, value in dict(payload.get("account_log_last_id", {})).items()}
+        for name in ("funding_actual", "funding_estimated", "funding_baseline", "funding_trued_up"):
+            setattr(self, name, {key: float(value) for key, value in dict(payload.get(name, {})).items()})
+        self.unknown_fee_fills = list(payload.get("unknown_fee_fills", []))
         self.book_id = str(payload.get("book_id", self.book_id))
         return True
 

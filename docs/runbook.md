@@ -153,7 +153,12 @@ passes: `--enable-live-trading`, `--live-confirmation ENABLE_LIVE_TRADING`, no m
 are derived from the checkpointed cycle, so after a crash between sending and hearing back, the restarted engine
 finds the fill on Kraken by client id instead of sending again. Kraken's positions and margin are the source of
 truth, and the book is reconciled every cycle. Fees are estimated from the contract's taker rate, and funding from
-Kraken's published hourly rates; the equity-drift check catches what those estimates miss.
+Kraken's published hourly rates, as they happen; on every decision bar both are corrected from Kraken's account log
+(`/api/history/v3/account-log`): each of the book's fills gets its real fee (matched by fill id), and funding is
+trued up on totals (realized at fills, from `/fills` at full precision, plus the unrealized amount now). Corrections
+go to the book and the tax ledger as `fee_true_up` / `funding_true_up` records. Fills of the kill switch or manual
+trades keep their own records. The first live cycle starts the log after its latest entry, so older trades aren't
+re-booked. The equity-drift check then only catches what the log doesn't explain.
 
 **Exchange stops (`[risk] exchange_stop_pct`):** with it set, every open perp position has one reduce-only
 stop-market order resting on Kraken, triggered by the mark price, that far beyond the price when the position last

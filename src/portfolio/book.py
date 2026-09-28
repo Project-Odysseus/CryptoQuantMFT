@@ -221,6 +221,13 @@ class PortfolioBook:
         self.cash[spec.venue] -= paid
         self.positions.setdefault(instrument, BookPosition()).funding += paid
 
+    def book_fee(self, instrument: str, amount: Decimal | float) -> None:
+        """Book a fee (positive = paid), e.g. the gap between an estimated fee and the exchange's own record."""
+        spec = self._spec(instrument)
+        paid = _d(amount)
+        self.cash[spec.venue] -= paid
+        self.positions.setdefault(instrument, BookPosition()).fees += paid
+
     def mark(self, prices: Mapping[str, Decimal | float], *, fx: Mapping[str, Decimal | float] | None = None, now: datetime | None = None) -> Decimal:
         """Take new prices (and FX rates), update sleeve P&L, the equity peak and the UTC day start; returns equity in base.
 
