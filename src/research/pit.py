@@ -52,6 +52,12 @@ def holdout_start() -> pd.Timestamp:
     return pd.Timestamp(governance.FINAL_HOLDOUT_START)
 
 
+def ns(times: Any) -> np.ndarray:
+    """UTC times as int64 nanoseconds. Always compare through this: parquet files and pandas mix s/ms/us/ns
+    resolutions, and `asi8` is in the index's own unit, so raw `asi8` values from two sources can't be compared."""
+    return pd.DatetimeIndex(pd.to_datetime(times, utc=True)).as_unit("ns").asi8
+
+
 def _utc(value: Any) -> pd.Timestamp:
     stamp = pd.Timestamp(value)
     return stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")

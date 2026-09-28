@@ -39,13 +39,13 @@ def realized_vol_frame(coin: str, decisions: pd.DatetimeIndex, *, end: Any = Non
     consecutive = bars.index.to_series().diff() == pd.Timedelta(minutes=5)
     squared = (returns.where(consecutive) ** 2).fillna(0.0)
     counted = consecutive.astype(float)
-    times = pd.DatetimeIndex(bars["available_at"]).asi8
+    times = pit.ns(bars["available_at"])
     cs, cn = np.concatenate([[0.0], np.cumsum(squared.to_numpy())]), np.concatenate([[0.0], np.cumsum(counted.to_numpy())])
     span = pd.Timedelta(days=RV_DAYS)
     expected = RV_DAYS * 288
 
     def window(lo: pd.DatetimeIndex, hi: pd.DatetimeIndex) -> np.ndarray:
-        a, b = np.searchsorted(times, lo.asi8, side="right"), np.searchsorted(times, hi.asi8, side="right")
+        a, b = np.searchsorted(times, pit.ns(lo), side="right"), np.searchsorted(times, pit.ns(hi), side="right")
         total, count = cs[b] - cs[a], cn[b] - cn[a]
         with np.errstate(invalid="ignore", divide="ignore"):
             vol = np.sqrt(total * 365.0 / RV_DAYS)

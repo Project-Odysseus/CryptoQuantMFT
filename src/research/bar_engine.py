@@ -23,6 +23,10 @@ import numpy as np
 import pandas as pd
 
 
+def _ns(times: Any) -> np.ndarray:
+    return pd.DatetimeIndex(pd.to_datetime(times, utc=True)).as_unit("ns").asi8  # same unit whatever the source's
+
+
 @dataclass(frozen=True, slots=True)
 class TargetRun:
     """Per-bar results of `run_targets`, indexed by bar open time (the bar's return runs open to next open)."""
@@ -49,8 +53,7 @@ def funding_by_bar(bar_opens: pd.DatetimeIndex, settlements: pd.DataFrame) -> np
     out = np.zeros(len(bar_opens))
     if settlements is None or settlements.empty or len(bar_opens) == 0:
         return out
-    times = pd.DatetimeIndex(pd.to_datetime(settlements["timestamp"], utc=True))
-    index = np.searchsorted(bar_opens.asi8, times.asi8, side="left") - 1
+    index = np.searchsorted(_ns(bar_opens), _ns(settlements["timestamp"]), side="left") - 1
     valid = (index >= 0) & (index < len(bar_opens) - 1)
     np.add.at(out, index[valid], settlements["rate"].to_numpy(dtype=float)[valid])
     return out

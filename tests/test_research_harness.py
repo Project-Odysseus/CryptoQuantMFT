@@ -190,3 +190,9 @@ def test_trial_ledger_and_deflated_sharpe_by_family() -> None:
     result = deflated_sharpe(returns, "HX")
     assert result["family_trials"] == 3 and result["global_trials"] >= 3
     assert 0.0 <= result["dsr_global"] <= result["dsr_family"] <= 1.0
+
+
+def test_funding_by_bar_handles_mixed_time_resolutions() -> None:
+    opens = pd.date_range("2024-01-01", periods=3, freq="8h", tz="UTC").as_unit("ms")  # parquet bars come back in ms
+    settlements = pd.DataFrame({"timestamp": pd.DatetimeIndex([opens[1]]).as_unit("us"), "rate": [0.01]})  # funding in us
+    assert funding_by_bar(opens, settlements).tolist() == [0.01, 0.0, 0.0]

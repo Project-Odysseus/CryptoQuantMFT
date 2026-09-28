@@ -34,10 +34,10 @@ def normalised_rates(settlements: pd.DataFrame) -> pd.DataFrame:
 
 def trailing_mean(times: pd.Series, values: pd.Series, decisions: pd.DatetimeIndex, days: int) -> np.ndarray:
     """Mean of `values` whose time falls in (T - days, T] for each decision T (NaN if none)."""
-    t = pd.DatetimeIndex(pd.to_datetime(times, utc=True)).asi8
+    t = pit.ns(times)
     cs = np.concatenate([[0.0], np.cumsum(values.to_numpy(dtype=float))])
-    hi = np.searchsorted(t, decisions.asi8, side="right")
-    lo = np.searchsorted(t, (decisions - pd.Timedelta(days=days)).asi8, side="right")
+    hi = np.searchsorted(t, pit.ns(decisions), side="right")
+    lo = np.searchsorted(t, pit.ns(decisions - pd.Timedelta(days=days)), side="right")
     count = hi - lo
     with np.errstate(invalid="ignore", divide="ignore"):
         return np.where(count > 0, (cs[hi] - cs[lo]) / np.maximum(count, 1), np.nan)
