@@ -1,0 +1,70 @@
+PRE-REGISTRATION H2: LIQUIDATION OVERSHOOT -> REVERSAL (PROXY VERSION)
+Version 1. Written 2026-09-28, before any H2 backtest was run. Changes after results = a new version, logged as extra trials.
+
+DATA LIMITATION (read first)
+No exchange publishes liquidation history, and only a few days have been recorded (the recorder was restarted
+2026-09-28 and keeps running). This version therefore tests a PROXY event (open-interest drop + extreme return +
+volume spike) and is labelled PROXY in every output. It tests "forced-deleveraging-shaped hours revert", not
+liquidations directly. It must be validated against recorded liquidations once months exist: do proxy events coincide
+with liquidation notional > 5x its median?
+
+MECHANISM
+Forced liquidations are price-insensitive market orders. In thin books they push price past where discretionary
+traders would clear it; once the forced flow ends, price partially reverts.
+
+EXPECTED SIGN
+After a long-liquidation cascade, 12-48h returns beat a volatility-matched baseline; after a short squeeze, the
+mirror (returns below baseline). Stronger for endogenous cascades than for news-driven ones.
+
+DATA
+- Binance USD-M perp 1h candles (OHLCV) for BTC, ETH, SOL.
+- Binance 5-minute open interest in coins (lagged 5 minutes): from 2021-11 (BTC), 2021-12 (ETH), SOL as available.
+- Development window: OI start -> 2025-12-31 (trade exits must be before 2026-01-01).
+
+EVENT DEFINITION (hour t, evaluated at its close)
+- sigma(t): std of hourly log close-to-close returns over the 720 bars before t (30 days).
+- ret(t) = ln(close_t / close_{t-1}).
+- dOI(t) = OI at t's close / OI at the previous close - 1 (as-of joins on availability).
+- volume spike: volume_t > 5 * median(volume over the 720 bars before t).
+- Long-liquidation cascade: ret < -3 sigma AND dOI < -3% AND volume spike.  Direction of the trade: +1.
+- Short squeeze: ret > +3 sigma AND dOI < -3% AND volume spike.            Direction of the trade: -1.
+- An event within 48h after an earlier event of the same coin and direction is part of the same cascade (merged).
+- LOOSE variant (registered now; run only if the primary definition has fewer than 30 pooled development events):
+  2.5 sigma, dOI < -2%, volume > 3x median. Its trials are logged separately.
+
+ENTRY / EXIT
+- Exhaustion: the first bar k in t+1 .. t+6 with volume_k < 2 * median volume; entry at the open of k+1. If none,
+  entry at the open of t+7. (Proxy for "liquidations fall back below 2x median".)
+- Hold h in {12, 24, 48} hours; exit at the open h bars after entry.
+- Stop: long below the cascade low (min low from t to k); short above the cascade high. Checked intrabar on the
+  high/low; a bar opening through the stop fills at its open.
+
+EVENT STUDY
+- CAR_h = direction * ln(open(entry + h) / open(entry)) (no stop), h in {12, 24, 48}.
+- Baseline: for each event, 20 random hours of the same coin, not within 48h of any event, whose trailing 24h realized
+  vol at entry is within +-20% of the event's; their forward returns are multiplied by the event's direction.
+- Abnormal return = CAR_h - baseline mean. Mean and 95% bootstrap CI over events (clusters are already merged, so
+  events are resampled individually).
+- Placebo: 1000 sets of random vol-matched pseudo-events (same coins, directions and count); p = share of placebo
+  mean CARs >= the real one.
+- Pooled over coins and both directions (sign-adjusted); per-direction and per-coin breakdowns reported.
+- News split: an event is news-driven if its hour is within [-2h, +4h] of a scheduled US CPI release (08:30 New York
+  time) or FOMC statement (14:00 New York time) on the official calendars (Fed, BLS). If the calendars can't be
+  obtained, the split is not run and that is stated.
+
+STRATEGY
+- Trades as above with the stop; taker both sides on Kraken perp, spread x3 (stressed) and volatility-scaled; funding
+  from Binance settlements. Also at 2x these stressed costs.
+
+PARAMETER GRID (3 configurations; +3 only if LOOSE is triggered)
+hold in {12, 24, 48}.
+
+PASS CRITERIA
+- Mean abnormal return > 0 with the bootstrap CI excluding 0, and beats placebo at 95% (p < 0.05).
+- Net trade returns positive at stressed costs and at 2x stressed costs.
+- Positive in at least 2 of 3 coins; positive in most years; deflated Sharpe (H2 family) of trade returns >= 0.95.
+- Same sign in the holdout (run once, after approval).
+- Plus, before any deployment: validation of the proxy against recorded liquidations.
+
+KILL IF
+- CAR is not distinguishable from the matched baseline, or the edge is gone at 2x stressed costs.

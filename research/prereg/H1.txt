@@ -1,0 +1,84 @@
+PRE-REGISTRATION H1: LEVERAGE CROWDING (FUNDING + BASIS)
+Version 1. Written 2026-09-28, before any H1 backtest was run. Changes after results = a new version, logged as extra trials.
+
+PRIOR EXPOSURE (disclosed)
+- The development window has already been looked at for a related signal: docs/research_log.md (2026-09-26 and
+  2026-09-27) measured a 30-day funding z-score (IC -0.047 at 1 day, t -2.1, BTC/ETH 2020-2025), a crowding composite,
+  and always-on / filtered carry on BTC and ETH. This study is therefore partly confirmatory, not independent.
+  Its deflated Sharpe is reported against both the H1 trial count and the global ledger count (which includes those
+  studies).
+
+MECHANISM
+Funding and basis are the price of leveraged long exposure. Extreme values mean crowded, fragile long positioning;
+suppliers of leverage (shorts, carry traders) earn a premium for carrying that crash risk (Schmeling, Schrimpf &
+Todorov, BIS "Crypto Carry"). Forced deleveraging of crowded longs pushes subsequent returns down.
+
+EXPECTED SIGN
+- High funding z  -> lower forward 1-7d returns and a fatter left tail; strongest when open interest is rising.
+- Very negative funding z -> higher forward returns (weaker effect).
+- Carry (long spot / short perp) earns positive net returns when funding clears the cost hurdle.
+
+DATA (point-in-time; research/../src/research/pit.py)
+- Price: Binance USD-M perp 1h candles (BTCUSDT, ETHUSDT, SOLUSDT); Binance spot 1h for the carry spot leg.
+- Funding: Binance and Bybit settled rates at their actual settlement timestamps.
+- Open interest: Binance 5-minute (from 2021-11/12), Bybit hourly (from 2020); each lagged one sampling interval.
+- Basis: nearest Binance USDT quarterly with >= 14 days to expiry, annualised vs Binance spot (BTC, ETH only).
+- Development window: first decision date with 90 days of signal history -> 2025-12-31. Holdout (2026-01-01 on) is
+  locked and is run once, at the end, only with the owner's approval.
+
+SIGNAL DEFINITIONS (decision time T = 00:00 UTC daily; fills at the open of the hourly bar starting at T)
+- Per venue v: F_v(T) = mean over settlements s in (T-3d, T] of rate_s * 8h / interval_s, where interval_s is the
+  time since the previous settlement on that venue (normalises 4h/8h intervals to an 8h-equivalent rate).
+- Weights: open interest in USD at T (Binance oi_usd; Bybit oi * Binance perp close at T). If either venue's OI is
+  unavailable at T, venues with funding get equal weight.
+- F(T) = sum_v w_v F_v(T). Annualised: F_ann = F * 3 * 365.
+- z(T) = (F(T) - mean(F over the 90 daily values ending at T)) / std(same); at least 60 values required.
+- dOI3(T) = OI_coins(T) / OI_coins(T-3d) - 1, OI_coins = Binance OI + Bybit OI in coins (only venues present at both
+  times). "OI rising" = dOI3 > 0.
+- Secondary: basis z(T), the same 90-day z-score of the annualised quarterly basis (BTC, ETH).
+- Forward return: r_h(T) = ln(open(T + h days) / open(T)), h in {1, 3, 7}.
+
+PREDICTIVE TESTS
+1. Pooled regression r_h ~ z, Driscoll-Kraay SEs with lags = h (overlap and cross-coin correlation). Expected slope < 0.
+   Per-coin Newey-West regressions (lags = h).
+2. Interaction: r_h ~ z + 1[dOI3>0] + z*1[dOI3>0]. Expected interaction < 0.
+3. Quintile sorts of z pooled over coins (breakpoints from the pooled development sample): count, mean, skew and 5%
+   quantile of r_h per quintile. Expected: Q5 mean < Q1 mean and Q5 5% quantile < Q1 5% quantile.
+4. Same sorts and regression with basis z (secondary measure).
+
+RULES (only these two)
+(a) Directional tilt on a long-biased perp position.
+    Base weight 0.5. Crowded (z > 2 AND dOI3 > 0) -> weight 0.0. Washed out (z < -1.5) -> weight 1.0. Otherwise 0.5.
+    After a trigger the state is kept for at least `min_hold` days unless the opposite trigger fires.
+    The tested object is the OVERLAY (weight - 0.5, i.e. -0.5 / 0 / +0.5); base+overlay vs base is also reported.
+    Venue costs: Kraken perp taker, spread and slippage scaled with volatility (src/research/costs.py); funding charged
+    from Binance settlements (Kraken funding history does not cover the development window).
+(b) Delta-neutral carry: long spot, short perp, per unit notional.
+    Round trip RT = 2 * (spot cost per side + perp cost per side) in a calm market (4 legs).
+    hurdle_ann = RT * 365 / expected_hold_days. Enter when F_ann(T) > hurdle_ann; exit when F_ann(T) < 0.5 * hurdle_ann.
+    P&L: spot return - perp return + Binance funding received - costs (4 legs, volatility-scaled).
+    Return on capital = return on notional / 1.5 (spot plus 2x perp margin), reported alongside.
+
+PARAMETER GRID (12 configurations in total; nothing else will be tried under version 1)
+- Tilt: signal in {funding z, basis z (BTC/ETH only)} x min_hold in {1, 3, 7} days             -> 6
+- Carry: expected_hold_days in {7, 14, 30} x fees in {Binance spot+perp, Kraken spot+perp}    -> 6
+  (Kraken fees are applied to Binance prices and funding, a cost-sensitivity case.)
+
+ROBUSTNESS
+- Every configuration: gross, net, and net at 2x costs. Per-coin and per-year tables.
+- Placebo (tilt): circular shift of each coin's signal inputs by a random 60+ days, 500 runs; share of placebo pooled
+  Sharpes below the real one.
+- Placebo (carry): the same shift of the in/out state against funding; always-on carry reported as the natural benchmark.
+- Deflated Sharpe with the H1 trial count and the global ledger count.
+
+PASS CRITERIA (all required; per rule)
+- Net development Sharpe > 0 and deflated Sharpe (H1 family) >= 0.95.
+- Net Sharpe > 0 at 2x costs.
+- Positive net Sharpe in at least 2 of 3 coins (2 of 2 for basis-based variants).
+- Positive in most development years (>= 60% of calendar years).
+- Beats placebo at 95%.
+- Same sign in the holdout (run once, after approval).
+
+KILL IF
+- The pooled z slope is not negative in at least 2 of 3 coins at h = 3 days, or
+- Carry does not clear its 4 legs of costs at the Binance fee level (net <= 0 for all expected_hold values).

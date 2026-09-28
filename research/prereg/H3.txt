@@ -1,0 +1,70 @@
+PRE-REGISTRATION H3: VARIANCE RISK PREMIUM (PHASE A: NO OPTIONS TRADING)
+Version 1. Written 2026-09-28, before any H3 backtest was run. Changes after results = a new version, logged as extra trials.
+
+PRIOR EXPOSURE (disclosed)
+- DVOL has been used as a feature before (research_log 2026-09-26: DVOL 1-day change had a positive IC with 72h
+  returns). The IV-vs-realized premium (roadmap O4) and IV-based sizing have not been tested.
+- The volatility study (2026-09-26) already showed that EWMA/HAR entry sizing helps MA crossover and long/short Keltner
+  on the same history; A1 only asks whether IV improves on it.
+
+MECHANISM
+Option buyers pay for convexity and crash protection, so implied volatility exceeds subsequently realized volatility
+on average; option sellers are paid for carrying the tail. IV is also a forward-looking forecast, so it may size
+positions better than trailing realized volatility after regime changes.
+
+DATA
+- Deribit DVOL hourly (BTC, ETH; from 2021-03-24); a candle's close is available at its open + 1h. SOL has no DVOL,
+  so H3 covers 2 coins and "2 of 3 assets" becomes "2 of 2".
+- Binance USD-M perp 5-minute candles (realized vol) and 1h candles (strategy bars; 4h and 1d built from them, UTC).
+- Development window: 2021-03-24 + warmup -> 2025-12-31 (forward-looking quantities must end before 2026-01-01).
+
+DEFINITIONS (decision time T = 00:00 UTC daily)
+- IV(T) = DVOL close of the hour ending at T, / 100.
+- RV_fwd(T) = sqrt(365/30 * sum of squared 5-minute log returns over (T, T+30d]).
+- RV_trail(T) = the same over (T-30d, T].
+- VRP(T) = IV(T) - RV_fwd(T) (vol points). The variance version IV^2 - RV_fwd^2 is also reported.
+
+PREDICTIVE TESTS
+P1: mean VRP > 0. Newey-West t with lags = 30 (daily samples, 30-day overlap). Per coin, per year.
+P2a: VRP(T) = a + b * (IV(T) - RV_trail(T)); expected b > 0 (NW lags 30).
+P2b (term structure): NOT TESTABLE on current data. Deribit publishes no free history of 7d/60d IV; only one chain
+    snapshot exists. Registered for a forward test on the hourly chains now being recorded (needs >= 12 months), or
+    on Tardis.dev history if bought. No proxy is substituted for P2b.
+
+PHASE A RULES
+A1 (sizing). The live book's three sleeves (config/portfolio.btc_live.toml), on BTC and the same three on ETH:
+    moving_average_crossover(4, 48) 1d long-only; keltner_breakout(40, 2.0) 1d long/short;
+    moving_average_crossover(8, 96) 4h long-only. Entry-only sizing as in the runtime:
+    weight = signal * min(0.5 / sigma_hat(T_entry), 2.0), held until the signal changes.
+    sigma_hat in:
+      (i)  EWMA: annualised EWMA of daily log returns, 10-day half-life (the runtime's VolatilityTargetSizer) -> baseline
+      (ii) IV: DVOL / 100
+      (iii) IV_debiased: DVOL / 100 * median(RV_trail / IV over the trailing 365 days), known at T.
+    Book = equal-weight average of the 6 sleeve returns. Kraken perp costs; Binance funding.
+    Comparison: Sharpe (scale-free); max drawdown and worst month after scaling each variant's returns to the EWMA
+    variant's realized volatility (so a smaller average size cannot fake a lower drawdown).
+A2 (risk-off on term-structure inversion): NOT TESTABLE historically (same data gap as P2b).
+A2-PROXY (labelled proxy, NOT the hypothesis's measure): all sleeves flat and entries blocked while
+    DVOL(T) > 1.25 * mean(DVOL over the 30 days ending at T) (a short-dated fear spike). With EWMA sizing.
+    Expected: lower matched drawdown without losing more than 0.1 Sharpe. Note the prior finding that rising DVOL
+    preceded higher returns, which argues against it; registered anyway.
+
+PARAMETER GRID (4 configurations; nothing else under version 1)
+A1: sigma_hat in {EWMA, IV, IV_debiased} -> 3.  A2-PROXY: 1.
+
+ROBUSTNESS
+- Gross, net, net at 2x costs; per-coin and per-year tables.
+- Placebo (A1): the IV series circularly shifted by a random 60+ days, 300 runs (sizing noise with no timing).
+- Deflated Sharpe with the H3 family count and the global count.
+
+PASS CRITERIA
+P1: mean VRP > 0 with NW t > 2 in both coins, positive in >= 60% of years.
+A1 (IV or IV_debiased): book Sharpe >= EWMA book Sharpe, matched max drawdown lower than EWMA's, beats placebo at 95%,
+    improvement in both coins, net at 2x costs still positive, deflated Sharpe >= 0.95.
+Holdout: same sign of the improvement (run once, after approval).
+
+KILL IF
+- P1 fails (the premium isn't there), or
+- IV sizing does not improve drawdown vs realized-vol sizing (A1).
+Phase B (defined-risk short vol) is not built without the owner's approval, and needs historical chains priced at
+bid/ask with Deribit fees.
