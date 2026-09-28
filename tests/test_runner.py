@@ -89,3 +89,10 @@ def test_strategy_registry_reports_short_capability() -> None:
 
     registry.register("long_only_stub", long_only_stub, can_short=False)
     assert registry.can_short("long_only_stub") is False
+
+
+def test_resolve_strategy_rejects_a_misspelled_parameter_instead_of_running_defaults() -> None:
+    import pytest
+
+    with pytest.raises(TypeError, match="does not take \\['lookbak'\\]"):
+        resolve_strategy("momentum_breakout", lookbak=3)

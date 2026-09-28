@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
@@ -180,17 +182,23 @@ def compare_backtests(bars: Sequence[Any], config: BacktestConfig | None = None,
 
 
 def resolve_strategy(strategy_name: str, registry: StrategyRegistry | None = None, **params: Any) -> Any:
-    """Resolve a configured strategy name into a callable using the supplied registry."""
+    """Resolve a configured strategy name into a callable using the supplied registry.
+
+    Parameter names are checked against the factory's signature first. A misspelled `--strategy-params` key used to
+    make this silently run the strategy on its defaults; now it fails at startup, naming the accepted parameters.
+    """
     resolved_registry = registry or StrategyRegistry()
     strategy_factory = resolved_registry.get(strategy_name)
     if not callable(strategy_factory) or isinstance(strategy_factory, str):
         raise TypeError("Strategy registry entries must resolve to a callable")
 
     if params:
-        try:
-            return strategy_factory(**params)
-        except TypeError:
-            return strategy_factory()
+        signature = inspect.signature(strategy_factory)
+        if not any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
+            unknown = sorted(set(params) - set(signature.parameters))
+            if unknown:
+                raise TypeError(f"strategy {strategy_name!r} does not take {unknown}; it accepts {sorted(signature.parameters)}")
+        return strategy_factory(**params)
     return strategy_factory()
 
 
