@@ -413,6 +413,12 @@ This checklist is intentionally stricter. Completing it does **not** mean the re
 
 ## Non-destructive verification steps before any promotion
 
+- **Start with `python main.py --preflight [config/portfolio.btc_live.toml]`.** It runs every non-destructive check in one
+  go and ends with a PASS/FAIL/SKIP table: the portfolio config, the kill switch, the database (write lock, disk space),
+  the clock against Kraken's (must be within 2 s), Kraken Futures public and read-only private endpoints, Kraken spot
+  validate-only orders, a `[TEST]` Telegram message, and whether `HEALTHCHECK_URL` is set. It places no orders. Exit
+  code 0 means ready; run it before every start on a new machine and after changing keys or config. The steps below
+  are the individual checks, for digging into one that failed.
 - Run `python main.py --dashboard --report` and confirm the persisted runtime state is readable.
 - Run the paper baseline again if there is any doubt about current repo state.
 - Run `python main.py --kraken-verify-dry-run --kraken-verify-symbol BTC/EUR` and confirm all checks pass before trusting exchange credentials or payload normalization.

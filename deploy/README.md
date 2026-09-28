@@ -73,7 +73,9 @@ Put `HEALTHCHECK_URL` in `.env` (runbook, dead-man's switch) to get an alert (he
 
 ## 5. Paper soak, then live
 
-1. `bash deploy/setup.sh --with-paper` starts the BTC book in paper mode with its own state
+1. Run `~/miniforge3/envs/CryptoArb/bin/python main.py --preflight` first (after copying `.env`): every read-only and
+   validate-only check with a pass/fail table, including the clock and the keys from this machine's IP.
+   Then `bash deploy/setup.sh --with-paper` starts the BTC book in paper mode with its own state
    (`data/portfolio/btc-live-paper`). Watch it for a few days (TODO.MD section 1), then run the crash drill:
    `sudo systemctl kill -s KILL cryptoquant-paper` mid-cycle, and pull the network cable for a few minutes. It
    should come back by itself with no duplicate orders and a consistent book.

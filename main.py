@@ -2038,6 +2038,68 @@ def telegram_test() -> int:
     return 1
 
 
+def preflight(path: str) -> int:
+    """Run every non-destructive readiness check for a portfolio config, then print one pass/fail table.
+
+    Places, amends and cancels nothing: config validation, the kill switch, the database, the clock against Kraken,
+    Kraken Futures public and read-only private endpoints, Kraken spot validate-only orders, a TEST Telegram message
+    and the dead-man's switch setting. Exit code 0 only when nothing failed.
+    """
+    from src.portfolio.config import load_portfolio_config
+    from src.runtime.preflight import FAIL, PASS, SKIP, Check, CheckResult, check_clock, check_configured, check_database, exit_code, run_checks
+
+    try:
+        futures_symbols = sorted({instrument.split(":", 1)[1] for instrument in load_portfolio_config(path).instruments if instrument.startswith("kraken_futures:")})
+    except Exception:  # noqa: BLE001 - the config check below reports the problem
+        futures_symbols = []
+    symbol = futures_symbols[0] if futures_symbols else "BTC/USD"
+
+    def config_check() -> CheckResult:
+        return CheckResult(PASS if portfolio_check(path) == 0 else FAIL, path)
+
+    def kill_switch_check() -> CheckResult:
+        if KillSwitchController(state_file=PORTFOLIO_KILL_SWITCH_FILE).is_active():
+            return CheckResult(FAIL, "the kill switch is active; the live gates refuse to start (reset: --kill-switch-reset)")
+        return CheckResult(PASS, "inactive")
+
+    def futures_public() -> CheckResult:
+        _run_futures_venue_check(symbol=symbol)
+        return CheckResult(PASS, f"{symbol} spec, fees, mark and funding fetched")
+
+    def futures_private() -> CheckResult:
+        if not settings.kraken_futures_api_key or not settings.kraken_futures_secret:
+            return CheckResult(SKIP, "KRAKEN_FUTURES_API_KEY/SECRET not set (needed for live)")
+        _run_futures_verify_credentials(symbol=symbol)
+        return CheckResult(PASS, "read-only account, positions and open orders")
+
+    def spot_validate() -> CheckResult:
+        if not settings.kraken_api_key or not settings.kraken_secret:
+            return CheckResult(SKIP, "KRAKEN_API_KEY/SECRET not set (only the spot runtime needs them)")
+        result = _run_kraken_dry_run_verification(trade_logger=TradeLogger(database_path=settings.database_path), symbol="BTC/EUR", size=0.0002, probe_order_id=None)
+        return CheckResult(PASS if result.get("status") == "passed" else FAIL, f"validate-only orders: {result.get('status')}")
+
+    def telegram() -> CheckResult:
+        from src.utils.telegram import TelegramNotifier
+
+        if not TelegramNotifier().is_configured():
+            return CheckResult(SKIP, "TELEGRAM_BOT_TOKEN/CHAT_ID not set: trade messages and alerts won't arrive")
+        return CheckResult(PASS if telegram_test() == 0 else FAIL, "a TEST message was sent")
+
+    checks = [
+        Check("portfolio config", config_check),
+        Check("kill switch", kill_switch_check),
+        Check("database", lambda: check_database(settings.database_path)),
+        Check("clock vs Kraken", check_clock),
+        Check("Kraken Futures public", futures_public),
+        Check("Kraken Futures keys (read-only)", futures_private),
+        Check("Kraken spot (validate-only)", spot_validate),
+        Check("Telegram", telegram),
+        Check("dead-man's switch", lambda: check_configured(settings.healthcheck_url, what="HEALTHCHECK_URL",
+                                                          why="nobody is told if the runtime stops (runbook: dead-man's switch)")),
+    ]
+    return exit_code(run_checks(checks))
+
+
 def portfolio_check(path: str) -> int:
     """Validate a portfolio config and print what it resolves to; returns the process exit code.
 
@@ -2097,6 +2159,7 @@ def main() -> None:
     parser.add_argument("--portfolio-state-dir", default=None, help="Where the portfolio checkpoint and paper exchange state live (default data/portfolio/<name>; a fresh temp dir with --use-mock-connector)")
     parser.add_argument("--portfolio-adopt-exchange", action="store_true", help="Live portfolio: set the book to the exchange's positions and collateral before running (after a manual trade or liquidation left it unreconciled); logged")
     parser.add_argument("--portfolio-reset-peak", action="store_true", help="Restart the portfolio's drawdown count from current equity before running (re-arms it after the max-drawdown kill); logged")
+    parser.add_argument("--preflight", metavar="PATH", nargs="?", const="config/portfolio.btc_live.toml", default=None, help="Run every non-destructive readiness check for a portfolio config (default config/portfolio.btc_live.toml): config, kill switch, database, clock, Kraken Futures public and read-only, Kraken spot validate-only, Telegram TEST message, dead-man's switch. Places no orders; exit code 0 when ready")
     parser.add_argument("--portfolio-check", metavar="PATH", default=None, help="Validate a portfolio TOML (sleeves, instruments, allocation, risk limits) and print the resolved plan, then exit. Touches no network or database")
     parser.add_argument("--target-annual-vol", type=float, default=None, help="Shorthand for --sizing vol_target --sizing-params '{\"target_annual_vol\": X}' (0.5 = 50%% a year; EWMA forecast, 10-day half-life)")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures trades perpetual futures: the in-process margin sandbox under live_dry_run, real Kraken Futures orders under live")
@@ -2170,6 +2233,8 @@ def main() -> None:
     if args.list_sizing:
         print(describe_sizers())
         return
+    if args.preflight:
+        raise SystemExit(preflight(args.preflight))
     if args.portfolio_check:
         raise SystemExit(portfolio_check(args.portfolio_check))
     if args.telegram_test:

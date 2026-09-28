@@ -140,7 +140,8 @@ permission, and never print them.
 
 ## 8. Housekeeping
 
-- [ ] A `--preflight` command that runs every non-destructive check at once (Kraken spot validate-only, futures read-only, the Telegram test, `--portfolio-check`)
+- [x] `--preflight` (2026-09-28): every non-destructive check at once, with a pass/fail table (config, kill switch, database,
+  clock vs Kraken, futures public and read-only, spot validate-only, Telegram, dead-man's switch; `src/runtime/preflight.py`)
 - [ ] CLI smoke tests for `--demo-backtest` and `--walk-forward` (and fix `--walk-forward`'s fold accounting: `code-optimize.md`)
 - [ ] Split `main.py` (~2,400 lines) into command modules, and `Decimal` wherever money is booked (`aspirations.md` 8)
 - [ ] Standing rule: keep `README.md`, `docs/runbook.md` and `docs/architecture-map.md` in sync with runtime changes
