@@ -6,6 +6,32 @@ accident.
 
 ---
 
+## 2026-09-28: Three pre-registered hypotheses: crowding (H1), liquidation overshoot (H2), variance risk premium (H3)
+
+Full reports in `research/reports/`, summary in `research/README.md`. Pre-registered in `research/prereg/` before any
+result, run on BTC/ETH/SOL to 2025-12-31 with a new point-in-time harness (`src/research/pit.py`: every input carries
+`available_at`; the holdout lock raises on explicit requests). Fills at the next open, stops on intrabar high/low,
+actual funding settlements, volatility-scaled spreads, gross/net/2x-cost results, placebos, per-hypothesis trial
+counts. The frozen holdout was **not** opened.
+
+| | Result |
+| --- | --- |
+| H1a: OI-weighted 3-day funding, 90-day z, predicts lower 1-7d returns | **Fail, reversed sign.** Pooled slope +14 bps per z at 3 days (ETH, SOL positive; BTC ~0). Top quintile has the best 7-day mean and the thinnest left tail. The tilt overlay (Sharpe 0.4) beats only 75-79% of placebos |
+| H1b: timed carry, enter when funding clears the 4-leg hurdle | **Passes development at Binance fees** (14-day hold: 9.8%/yr on notional, Sharpe 6.2, max DD 1.9%, placebo 100%), but 2025 earned 0.1% and the global deflated Sharpe is 0.83. At Kraken's 0.40% spot fee only the 30-day hold survives 2x costs |
+| H2: liquidation-shaped hours (proxy: 3 sigma move, OI -3%, 5x volume) revert | **Fail.** 200 events; 12-48h CAR indistinguishable from vol-matched controls (placebo p 0.17-0.74); trades lose 27-77 bps net at stressed costs |
+| H3-P1: DVOL > next-30-day realized vol | **BTC yes** (+5.9 pts, t 3.4, all 5 years), **ETH no** (+1.6, t 0.5) |
+| H3-A1: size the live sleeves by IV instead of EWMA | **Fail.** +0.02 Sharpe, worse drawdown at matched vol (34.4% vs 32.9%) |
+
+Also found and fixed: DVOL was aligned at its candle open, so hourly features could see up to an hour of future
+implied vol (`positioning.load_positioning`); and raw `asi8` comparisons across ms/us/ns timestamps silently
+dropped funding in the first H2/H3 runs (now always compared in ns).
+
+What this changes: don't build the funding-crowding filter on the trend rules (the sign is reversed at these
+horizons); keep EWMA sizing; carry is the one candidate, pending a single holdout look and a low-fee spot + perp
+venue. Liquidations and option chains are now being recorded for the real H2 and H3 phase-B tests.
+
+---
+
 ## 2026-09-27: How many independent bets are the 13 strategies, and which features can pay for a trade?
 
 First studies under the new governance (frozen final holdout from 2026-01-01; data to 2025-12-31).

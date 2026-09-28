@@ -69,7 +69,8 @@ direction is in `aspirations.md`.
 - [ ] Nightly backups of `data/cryptoquant.db` (SQLite `.backup`) and `data/portfolio/`, kept off the server (the tax ledger is in the database)
 - [ ] Security: allow the API keys only from the server's IP; confirm neither Kraken key can withdraw; document key rotation and incident response
 - [ ] Single-strategy runtime, only if it keeps running unattended: bounded memory (`RuntimeOrchestrator.history`, and paper `run()` replaying every bar), bars from exchange candles, and HTTP off the event loop, as the portfolio feed does
-- [ ] Recorders on the server: option chains first (small); the order-flow recorder needs disk or compression first (several GB a day)
+- [ ] Recorders on the server: option chains first (small); the order-flow recorder needs disk or compression first (several GB a day).
+  A light liquidations + hourly option-chain collector exists (`scripts/collectors/run_collectors.sh`, running locally since 2026-09-28)
 
 ## 4. Tax (Norway)
 
@@ -80,7 +81,8 @@ direction is in `aspirations.md`.
 
 ## 5. Research roadmap (findings: `docs/research_log.md`)
 
-- [ ] Crowding (funding, OI, long/short ratios) as a filter on the daily trend rules
+- [ ] Crowding (funding, OI, long/short ratios) as a filter on the daily trend rules. H1 (2026-09-28, `research/reports/H1.md`)
+  found the contrarian sign reversed for OI-weighted funding z at 1-7 days: don't build the funding filter as planned
 - [ ] Funding and OI as ranking signals in the cross-sectional work, and as carry timing
 - [ ] Altcoin carry across the Binance archive (data downloaded 2026-09-26): basis from the premium index, and a cross-coin rule
 - [ ] Order-flow features after ~4 weeks of recording (trade-flow and book imbalance, liquidation bursts, 1m-1h). Needs the recorder running (section 3)
@@ -93,7 +95,15 @@ direction is in `aspirations.md`.
   fills, slippage and timing (the real cost model, and the first sign of decay)
 - [ ] Binance `metrics` (OI, long/short ratios) for the Kraken-listed coins, to extend the crowding study beyond BTC/ETH
 - [ ] Small free daily series: US spot ETF flows, stablecoin supply, the Coinbase premium, an event calendar (CPI, FOMC, expiries)
-- [ ] Candidates from features: a funding z-score sleeve and a crowding composite, sized against `total_trials()`
+- [ ] Candidates from features: a funding z-score sleeve and a crowding composite, sized against `total_trials()`.
+  The funding z-score tilt failed its placebo (H1, 2026-09-28)
+- [ ] H1b timed carry: one holdout look for "Binance fees, 14-day hold" (needs the owner's approval), then, if it
+  holds, a two-leg (spot + perp) sleeve type and a low-fee venue (Binance/Bybit trading keys, section 7)
+- [ ] H2 v2 on real liquidations after 6-12 months of `scripts/collectors/run_collectors.sh`: first check that proxy
+  events line up with liquidation notional > 5x median
+- [ ] H3 phase B scoping (BTC short vol, defined risk): bid/ask economics on ~3 months of recorded hourly chains, or
+  Tardis history. Needs the owner's approval
+- [ ] CPI release dates into `research/data/` by hand (bls.gov blocks scripts), to complete H2's news split
 - [ ] Maker-first execution (post-only limits, then taker after a timeout): the lever most likely to make intraday edges tradable
 - [ ] A live performance review script: equity vs BTC buy-and-hold, trade durations, slippage vs expected price, alpha decay, cost-adjusted P&L
 - [x] Strategy design notes for options, options + perps and spot: `docs/options_plan.md`, section 8 (2026-09-26). Next from it: the tail-hedge vs lower-scale study and the spot-vs-perp venue rule for long holds
@@ -106,7 +116,8 @@ direction is in `aspirations.md`.
   (`[risk.exposure]`), option positions in the book with expiry and tax, and a Deribit trading adapter (fake-exchange tests only)
 - [ ] O3b: enforce `[risk.exposure]` in the engine, and an exposure section on the dashboard
 - [ ] E4: option sleeves (tail hedge first) in the config and engine, marked from recorded USDC chains, paper first
-- [ ] O4: the IV vs realized-vol premium study
+- [x] O4: the IV vs realized-vol premium study (2026-09-28, H3: BTC +6 vol pts, t 3.4; ETH not significant; IV sizing no
+  better than EWMA)
 - [ ] O5: option instruments and sleeves in the portfolio (research first)
 - [ ] O7: Deribit testnet paper trading. O8: live (needs Deribit keys, Norway eligibility, and more capital: the smallest BTC option is 0.1 BTC, the smallest linear USDC option 0.01 BTC)
 
