@@ -144,15 +144,21 @@ def log_trial(hypothesis: str, study: str, params: Mapping[str, Any], *, data_ra
         "trades": trades, "sr_per_period": sharpe_per_period_net, **dict(extra or {})})
 
 
-def family_trials(hypothesis: str) -> tuple[int, float]:
-    """(configurations tried under `hypothesis`, variance of their per-period net Sharpes) from the ledger."""
+def family_trials(hypothesis: str, *, rule: str | None = None) -> tuple[int, float]:
+    """(configurations tried under `hypothesis`, variance of their per-period net Sharpes) from the ledger.
+
+    With `rule`, the variance comes only from trials of that rule (params["rule"]), while the count stays the whole
+    family's. Mixing rules with very different Sharpe levels (e.g. a carry trade and a directional tilt) inflates the
+    variance and so the luck benchmark; the per-rule variance is the like-for-like one. Both are reported.
+    """
     entries = [e for e in governance.ledger_entries() if e.get("type") == "trials" and e.get("family") == hypothesis]
-    srs = [e.get("details", {}).get("sr_per_period") for e in entries]
+    matching = [e for e in entries if rule is None or e.get("details", {}).get("params", {}).get("rule") == rule]
+    srs = [e.get("details", {}).get("sr_per_period") for e in matching]
     srs = np.array([s for s in srs if s is not None and np.isfinite(s)], dtype=float)
     return sum(int(e["configurations"]) for e in entries), float(np.var(srs, ddof=1)) if len(srs) > 1 else 0.0
 
 
-def deflated_sharpe(returns: pd.Series, hypothesis: str) -> dict[str, float]:
+def deflated_sharpe(returns: pd.Series, hypothesis: str, *, rule: str | None = None) -> dict[str, float]:
     """Deflated Sharpe of `returns` against the hypothesis's own trial count and against the global count.
 
     The Sharpe variance across trials comes from the hypothesis's ledger entries, floored at 1/T: the sampling
@@ -160,12 +166,18 @@ def deflated_sharpe(returns: pd.Series, hypothesis: str) -> dict[str, float]:
     highly correlated configurations can have near-identical Sharpes, which would otherwise deflate nothing.
     """
     values = returns.dropna().to_numpy()
+    floor = 1.0 / max(len(values), 1)
     trials, variance = family_trials(hypothesis)
-    variance = max(variance, 1.0 / max(len(values), 1))
-    return {
+    variance = max(variance, floor)
+    result = {
         "sr_per_period": sharpe_per_period(values),
         "family_trials": trials,
         "global_trials": governance.total_trials(),
         "dsr_family": deflated_sharpe_ratio(values, trials=max(trials, 2), sharpe_variance=variance),
         "dsr_global": deflated_sharpe_ratio(values, trials=max(governance.total_trials(), 2), sharpe_variance=variance),
     }
+    if rule is not None:
+        rule_variance = max(family_trials(hypothesis, rule=rule)[1], floor)
+        result["dsr_family_rule_var"] = deflated_sharpe_ratio(values, trials=max(trials, 2), sharpe_variance=rule_variance)
+        result["dsr_global_rule_var"] = deflated_sharpe_ratio(values, trials=max(governance.total_trials(), 2), sharpe_variance=rule_variance)
+    return result
