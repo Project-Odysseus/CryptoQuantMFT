@@ -87,3 +87,18 @@ def test_h3_sleeve_sizing_uses_only_past_data_and_lag_matters() -> None:
     real = sleeve_run(full, "iv").net.sum()
     peek = sleeve_run(type(full)(**{**{f: getattr(full, f) for f in full.__slots__}, "signal": full.signal.shift(-1).fillna(0.0)}), "iv").net.sum()
     assert not np.isclose(real, peek)
+
+
+@needs_data
+def test_h2_event_inputs_at_t_use_only_data_available_by_t() -> None:
+    from src.research.hypotheses.h2_liquidation import PRIMARY, detect_events, hourly_frame
+
+    full = hourly_frame("BTC")
+    cutoff = full.index[full.index.get_indexer([pd.Timestamp("2024-08-05 02:00", tz="UTC")])[0]]
+    cut = hourly_frame("BTC", end=full.loc[cutoff, "available_at"])
+    assert cut.index[-1] == cutoff
+    for column in ("ret", "sigma", "volume_median", "oi", "doi", "rv24"):
+        assert np.isclose(full.loc[cutoff, column], cut.loc[cutoff, column], equal_nan=True), column
+    in_full = set(full.index[detect_events(full, PRIMARY)["t"]])
+    in_cut = set(cut.index[detect_events(cut, PRIMARY)["t"]])
+    assert {t for t in in_full if t <= cutoff} == in_cut
