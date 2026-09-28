@@ -1,0 +1,17 @@
+[Unit]
+Description=CryptoQuant BTC book, PAPER (no orders): config/portfolio.btc_live.toml on real candles
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@REPO@
+# Its own state dir, so a later live run never shares a checkpoint with paper.
+ExecStart=@PYTHON@ main.py --runtime paper --portfolio config/portfolio.btc_live.toml --portfolio-state-dir data/portfolio/btc-live-paper --runtime-iterations 0 --runtime-interval 60
+Restart=always
+RestartSec=60
+KillSignal=SIGINT
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

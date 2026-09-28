@@ -1,0 +1,16 @@
+[Unit]
+Description=CryptoQuant research collector: hourly Deribit BTC/ETH option chains (public data, no keys)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@REPO@
+ExecStart=@PYTHON@ main.py --record-option-chains BTC ETH --option-chain-interval 3600
+Restart=always
+RestartSec=30
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

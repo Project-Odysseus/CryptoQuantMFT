@@ -64,9 +64,12 @@ direction is in `aspirations.md`.
 ## 3. Run 24/7 (merges the old deployment, monitoring and security items)
 
 - [x] Done: run-until-stopped mode for the portfolio, restart-safe checkpoints, the kill switch, alerts sent once per problem, and backup/restore steps in the runbook
-- [ ] A deployment kit in `deploy/`: a conda setup (or Dockerfile), a systemd unit with `Restart=always`, `.env` at `chmod 600`, and log rotation
+- [x] A deployment kit in `deploy/` (2026-09-28): `deploy/setup.sh` for Ubuntu Server on the home desktop, systemd units with
+  `Restart=always` (collectors, paper book), `.env` at `chmod 600`, log rotation, nightly backups (`deploy/README.md`)
+- [ ] Install Ubuntu Server on the home desktop and run `deploy/setup.sh` (then stop the Mac's LaunchAgent)
 - [x] A dead-man's switch and a daily Telegram summary (2026-09-27; set `HEALTHCHECK_URL`)
-- [ ] Nightly backups of `data/cryptoquant.db` (SQLite `.backup`) and `data/portfolio/`, kept off the server (the tax ledger is in the database)
+- [ ] Nightly backups of `data/cryptoquant.db` (SQLite `.backup`) and `data/portfolio/`, kept off the server (the tax ledger is in the database).
+  The nightly job exists (`deploy/backup.sh`); still needs an off-machine `BACKUP_REMOTE`
 - [ ] Security: allow the API keys only from the server's IP; confirm neither Kraken key can withdraw; document key rotation and incident response
 - [ ] Single-strategy runtime, only if it keeps running unattended: bounded memory (`RuntimeOrchestrator.history`, and paper `run()` replaying every bar), bars from exchange candles, and HTTP off the event loop, as the portfolio feed does
 - [ ] Recorders on the server: option chains first (small); the order-flow recorder needs disk or compression first (several GB a day).

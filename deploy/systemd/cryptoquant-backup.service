@@ -1,0 +1,9 @@
+[Unit]
+Description=CryptoQuant nightly backup (SQLite database with the tax ledger, portfolio state, config)
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@REPO@
+EnvironmentFile=-@REPO@/deploy/backup.env
+ExecStart=/bin/bash @REPO@/deploy/backup.sh
