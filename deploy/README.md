@@ -69,7 +69,7 @@ journalctl -u cryptoquant-liquidations --since today      # a service's log
 cd ~/CryptoQuantMFT && ~/miniforge3/envs/CryptoArb/bin/python main.py --market-data-status   # rows and recording gaps
 sudo systemctl restart cryptoquant-option-chains          # after a git pull that changes code
 ```
-Put `HEALTHCHECK_URL` in `.env` (runbook, dead-man's switch) to get a Telegram-free alert if the paper or live book stops.
+Put `HEALTHCHECK_URL` in `.env` (runbook, dead-man's switch) to get an alert (healthchecks.io emails you) if the paper or live book stops pinging.
 
 ## 5. Paper soak, then live
 
