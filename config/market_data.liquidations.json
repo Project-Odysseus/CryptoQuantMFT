@@ -1,0 +1,7 @@
+{
+  "root": "data/market_data",
+  "kraken_futures_symbols": [],
+  "kraken_spot_symbols": [],
+  "binance_liquidations": true,
+  "bybit_liquidation_symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+}
