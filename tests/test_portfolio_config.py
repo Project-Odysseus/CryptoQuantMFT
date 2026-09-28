@@ -86,7 +86,7 @@ def test_defaults_fill_in_what_the_file_leaves_out() -> None:
         ({"sleeve0": {"instrument": "kraken_futures:SOL/USD"}}, "instrument 'kraken_futures:SOL/USD' has no [instruments] table"),
         ({"sleeve0": {"id": "BTC-MA"}}, "id must be lowercase letters, digits and underscores"),
         ({"sleeve0": {"budget": 0}}, "budget must be above 0"),
-        ({"portfolio": {"allocation": "risk_parity"}}, "[portfolio] allocation must be one of"),
+        ({"portfolio": {"allocation": "black_litterman"}}, "[portfolio] allocation must be one of"),
         ({"portfolio": {"initial_equity": 0}}, "[portfolio] initial_equity must be above 0"),
         ({"portfolio": {"rebalance_band": 1.5}}, "[portfolio] rebalance_band must be between 0 and 1"),
         ({"portfolio": {"allocation_refit_days": 0}}, "[portfolio] allocation_refit_days must be a whole number of at least 1"),

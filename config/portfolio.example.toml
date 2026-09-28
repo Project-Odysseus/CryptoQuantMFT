@@ -9,8 +9,8 @@ base_currency = "USD"
 initial_equity = 10000
 rebalance_band = 0.02            # skip trades smaller than 2% of equity (closing and flipping always trade)
 scale = 1.0                      # sizes the whole book; see scripts/research/risk_budget.py (0.38 fits a 20% drawdown limit with a 1.5x margin)
-allocation = "equal"             # fixed | equal | inverse_vol. Sleeves below are already volatility-sized, so equal
-allocation_lookback_days = 90    # used by inverse_vol
+allocation = "equal"             # fixed | equal | inverse_vol | risk_parity | hrp. Sleeves below are already volatility-sized, so equal
+allocation_lookback_days = 90    # used by inverse_vol, risk_parity and hrp
 allocation_refit_days = 30
 
 [risk]

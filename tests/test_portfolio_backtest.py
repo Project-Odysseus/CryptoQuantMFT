@@ -135,7 +135,9 @@ warmup_bars = 60
     runpy.run_path("scripts/research/portfolio_backtest.py", run_name="__main__")
 
     books = pd.read_csv(out / "books.csv")
-    assert set(books["book"]) == {"fixed", "equal", "inverse_vol", "equal without risk limits"} and set(books["period"]) == {"is", "ho"}
+    from src.portfolio.allocation import ALLOCATION_METHODS
+
+    assert set(books["book"]) == {*ALLOCATION_METHODS, "equal without risk limits"} and set(books["period"]) == {"is", "ho"}
     assert set(pd.read_csv(out / "sleeves.csv")["book"]) == {"btc_ma", "eth_ma"}
     assert pd.read_csv(out / "correlation.csv", index_col=0).shape == (2, 2)
     text = capsys.readouterr().out
@@ -184,7 +186,7 @@ def test_a_prebuilt_strategy_replaces_the_registry_and_keeps_long_only() -> None
     assert (both_sides < 0).any() and (long_only >= 0).all() and (long_only > 0).any()
 
 
-@pytest.mark.parametrize("method", ["equal", "fixed", "inverse_vol"])
+@pytest.mark.parametrize("method", ["equal", "fixed", "inverse_vol", "risk_parity", "hrp"])
 def test_the_runtime_path_bar_by_bar_matches_the_research_backtest(method: str) -> None:
     """Portfolio plan step 2.7: the same bars through the runtime core give the research targets at every grid bar.
 
@@ -227,7 +229,7 @@ def test_the_runtime_path_bar_by_bar_matches_the_research_backtest(method: str) 
             continue
         returns = {sleeve_id: (closes[s["spec"].instrument][stamp] / previous_close[s["spec"].instrument] - 1.0) if previous_close else float("nan")
                    for sleeve_id, s in sleeves.items()}
-        scales = allocator.step(returns)
+        scales = allocator.step(returns, weights={sleeve_id: s["state"].weight for sleeve_id, s in sleeves.items()})
         allocator = Allocator.from_dict(json.loads(json.dumps(allocator.to_dict())))
         net, _ = net_targets({sleeve_id: (s["spec"].instrument, s["state"].weight * scales[sleeve_id]) for sleeve_id, s in sleeves.items()})
         runtime[stamp] = net

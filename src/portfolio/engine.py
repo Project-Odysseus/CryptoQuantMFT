@@ -259,7 +259,8 @@ class PortfolioEngine:
             for sleeve_id, spec in self.sleeves.items():
                 close, previous = closes[spec.instrument].get(stamp), self.last_grid_close.get(spec.instrument)
                 returns[sleeve_id] = close / previous - 1.0 if close is not None and previous else float("nan")
-            scales = self.allocator.step(returns)
+            # the sleeves' own weights for the covariance methods; after a multi-bar catch-up they are the latest ones
+            scales = self.allocator.step(returns, weights={sleeve_id: float(self.states[sleeve_id].weight) for sleeve_id in self.sleeves})
             for instrument in instruments:
                 if stamp in closes[instrument]:
                     self.last_grid_close[instrument] = closes[instrument][stamp]

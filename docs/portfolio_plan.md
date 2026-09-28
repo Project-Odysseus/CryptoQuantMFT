@@ -157,7 +157,7 @@ research: scripts/research/portfolio_backtest.py runs the same sleeve → alloca
 | --- | --- | --- |
 | `config.py` | `PortfolioConfig`, `SleeveConfig`, `InstrumentConfig`, `PortfolioRiskConfig`; `load_portfolio_config(path)` from TOML; validation with precise errors | yes |
 | `sleeves.py` | Build each sleeve's strategy and sizer; compute its signal and target weight from its bars | yes |
-| `allocation.py` | Turn sleeve budgets into scales: `fixed`, `equal`, `inverse_vol` (equal risk); optional sleeve vol targeting | yes |
+| `allocation.py` | Turn sleeve budgets into scales: `fixed`, `equal`, `inverse_vol`, `risk_parity` (ERC on sleeve returns), `hrp`; optional sleeve vol targeting | yes |
 | `netting.py` | Sum sleeve targets per instrument; keep per-sleeve contributions for attribution | yes |
 | `risk.py` | Portfolio caps and de-risking: per-instrument, gross, net, per-venue, drawdown and daily-loss scaling, stale-data holds | yes |
 | `orders.py` | Plan orders from current positions to targets: bands, min size, lot step, exits first, reduce-only flags | yes |
@@ -290,6 +290,10 @@ Python and need no network, so they are good hotspot work.
   - `equal`: weight x 1/N of enabled sleeves;
   - `inverse_vol`: each sleeve gets budget in proportion to 1 / (its recent return volatility), from past data only,
     re-estimated monthly, so every sleeve contributes similar risk.
+  - `risk_parity` and `hrp` (added 2026-09-28, ideas from the QIS repo, rewritten): equal risk contribution and
+    hierarchical risk parity on the covariance of the sleeves' own returns, each sleeve's volatility measured while
+    it is positioned. Compared on the example and live books the same day: no in-sample gain over `equal`
+    (research log), so `equal` stays the default.
 - Tests: budgets sum as documented; `inverse_vol` gives a low-vol sleeve a bigger weight; no look-ahead.
 
 **1.4 Research script and study**

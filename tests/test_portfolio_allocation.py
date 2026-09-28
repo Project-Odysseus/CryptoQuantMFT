@@ -18,6 +18,8 @@ def test_fixed_and_equal_scales() -> None:
     assert sleeve_scales(budgets, "equal") == pytest.approx({"a": 1 / 3, "b": 1 / 3, "c": 1 / 3})
     assert sleeve_scales({}, "equal") == {}
     with pytest.raises(ValueError, match="unknown allocation"):
+        sleeve_scales(budgets, "black_litterman")
+    with pytest.raises(ValueError, match="return history"):
         sleeve_scales(budgets, "risk_parity")
 
 
@@ -103,14 +105,86 @@ def test_the_runtime_allocator_matches_allocate_history_bar_by_bar_and_survives_
     returns.iloc[0] = np.nan  # the first bar has no return, as in run_book
     weights = pd.DataFrame(1.0, index=DAYS, columns=["calm", "wild"])
     budgets = {"calm": 1.0, "wild": 2.0}
-    for method in ("equal", "fixed", "inverse_vol"):
+    weights["wild"] = np.where(np.arange(len(DAYS)) % 50 < 25, 1.0, -0.5)  # sleeve weights that change, for the covariance methods
+    for method in ("equal", "fixed", "inverse_vol", "risk_parity", "hrp"):
         expected = allocate_history(weights, budgets, method, instrument_returns=returns, lookback=40, refit_every=15)
         allocator = Allocator(budgets, method, lookback=40, refit_every=15)
         rows = []
-        for _, row in returns.iterrows():
-            rows.append(allocator.step(row.to_dict()))
+        for stamp, row in returns.iterrows():
+            rows.append(allocator.step(row.to_dict(), weights=weights.loc[stamp].to_dict()))
             allocator = Allocator.from_dict(json.loads(json.dumps(allocator.to_dict())))
-        np.testing.assert_allclose(pd.DataFrame(rows, index=DAYS)[["calm", "wild"]].to_numpy(), expected.to_numpy(), rtol=1e-9)
+        scales = pd.DataFrame(rows, index=DAYS)[["calm", "wild"]]
+        np.testing.assert_allclose((scales * weights).to_numpy(), expected.to_numpy(), rtol=1e-9)
 
     with pytest.raises(ValueError, match="unknown allocation"):
-        Allocator(budgets, "risk_parity")
+        Allocator(budgets, "black_litterman")
+
+
+def test_risk_parity_equalises_risk_contributions_and_follows_budgets() -> None:
+    from src.portfolio.allocation import risk_parity_weights
+
+    # uncorrelated: weights are inversely proportional to volatility
+    cov = np.diag([0.1**2, 0.2**2])
+    assert risk_parity_weights(cov, np.ones(2)) == pytest.approx([2 / 3, 1 / 3])
+    # correlated, three assets: every risk contribution equal
+    vols = np.array([0.1, 0.2, 0.4])
+    corr = np.array([[1.0, 0.6, 0.2], [0.6, 1.0, 0.4], [0.2, 0.4, 1.0]])
+    cov = corr * np.outer(vols, vols)
+    w = risk_parity_weights(cov, np.ones(3))
+    contributions = w * (cov @ w)
+    assert w.sum() == pytest.approx(1.0) and contributions / contributions.sum() == pytest.approx([1 / 3] * 3, abs=1e-8)
+    # budgets 2:1:1 give contributions 50/25/25
+    w = risk_parity_weights(cov, np.array([2.0, 1.0, 1.0]))
+    contributions = w * (cov @ w)
+    assert contributions / contributions.sum() == pytest.approx([0.5, 0.25, 0.25], abs=1e-8)
+
+
+def test_hrp_gives_a_correlated_pair_less_than_independent_sleeves() -> None:
+    from src.portfolio.allocation import hrp_weights
+
+    assert hrp_weights(np.eye(4) * 0.04) == pytest.approx([0.25] * 4)  # independent and equally volatile: equal
+    corr = np.eye(4)
+    corr[0, 1] = corr[1, 0] = 0.9
+    w = hrp_weights(corr * 0.04)
+    # (the two independent sleeves can differ: single linkage breaks the tie between them one way, a known HRP trait)
+    assert w.sum() == pytest.approx(1.0) and w[0] == pytest.approx(w[1])
+    assert w[0] < min(w[2], w[3]) and w[0] + w[1] < 0.5  # the pair is close to one bet, so it shares roughly one bet's capital
+    assert hrp_weights(np.array([[0.04]])) == pytest.approx([1.0])
+    # a more volatile sleeve gets less
+    w = hrp_weights(np.diag([0.01, 0.04, 0.04]))
+    assert w[0] > w[1] == pytest.approx(w[2])
+
+
+def test_covariance_scales_measure_risk_while_positioned_and_fall_back_to_budgets() -> None:
+    from src.portfolio.allocation import covariance_scales
+
+    rng = np.random.default_rng(1)
+    active = rng.normal(0, 0.02, (90, 2))
+    flat = np.zeros((90, 1))  # a long-only sleeve that sat out the whole window
+    block = np.hstack([active, flat])
+    budgets = {"a": 1.0, "b": 1.0, "flat": 1.0}
+    for method in ("risk_parity", "hrp"):
+        scales = covariance_scales(budgets, method, block, min_periods=30)
+        assert sum(scales.values()) == pytest.approx(1.0)
+        assert scales["flat"] == pytest.approx(1 / 3, abs=0.08)  # treated as a typical sleeve, not as riskless
+    # a sleeve positioned a third of the time is sized by its risk while positioned, not diluted by the flat bars
+    part_time = np.where(np.arange(90)[:, None] % 3 == 0, rng.normal(0, 0.02, (90, 1)), 0.0)
+    scales = covariance_scales({"a": 1.0, "b": 1.0, "part": 1.0}, "risk_parity", np.hstack([active, part_time]), min_periods=30)
+    assert scales["part"] < 0.45
+    assert covariance_scales({"a": 3.0, "b": 1.0}, "risk_parity", active[:5], min_periods=30) == pytest.approx({"a": 0.75, "b": 0.25})
+    assert covariance_scales({"a": 1.0, "b": 1.0}, "hrp", np.zeros((50, 2)), min_periods=30) == pytest.approx({"a": 0.5, "b": 0.5})
+
+
+def test_covariance_allocations_use_only_past_sleeve_returns() -> None:
+    weights = pd.DataFrame({"calm": 1.0, "wild": 1.0}, index=DAYS)
+    returns = _returns(seed=2)
+    for method in ("risk_parity", "hrp"):
+        scaled = allocate_history(weights, {"calm": 1.0, "wild": 1.0}, method, instrument_returns=returns, lookback=60, refit_every=30)
+        assert (scaled.iloc[90:]["calm"] > scaled.iloc[90:]["wild"]).all()  # the calmer sleeve gets more
+        for cut in (45, 100, 150):
+            changed = returns.copy()
+            changed.iloc[cut + 1 :] *= 10.0
+            perturbed = allocate_history(weights, {"calm": 1.0, "wild": 1.0}, method, instrument_returns=changed, lookback=60, refit_every=30)
+            pd.testing.assert_frame_equal(perturbed.iloc[: cut + 1], scaled.iloc[: cut + 1])
+        with pytest.raises(ValueError, match="instrument_returns"):
+            allocate_history(weights, {"calm": 1.0, "wild": 1.0}, method)

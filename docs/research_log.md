@@ -6,6 +6,27 @@ accident.
 
 ---
 
+## 2026-09-28: Risk-parity and HRP allocation, and the books against BTC buy-and-hold
+
+Two allocation methods ported (as ideas, rewritten) from the QIS repo: `risk_parity` (equal risk contribution) and
+`hrp` (hierarchical risk parity), both on the covariance of the sleeves' own returns, with each sleeve's volatility
+measured only while it holds a position. `python scripts/research/portfolio_backtest.py <config>`; in-sample to
+2024-09-30, holdout 2024-10-01 to 2025-12-31 (the frozen final holdout stays locked). 4 configurations logged.
+
+| Sharpe (IS / HO) | equal | inverse_vol | risk_parity | hrp |
+| --- | --- | --- | --- | --- |
+| Example book (5 sleeves, BTC + ETH) | 1.45 / 1.09 | 1.44 / 1.01 | 1.44 / 1.19 | 1.28 / 1.32 |
+| Live BTC book (3 sleeves) | 1.50 / 1.02 | 1.50 / 1.02 | 1.54 / 1.03 | 1.57 / 1.16 |
+
+- **Keep `equal`.** Chosen by in-sample numbers, neither method beats it on the example book, and on the live book the
+  gain (0.04-0.07) is noise. The sleeves correlate 0.53-0.75, so there is little risk to rebalance between them.
+  Revisit when the book has sleeves that are genuinely different (carry, cross-sectional, options).
+- **Against BTC buy-and-hold** (new benchmark table, daily): the live book has beta 0.14 (IS) / 0.06 (HO), alpha 17% /
+  8% a year and captures 13% / 7% of BTC's down days. The 4h MA sleeve's holdout alpha is negative (-6%), the one
+  sleeve worth watching in paper trading.
+
+---
+
 ## 2026-09-28: Three pre-registered hypotheses: crowding (H1), liquidation overshoot (H2), variance risk premium (H3)
 
 Full reports in `research/reports/`, summary in `research/README.md`. Pre-registered in `research/prereg/` before any
