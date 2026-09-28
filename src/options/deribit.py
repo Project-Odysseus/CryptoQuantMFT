@@ -24,6 +24,7 @@ Each expiry has its own forward (the future or synthetic future for that date) w
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import urllib.parse
 import urllib.request
@@ -58,9 +59,12 @@ def underlying_and_settlement(currency: str) -> tuple[str, str]:
 def fetch_book_summary(currency: str) -> list[dict[str, Any]]:
     """Deribit's book summary for every option on `currency` (one public request; blocking)."""
     url = f"{PUBLIC_API}/get_book_summary_by_currency?" + urllib.parse.urlencode({"currency": currency, "kind": "option"})
-    request = urllib.request.Request(url, headers={"User-Agent": "CryptoQuantMFT/0.1", "Accept": "application/json"})
+    request = urllib.request.Request(url, headers={"User-Agent": "CryptoQuantMFT/0.1", "Accept": "application/json", "Accept-Encoding": "gzip"})
     with urllib.request.urlopen(request, timeout=20) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+        body = response.read()
+        if response.headers.get("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)  # ~10x smaller: ~2 MB a day for hourly BTC+ETH chains instead of ~19 MB
+        payload = json.loads(body.decode("utf-8"))
     if "result" not in payload:
         raise RuntimeError(f"unexpected Deribit response: {str(payload)[:200]}")
     return payload["result"]
