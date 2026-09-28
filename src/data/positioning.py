@@ -38,7 +38,8 @@ import pandas as pd
 
 CACHE_DIR = Path("data/historical_cache/positioning")
 USER_AGENT = {"User-Agent": "CryptoQuantMFT/0.1", "Accept": "application/json"}
-COINS = {"BTC": {"binance": "BTCUSDT", "bybit": "BTCUSDT", "deribit": "BTC-PERPETUAL", "dvol": "BTC"}, "ETH": {"binance": "ETHUSDT", "bybit": "ETHUSDT", "deribit": "ETH-PERPETUAL", "dvol": "ETH"}}
+COINS = {"BTC": {"binance": "BTCUSDT", "bybit": "BTCUSDT", "deribit": "BTC-PERPETUAL", "dvol": "BTC"}, "ETH": {"binance": "ETHUSDT", "bybit": "ETHUSDT", "deribit": "ETH-PERPETUAL", "dvol": "ETH"},
+         "SOL": {"binance": "SOLUSDT", "bybit": "SOLUSDT"}}  # Deribit has no SOL perpetual history or DVOL
 
 
 def _get_json(url: str, params: dict[str, Any] | None = None, *, retries: int = 3) -> Any:
@@ -233,13 +234,15 @@ SOURCES: dict[str, tuple[Callable[[str, datetime, datetime], pd.DataFrame], str,
 
 
 def load_series(name: str, coin: str, *, refresh: bool = False, cache_dir: Path | str | None = None) -> pd.DataFrame:
-    """One positioning series for BTC or ETH from its first available date to now, cached and topped up."""
+    """One positioning series for BTC, ETH or SOL (Binance and Bybit only) from its first available date to now, cached and topped up."""
     if name not in SOURCES:
         raise ValueError(f"unknown series {name!r}; known: {sorted(SOURCES)}")
     coin = coin.upper()
     if coin not in COINS:
         raise ValueError(f"unknown coin {coin!r}; known: {sorted(COINS)}")
     fetch, venue_key, first = SOURCES[name]
+    if venue_key not in COINS[coin]:
+        raise ValueError(f"{name} has no {coin} series")
     path = Path(cache_dir or CACHE_DIR) / f"{name}_{coin}.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     cached = pd.read_parquet(path) if path.exists() and not refresh else pd.DataFrame(columns=["timestamp"])
@@ -280,6 +283,7 @@ def load_positioning(coin: str, bar_close_times: pd.DatetimeIndex, *, refresh: b
         align_to_bars(load_series("binance_klines", coin, refresh=refresh), bar_close_times, stamped_at_open=timedelta(hours=1)),
         align_to_bars(load_series("binance_metrics", coin, refresh=refresh), bar_close_times),
         align_to_bars(load_series("bybit_open_interest", coin, refresh=refresh), bar_close_times),
-        align_to_bars(load_series("deribit_dvol", coin, refresh=refresh), bar_close_times),
+        # DVOL candles are stamped at their open and the close keeps updating until the hour ends
+        align_to_bars(load_series("deribit_dvol", coin, refresh=refresh), bar_close_times, stamped_at_open=timedelta(hours=1)),
     ]
     return pd.concat(parts, axis=1)
