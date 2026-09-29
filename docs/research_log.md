@@ -6,6 +6,38 @@ accident.
 
 ---
 
+## 2026-09-29: The taker-buy basket on Kraken's own prices, through the portfolio engine
+
+The cross-sectional taker-buy book (2026-09-26 entry: top 30, 20% legs, every 10 days, chosen then) replayed with the
+new basket sleeves (`src/portfolio/basket.py`) on Kraken perp candles for 40 Kraken-listed coins, Kraken taker fees
+and slippage of 5-30 bps per side by Kraken 24h volume, the config's risk limits. The signal is still Binance's
+taker-buy share. `python scripts/research/basket_backtest.py`; 1 trial logged. A coin joins only once Kraken lists its
+perp, so the history starts 2022-05 (the Binance study started 2020-06).
+
+| | Sharpe | CAGR | Max DD | Costs % of equity / yr |
+| --- | --- | --- | --- | --- |
+| In-sample 2022-05 to 2024-09 | 0.15 | 0.7% | 37% | 10.8 |
+| Holdout 2024-10 to 2025-12 | 3.51 | 108% | 8.5% | 11.6 |
+| 2x costs, in-sample | -0.63 | -14% | 41% (the 40% kill fired, flat after) | 16.7 |
+
+- **The diversification holds:** daily correlation with the BTC trend book -0.02, beta to BTC ~0. A 30% blend in the
+  holdout lifted the book's Sharpe from 1.04 to 3.31.
+- **The edge doesn't:** in-sample on Kraken prices it made nothing. The Binance study's strong in-sample leaned on
+  2020-21, before most of these Kraken perps existed. A 15-month holdout Sharpe of 3.5 is more likely luck than level.
+- **Costs decide it.** Turnover is ~46x equity a year and the assumed alt slippage costs ~11% a year; at 2x it
+  fails. Paper trading can't settle this (the paper sandbox charges the same assumed slippage). Kraken's real
+  spreads and depth on these coins, from public order books, can.
+- Found on the way: a governance gap. Series that start after 2025-01-01 kept only their own last 25% frozen, so a
+  coin listed in 2025 could reach into the 2026 holdout. The first run of this study did (to 2026-06); it's fixed
+  (`research_cutoff` never passes 2026-01-01 for a series that began before it) and rerun. The H1-H3 studies used their
+  own 2026-01-01 cut and weren't affected.
+
+**What this changes:** don't fund the basket yet. Measure Kraken's alt spreads and depth first; if real costs are
+below the assumed tiers it becomes a candidate again, paper-run at a realistic equity. The basket machinery is
+ready either way.
+
+---
+
 ## 2026-09-28: Risk-parity and HRP allocation, and the books against BTC buy-and-hold
 
 Two allocation methods ported (as ideas, rewritten) from the QIS repo: `risk_parity` (equal risk contribution) and

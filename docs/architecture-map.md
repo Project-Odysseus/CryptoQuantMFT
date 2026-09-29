@@ -169,6 +169,10 @@ Plan and status: `docs/portfolio_plan.md`.
 
 - `src/portfolio/config.py`: the TOML portfolio config and its validation (`main.py --portfolio-check`).
 - `src/portfolio/sleeves.py`: one strategy on one instrument, turned into a target weight bar by bar.
+- `src/portfolio/basket.py`: basket sleeves (`[[baskets]]`): one cross-sectional strategy that sets the weights of
+  many member sleeves (`<basket>__<coin>`) on a calendar rebalance schedule, from Binance daily candles (archive for
+  research, public REST in the runtime via `CachedPanelSource`). The engine steps them in `_step_baskets`;
+  allocation counts a basket as one sleeve (`PortfolioConfig.allocation_groups`).
 - `src/portfolio/allocation.py`, `netting.py`, `risk.py`, `orders.py`: the pure core. It allocates sleeves, nets
   them per instrument, applies the portfolio risk limits, and plans the orders.
 - `src/portfolio/book.py`: positions, cash per venue, FX, funding and per-sleeve attribution, in `Decimal`.

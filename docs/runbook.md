@@ -226,6 +226,16 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
 - **Market data:** completed Kraken candles over REST, the same cached series the research used, polled every
   `--runtime-interval` seconds. Decisions happen only when a new grid bar completes (the shortest sleeve interval,
   e.g. 4h). Other cycles only mark the book.
+- **Baskets (`[[baskets]]`, e.g. `config/portfolio.taker_paper.toml`):** one strategy that holds many coins at once,
+  the cross-sectional taker-buy book. Each day it ranks the most-traded of its coins by Binance's taker-buy share
+  (Binance's public daily candles, fetched once a day, no keys), and every `rebalance_days` (10) it goes long the top
+  fifth and short the bottom fifth on the Kraken perps. In the book each coin is a member sleeve (`taker__sol`, ...);
+  allocation counts the basket as one sleeve (`fixed` or `equal` only). The coin list and each coin's lot size come
+  from `python scripts/portfolio/basket_instruments.py --out <file>` (Kraken's public instrument list); review the
+  diff before using a refreshed list. It needs capital: one lot of the priciest coin (about 15 USD) must be a small
+  part of each coin's weight, so paper-run it at a realistic equity (10,000 USD in the paper config) until the account
+  is a few thousand USD. `python scripts/research/basket_backtest.py` replays it on Kraken prices. If Binance can't be
+  reached, the basket keeps its weights and retries next cycle (`portfolio_basket_data_failed` in the events).
 - **Execution:** `paper` and `live_dry_run` both trade against sandbox accounts shaped like the venues: one
   cross-margin account per perp venue, with fees, slippage, funding and liquidation. For `--runtime live`, see
   "Live portfolio trading" below.

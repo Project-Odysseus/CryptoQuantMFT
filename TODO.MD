@@ -58,7 +58,15 @@ direction is in `aspirations.md`.
 - [x] Phases 0-4: the sizing contract, research backtester, pure core (config, sleeves, allocation, netting, risk overlay, order planner, research/runtime parity), stateful book with paper execution and restarts, and the `--portfolio` runtime with candles, snapshots, dashboard and alerts (2026-09-26)
 - [x] Phase 6 live path: a multi-contract Kraken Futures adapter, async fills, restart-safe client ids, a reconciliation block, adopt-exchange, funding, tax, the live gates and a money cap, plus the first real round trip (2026-09-26)
 - [x] Sizing: the `[portfolio] scale` knob and `scripts/research/risk_budget.py` (2026-09-26)
-- [ ] Basket sleeves (plan 7.4), so the taker-buy cross-sectional book can run: Binance public daily klines for the signal and Kraken perps for orders. Check Kraken's minimum sizes for a 30-50 coin basket at our capital
+- [x] Basket sleeves (plan 7.4, 2026-09-29): `[[baskets]]` in the portfolio config (`src/portfolio/basket.py`), the taker-buy book
+  in `config/portfolio.taker_paper.toml` (40 Kraken perps from `scripts/portfolio/basket_instruments.py`), research/runtime parity
+  tested through a restart. Minimum sizes checked: one lot of the priciest coin is ~15 USD, so it needs a few hundred USD per
+  coin weight; paper only until the account is a few thousand USD
+- [ ] Measure Kraken's real spreads and book depth on the basket's 40 coins (public order books, no keys) and replace the
+  assumed slippage tiers: on Kraken prices the basket made nothing in-sample and fails at 2x costs, so costs decide it
+  (research log 2026-09-29)
+- [ ] Only if real costs are below the tiers: paper-run the taker basket (`--runtime paper --portfolio config/portfolio.taker_paper.toml
+  --runtime-interval 300`) next to the BTC book on the always-on machine
 - [ ] Phase 7 enhancements: portfolio vol targeting, correlation-aware caps, regime filters as sleeve inputs. Sleeve health (disable
   after 3 failing cycles) and risk-parity/HRP allocation (2026-09-28, no gain yet: the sleeves are too correlated) are done
 
