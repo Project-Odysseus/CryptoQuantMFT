@@ -1712,6 +1712,8 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
         old_peak = engine.reset_peak(now=datetime.now(timezone.utc))
         print(f"Equity peak reset from {old_peak:,.2f} to {float(engine.book.peak_equity):,.2f}")
     feed = MockCandleFeed(config.instruments, grid_interval=engine.grid_interval) if mock else CandleFeed(config.instruments)
+    if mock and config.baskets:
+        engine.basket_source = feed.basket_panel  # synthetic basket data: a mock run never calls Binance
     # The dead-man's switch pings an outside monitor; never from mock runs, which would hide a dead real runtime
     heartbeat = Heartbeat(settings.healthcheck_url, min_interval=max(60.0, args.runtime_interval)) if settings.healthcheck_url and not mock else None
     runtime = PortfolioRuntime(engine, feed, interval_seconds=args.runtime_interval, trade_logger=trade_logger, notifier=notifier,

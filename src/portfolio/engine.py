@@ -146,6 +146,7 @@ class PortfolioEngine:
         state_path: str | Path | None = None,
         record_tax: bool = False,
         funding_source: Any | None = None,
+        basket_source: Any | None = None,
     ) -> None:
         """Wire the sleeves, allocator and book; restore the checkpoint at `state_path` if there is one.
 
@@ -159,6 +160,9 @@ class PortfolioEngine:
 
         `funding_source(venue_symbol)` returns Kraken's hourly funding rates
         (default: the public history); a live account books funding from them.
+
+        `basket_source(basket, now)` returns a basket's daily signal data
+        (default: Binance's public API, one fetch per basket and day).
         """
         missing = sorted({spec.venue for spec in config.instruments.values()} - set(adapters))
         if missing:
@@ -172,11 +176,18 @@ class PortfolioEngine:
         self.state_path = Path(state_path) if state_path else None
         strategies = dict(strategies or {})
         self.sleeves = {spec.id: spec for spec in config.enabled_sleeves}
-        self.runners = {sleeve_id: SleeveRunner(spec, strategy=strategies.get(sleeve_id)) for sleeve_id, spec in self.sleeves.items()}
+        self.runners = {sleeve_id: SleeveRunner(spec, strategy=strategies.get(sleeve_id)) for sleeve_id, spec in self.sleeves.items() if spec.basket is None}
+        self.groups = config.allocation_groups()  # sleeve -> allocation unit (a basket's members share one)
+        if basket_source is None and config.baskets:
+            from src.portfolio.basket import CachedPanelSource
+
+            basket_source = CachedPanelSource()
+        self.basket_source = basket_source
+        self.basket_last_decision: dict[str, str] = {}  # basket id -> the last daily close it processed (survives restarts)
         self.grid_interval = min((spec.interval for spec in self.sleeves.values()), key=lambda interval: BAR_INTERVALS[interval])
         self.grid_step = timedelta(seconds=BAR_INTERVALS[self.grid_interval])
         per_day = 86400 / BAR_INTERVALS[self.grid_interval]
-        self.allocator = Allocator(config.budgets(), config.allocation, lookback=max(2, round(config.allocation_lookback_days * per_day)),
+        self.allocator = Allocator(config.group_budgets(), config.allocation, lookback=max(2, round(config.allocation_lookback_days * per_day)),
                                    refit_every=max(1, round(config.allocation_refit_days * per_day)))
         self.states = {sleeve_id: SleeveState() for sleeve_id in self.sleeves}
         self.last_sleeve_bar: dict[str, datetime] = {}
@@ -247,6 +258,8 @@ class PortfolioEngine:
         self._check_equity_drift(now)
 
         for sleeve_id, spec in self.sleeves.items():
+            if spec.basket is not None:
+                continue  # set by its basket (`_step_baskets`)
             series = list(bars.get((spec.instrument, spec.interval), []))
             last = self.last_sleeve_bar.get(sleeve_id)
             fresh = [index for index, bar in enumerate(series) if last is None or bar.timestamp > last]
@@ -265,6 +278,8 @@ class PortfolioEngine:
                 self._sleeve_failed(sleeve_id, exc, report, now)
             self.last_sleeve_bar[sleeve_id] = series[fresh[-1]].timestamp
 
+        self._step_baskets(bars, report, now)
+
         latest = max(series[-1].timestamp for series in grid.values())
         stale = sorted(set(stale) | {instrument for instrument, series in grid.items() if series[-1].timestamp < latest})
         new_grid_bars = sorted({bar.timestamp for series in grid.values() for bar in series if self.last_grid_bar is None or bar.timestamp > self.last_grid_bar})
@@ -281,7 +296,8 @@ class PortfolioEngine:
                 close, previous = closes[spec.instrument].get(stamp), self.last_grid_close.get(spec.instrument)
                 returns[sleeve_id] = close / previous - 1.0 if close is not None and previous else float("nan")
             # the sleeves' own weights for the covariance methods; after a multi-bar catch-up they are the latest ones
-            scales = self.allocator.step(returns, weights={sleeve_id: float(self.states[sleeve_id].weight) for sleeve_id in self.sleeves})
+            unit_scales = self.allocator.step(returns, weights={sleeve_id: float(self.states[sleeve_id].weight) for sleeve_id in self.sleeves})
+            scales = {sleeve_id: unit_scales.get(self.groups.get(sleeve_id, sleeve_id), 0.0) for sleeve_id in self.sleeves}
             for instrument in instruments:
                 if stamp in closes[instrument]:
                     self.last_grid_close[instrument] = closes[instrument][stamp]
@@ -564,6 +580,52 @@ class PortfolioEngine:
                 self._event("ERROR", "portfolio_exchange_stop_filled", message, {**fill, "instrument": instrument}, now)
                 if self.notifier is not None:
                     self.notifier.send_alert(event_type="exchange_stop_filled", message=message, metadata={"instrument": instrument})
+
+    # --- baskets -------------------------------------------------------------------------------------------------------
+
+    def _step_baskets(self, bars: BarsByKey, report: CycleReport, now: datetime) -> None:
+        """Set each basket's member weights at every daily close since the last one processed.
+
+        Off the rebalance schedule nothing changes. On a first start the members take the weights of the latest
+        rebalance on or before the latest close, which is what the research backtest holds then. If the signal data
+        can't be fetched, the basket keeps its weights and the same days are tried again next cycle.
+        """
+        from src.portfolio.basket import is_rebalance_day, weights_at
+
+        for basket in self.config.baskets:
+            if not basket.enabled or self.basket_source is None:
+                continue
+            members = basket.members()
+            closes = sorted({bar.timestamp + timedelta(days=1) for _coin, instrument in members.values() for bar in bars.get((instrument, "1d"), [])})
+            last = self.basket_last_decision.get(basket.id)
+            pending = [stamp for stamp in closes if last is None or stamp > datetime.fromisoformat(last)]
+            if not pending:
+                continue
+            if last is None:
+                latest = pending[-1]
+                since_epoch = (latest - datetime(1970, 1, 1, tzinfo=latest.tzinfo)).days
+                pending = [latest - timedelta(days=since_epoch % basket.rebalance_days)]
+            for decision in pending:
+                if is_rebalance_day(decision, basket.rebalance_days):
+                    try:
+                        weights = weights_at(basket, self.basket_source(basket, now), decision)
+                    except Exception as exc:  # noqa: BLE001 - keep the weights; retry these days next cycle
+                        self._event("WARNING", "portfolio_basket_data_failed", f"{basket.id}: signal data unavailable ({type(exc).__name__}: {exc})", {}, now)
+                        break
+                    if weights is not None:
+                        for member_id, (coin, instrument) in members.items():
+                            state = self.states[member_id]
+                            target = float(weights.get(coin, 0.0))
+                            if target != state.weight:
+                                state.entry_price = float(self.book.marks.get(instrument, 0) or 0) or None
+                                state.bars_held = 0
+                            state.weight, state.last_signal = target, float(np.sign(target))
+                        longs = sorted(coin for coin, value in weights.items() if value > 0)
+                        shorts = sorted(coin for coin, value in weights.items() if value < 0)
+                        self.last_decisions[basket.id] = {"action": "rebalance", "reason": f"long {longs}, short {shorts}", "bar": decision.isoformat()}
+                        self._event("INFO", "portfolio_basket_rebalanced", f"{basket.id} at {decision:%Y-%m-%d}: long {longs}, short {shorts}",
+                                    {"basket": basket.id, "weights": weights}, now)
+                self.basket_last_decision[basket.id] = (closes[-1] if last is None else decision).isoformat()
 
     def _cooldowns(self, now: datetime) -> dict[str, str]:
         """Active rejection cooldowns; expired ones are dropped (the streak stays, so one more rejection restarts it)."""
@@ -990,6 +1052,7 @@ class PortfolioEngine:
             "disabled_sleeves": sorted(self.disabled_sleeves),
             "rejection_streak": self.rejection_streak,
             "cooldown_until": self.cooldown_until,
+            "basket_last_decision": self.basket_last_decision,
             "stop_anchors": self.stop_anchors,
             "stop_fills_booked": self.stop_fills_booked,
             "account_log_last_id": self.account_log_last_id,
@@ -1036,6 +1099,7 @@ class PortfolioEngine:
         self.funding_booked_until = dict(payload.get("funding_booked_until", {}))
         self.rejection_streak = {key: int(value) for key, value in dict(payload.get("rejection_streak", {})).items()}
         self.cooldown_until = dict(payload.get("cooldown_until", {}))
+        self.basket_last_decision = dict(payload.get("basket_last_decision", {}))
         self.stop_anchors = dict(payload.get("stop_anchors", {}))
         self.stop_fills_booked = list(payload.get("stop_fills_booked", []))
         self.account_log_last_id = {venue: int(value) for venue, value in dict(payload.get("account_log_last_id", {})).items()}

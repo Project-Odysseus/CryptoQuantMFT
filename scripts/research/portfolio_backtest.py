@@ -84,14 +84,18 @@ def main() -> None:
 
     sleeve_rows: list[dict[str, object]] = []
     sleeve_returns: dict[str, pd.Series] = {}
+    units: dict[str, list[str]] = {}  # allocation unit -> its sleeves (a basket runs alone as one unit, with all its members)
     for sleeve_id in inputs.sleeve_weights.columns:
-        alone = run_book(config, inputs, allocation="equal", sleeves=[sleeve_id], risk_overlay=False, funding_pct_per_day=args.funding_pct_per_day)
-        sleeve_rows += period_metrics(alone, holdout, label=sleeve_id)
-        sleeve_returns[sleeve_id] = daily_returns(alone)
+        units.setdefault(inputs.sleeve_groups.get(sleeve_id, sleeve_id), []).append(sleeve_id)
+    for unit, members in units.items():
+        alone = run_book(config, inputs, allocation="equal", sleeves=members, risk_overlay=False, funding_pct_per_day=args.funding_pct_per_day)
+        sleeve_rows += period_metrics(alone, holdout, label=unit)
+        sleeve_returns[unit] = daily_returns(alone)
 
     book_rows: list[dict[str, object]] = []
     books: dict[str, PortfolioBacktest] = {}
-    for method in ALLOCATION_METHODS:
+    methods = ALLOCATION_METHODS if not config.baskets else ("fixed", "equal")  # baskets allow fixed/equal only
+    for method in methods:
         books[method] = run_book(config, inputs, allocation=method, funding_pct_per_day=args.funding_pct_per_day)
         book_rows += period_metrics(books[method], holdout)
     unlimited = run_book(config, inputs, risk_overlay=False, funding_pct_per_day=args.funding_pct_per_day)

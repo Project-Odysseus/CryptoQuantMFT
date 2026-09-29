@@ -1,0 +1,311 @@
+# Cross-sectional taker-buy basket, PAPER: 40 Kraken Futures perps, generated 2026-09-29 by
+# scripts/portfolio/basket_instruments.py from Kraken's public instrument list (the most-traded PF perps with a Binance perp).
+# Research: docs/research_log.md 2026-09-26 ("Diversifying the trend book") and 2026-09-29 (on Kraken prices).
+# Not for live at small capital: one lot of the largest-minimum coin needs a few hundred USD of equity per coin weight.
+# Check:  python main.py --portfolio-check config/portfolio.taker_paper.toml
+# Paper:  python main.py --runtime paper --portfolio config/portfolio.taker_paper.toml --runtime-iterations 0 --runtime-interval 300
+
+[portfolio]
+name = "taker-paper"
+base_currency = "USD"
+initial_equity = 10000             # paper equity: large enough that every coin's weight is at least a few lots
+rebalance_band = 0.01
+allocation = "equal"
+
+[risk]
+max_gross_exposure = 1.5
+max_net_exposure = 0.5              # the basket is dollar-neutral by construction
+max_instrument_weight = 0.25
+max_drawdown = 0.40
+daily_loss_limit = 0.10
+stale_after_bars = 2
+
+[[baskets]]
+id = "taker"
+signal = "taker_buy_share_7d"
+top_n = 30                          # each day: the 30 most-traded of the coins below (Binance 30-day volume)
+quantile = 0.2                      # long the top fifth by taker-buy share, short the bottom fifth
+gross = 1.0
+min_names = 12
+rebalance_days = 10                 # the slow signal: every 10 days survived 3x costs in research
+coins = ["BTC", "ETH", "SOL", "ZEC", "XRP", "NEAR", "SUI", "LINK", "HYPE", "HBAR", "DOGE", "QNT", "TAO", "PUMP", "ADA", "UNI", "AVAX", "ONDO", "LTC", "BCH", "ENA", "CRV", "WLD", "XLM", "DASH", "WIF", "ALGO", "ARB", "TRUMP", "FARTCOIN", "INJ", "PEPE", "FET", "DOT", "GALA", "AAVE", "ZRO", "XMR", "PENGU", "FIL"]
+
+[instruments."kraken_futures:BTC/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.0001
+min_order_size = 0.0001
+slippage_bps = 5              # 24h volume 415,583,879 USD
+
+[instruments."kraken_futures:ETH/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.001
+min_order_size = 0.001
+slippage_bps = 5              # 24h volume 104,260,764 USD
+
+[instruments."kraken_futures:SOL/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 5              # 24h volume 60,077,925 USD
+
+[instruments."kraken_futures:ZEC/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 10              # 24h volume 47,570,951 USD
+
+[instruments."kraken_futures:XRP/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 10              # 24h volume 41,776,818 USD
+
+[instruments."kraken_futures:NEAR/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 10              # 24h volume 21,899,471 USD
+
+[instruments."kraken_futures:SUI/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 10              # 24h volume 21,465,687 USD
+
+[instruments."kraken_futures:LINK/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 10              # 24h volume 21,379,044 USD
+
+[instruments."kraken_futures:HYPE/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 10              # 24h volume 19,893,390 USD
+
+[instruments."kraken_futures:HBAR/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 10              # 24h volume 19,455,722 USD
+
+[instruments."kraken_futures:DOGE/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 10              # 24h volume 15,998,052 USD
+
+[instruments."kraken_futures:QNT/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 10              # 24h volume 13,582,499 USD
+
+[instruments."kraken_futures:TAO/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 10              # 24h volume 11,878,925 USD
+
+[instruments."kraken_futures:PUMP/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 100
+min_order_size = 100
+slippage_bps = 20              # 24h volume 8,962,258 USD
+
+[instruments."kraken_futures:ADA/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 8,031,086 USD
+
+[instruments."kraken_futures:UNI/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 20              # 24h volume 7,968,106 USD
+
+[instruments."kraken_futures:AVAX/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 20              # 24h volume 7,055,229 USD
+
+[instruments."kraken_futures:ONDO/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 6,279,913 USD
+
+[instruments."kraken_futures:LTC/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 20              # 24h volume 5,842,063 USD
+
+[instruments."kraken_futures:BCH/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 20              # 24h volume 4,821,329 USD
+
+[instruments."kraken_futures:ENA/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 4,425,439 USD
+
+[instruments."kraken_futures:CRV/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 3,712,451 USD
+
+[instruments."kraken_futures:WLD/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 3,523,679 USD
+
+[instruments."kraken_futures:XLM/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 3,325,608 USD
+
+[instruments."kraken_futures:DASH/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 20              # 24h volume 3,289,043 USD
+
+[instruments."kraken_futures:WIF/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 3,213,885 USD
+
+[instruments."kraken_futures:ALGO/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 2,825,880 USD
+
+[instruments."kraken_futures:ARB/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 2,298,209 USD
+
+[instruments."kraken_futures:TRUMP/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 20              # 24h volume 2,236,403 USD
+
+[instruments."kraken_futures:FARTCOIN/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 2,208,158 USD
+
+[instruments."kraken_futures:INJ/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 20              # 24h volume 2,206,647 USD
+
+[instruments."kraken_futures:PEPE/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1000
+min_order_size = 1000
+slippage_bps = 20              # 24h volume 2,048,816 USD
+
+[instruments."kraken_futures:FET/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 30              # 24h volume 1,953,087 USD
+
+[instruments."kraken_futures:DOT/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 30              # 24h volume 1,937,862 USD
+
+[instruments."kraken_futures:GALA/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 30              # 24h volume 1,761,373 USD
+
+[instruments."kraken_futures:AAVE/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 30              # 24h volume 1,719,914 USD
+
+[instruments."kraken_futures:ZRO/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 30              # 24h volume 1,605,514 USD
+
+[instruments."kraken_futures:XMR/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 30              # 24h volume 1,538,222 USD
+
+[instruments."kraken_futures:PENGU/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 10
+min_order_size = 10
+slippage_bps = 30              # 24h volume 1,491,764 USD
+
+[instruments."kraken_futures:FIL/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 30              # 24h volume 1,435,223 USD

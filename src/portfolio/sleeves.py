@@ -67,6 +67,7 @@ class SleeveSpec:
     stops: dict[str, Any] = field(default_factory=dict)
     warmup_bars: int = 200
     enabled: bool = True
+    basket: str | None = None  # set on a basket's member sleeves: the basket sets its weight (src/portfolio/basket.py)
 
     @property
     def venue(self) -> str:

@@ -149,6 +149,24 @@ class MockCandleFeed:
                                  high=float(max(opened, chunk.max())) * 1.002, low=float(min(opened, chunk.min())) * 0.998, close=float(chunk[-1]), volume=1.0))
         return bars
 
+    def basket_panel(self, spec: Any, now: datetime) -> dict[str, Any]:
+        """A basket's daily signal data for mock runs, from these candles (no network): the member closes, with seeded
+        volumes and taker-buy shares, for every day closed by `now`."""
+        import pandas as pd
+
+        closes, volumes, takers = {}, {}, {}
+        for coin, instrument in spec.members().values():
+            if instrument not in self._closes:
+                continue
+            days = [bar for bar in self._bars(instrument, "1d") if bar.timestamp + timedelta(days=1) <= now]
+            index = pd.DatetimeIndex([bar.timestamp for bar in days])
+            rng = np.random.default_rng(zlib.crc32(coin.encode()))
+            volume = rng.uniform(1e6, 1e7) * (1 + 0.1 * rng.standard_normal(len(days))).clip(0.5)
+            closes[coin] = pd.Series([bar.close for bar in days], index=index)
+            volumes[coin] = pd.Series(volume, index=index)
+            takers[coin] = pd.Series(volume * np.clip(0.5 + 0.05 * rng.standard_normal(len(days)), 0.1, 0.9), index=index)
+        return {"close": pd.DataFrame(closes), "quote_volume": pd.DataFrame(volumes), "taker_buy_quote_volume": pd.DataFrame(takers)}
+
     async def fetch(self, keys: Iterable[Key], now: datetime | None = None) -> FeedResult:
         """Every key's completed bars up to the clock, then advance the clock one grid bar."""
         result = FeedResult(now=self.now(), bars={key: self._bars(*key) for key in set(keys)})

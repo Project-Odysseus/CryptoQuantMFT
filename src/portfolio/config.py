@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from src.portfolio.allocation import ALLOCATION_METHODS
+from src.portfolio.basket import BasketSpec
 from src.portfolio.review import ReviewConfig
 from src.portfolio.risk import PortfolioRiskConfig
 from src.portfolio.sleeves import STOP_KEYS, SleeveSpec
@@ -100,6 +101,7 @@ class PortfolioConfig:
     allocation_refit_days: int = 30
     risk: PortfolioRiskConfig = field(default_factory=PortfolioRiskConfig)
     review: ReviewConfig | None = None  # kill criteria, set before live ([review]; src/portfolio/review.py)
+    baskets: tuple[BasketSpec, ...] = ()  # [[baskets]]: their member sleeves are part of `sleeves`
     path: str | None = None
 
     def small_lot_cap(self, equity: float) -> float | None:
@@ -120,6 +122,21 @@ class PortfolioConfig:
         """Enabled sleeve id to budget."""
         return {sleeve.id: sleeve.budget for sleeve in self.enabled_sleeves}
 
+    def allocation_groups(self) -> dict[str, str]:
+        """Enabled sleeve id -> the unit allocation treats it as: itself, or its basket (a basket counts as one sleeve)."""
+        return {sleeve.id: sleeve.basket or sleeve.id for sleeve in self.enabled_sleeves}
+
+    def group_budgets(self) -> dict[str, float]:
+        """Allocation unit -> budget: each plain sleeve's own, each basket's once."""
+        out: dict[str, float] = {}
+        for sleeve in self.enabled_sleeves:
+            out.setdefault(sleeve.basket or sleeve.id, sleeve.budget)
+        return out
+
+    def basket(self, basket_id: str) -> BasketSpec:
+        """The basket with this id."""
+        return next(basket for basket in self.baskets if basket.id == basket_id)
+
     def venues(self) -> dict[str, str]:
         """Instrument id to venue."""
         return {instrument_id: spec.venue for instrument_id, spec in self.instruments.items()}
@@ -131,7 +148,7 @@ class PortfolioConfig:
 
 _PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "scale", "allocation", "allocation_lookback_days", "allocation_refit_days",
                    "small_account_equity", "small_account_max_lot_weight"}
-_TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves", "review"}
+_TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves", "review", "baskets"}
 
 
 def _known(cls: type) -> set[str]:
@@ -211,7 +228,7 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
 
     sleeves: list[SleeveSpec] = []
     seen: set[str] = set()
-    allowed_sleeve_keys = _known(SleeveSpec)
+    allowed_sleeve_keys = _known(SleeveSpec) - {"basket"}
     for position, table in enumerate(raw.get("sleeves", []), start=1):
         sleeve_id = str(table.get("id", f"#{position}"))
         label = f"[[sleeves]] '{sleeve_id}'"
@@ -251,6 +268,37 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
             if "sizing_params" not in values and values.get("sizing", "fixed_fraction") != "fixed_fraction":
                 values["sizing_params"] = {}
             sleeves.append(SleeveSpec(**values))
+    baskets: list[BasketSpec] = []
+    for position, table in enumerate(raw.get("baskets", []), start=1):
+        basket_id = str(table.get("id", f"#{position}"))
+        label = f"[[baskets]] '{basket_id}'"
+        unknown = sorted(set(table) - _known(BasketSpec))
+        for key in unknown:
+            errors.append(f"{label} unknown key '{key}'; allowed: {sorted(_known(BasketSpec))}")
+        if unknown:
+            continue
+        try:
+            basket = BasketSpec(**{**table, "coins": tuple(str(coin).upper() for coin in table.get("coins", []))})
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{label} {exc}")
+            continue
+        if basket.id in seen:
+            errors.append(f"{label} id is used by a sleeve or another basket")
+        seen.add(basket.id)
+        for member_id, (coin, instrument_id) in basket.members().items():
+            instrument = instruments.get(instrument_id)
+            if instrument is None or instrument.kind != "perp":
+                errors.append(f"{label} coin {coin} needs a perp [instruments.\"{instrument_id}\"] table (scripts/portfolio/basket_instruments.py writes them)")
+            elif not basket.long_only and not instrument.can_short:
+                errors.append(f"{label} is long/short but {instrument_id} can't be shorted")
+            if member_id in seen:
+                errors.append(f"{label} member sleeve '{member_id}' clashes with another sleeve")
+            seen.add(member_id)
+            sleeves.append(SleeveSpec(id=member_id, instrument=instrument_id, interval=basket.interval, strategy="basket", budget=basket.budget,
+                                      warmup_bars=0, enabled=basket.enabled, basket=basket.id))
+        baskets.append(basket)
+    if baskets and portfolio.get("allocation", "equal") not in ("fixed", "equal"):
+        errors.append("[portfolio] allocation must be 'fixed' or 'equal' in a portfolio with baskets (the others need one return series per sleeve)")
     if not any(sleeve.enabled for sleeve in sleeves) and not errors:
         errors.append("no enabled sleeves: add a [[sleeves]] block")
     if portfolio.get("allocation", "equal") == "fixed":
@@ -291,6 +339,7 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         allocation_refit_days=int(portfolio.get("allocation_refit_days", 30)),
         risk=risk,
         review=review,
+        baskets=tuple(baskets),
         path=path,
     )
 
@@ -316,9 +365,13 @@ def describe(config: PortfolioConfig) -> str:
     lines.append("Instruments:")
     for spec in config.instruments.values():
         lines.append(f"  {spec.id:<28} {spec.kind:<4} short={'yes' if spec.can_short else 'no':<3} max leverage {spec.max_leverage:g}x, fee {spec.taker_fee_pct:.2f}%, slippage {spec.slippage_bps:g} bps")
-    scales = sleeve_scales(config.budgets(), config.allocation) if config.allocation != "inverse_vol" else {}
+    groups = config.allocation_groups()
+    group_scales = sleeve_scales(config.group_budgets(), config.allocation) if config.allocation in ("fixed", "equal") else {}
+    scales = {sleeve_id: group_scales[group] for sleeve_id, group in groups.items() if group in group_scales}
     lines.append("Sleeves:")
     for sleeve in config.sleeves:
+        if sleeve.basket is not None:
+            continue  # listed once per basket below
         # The scale multiplies the sleeve's own target (which its sizer may put above 1), so it isn't a share of equity.
         if not sleeve.enabled:
             share = "not traded"
@@ -330,6 +383,12 @@ def describe(config: PortfolioConfig) -> str:
         params = ", ".join(f"{k}={v}" for k, v in sleeve.params.items())
         lines.append(f"  {sleeve.id:<18} {sleeve.instrument:<24} {sleeve.interval:<3} {sleeve.strategy}({params}){' long-only' if sleeve.long_only else ''}; "
                      f"sizing {sleeve.sizing} {sleeve.sizing_params}; budget {sleeve.budget:g} -> {share}{'; stops ' + str(sleeve.stops) if sleeve.stops else ''}{state}")
+    for basket in config.baskets:
+        scale = group_scales.get(basket.id)
+        legs = "long only" if basket.long_only else f"long top {basket.quantile:.0%} / short bottom {basket.quantile:.0%}"
+        lines.append(f"  {basket.id:<18} basket of {len(basket.coins)} {basket.venue} perps: {basket.signal}, top {basket.top_n} by Binance volume, {legs}, "
+                     f"gross {basket.gross:g}, rebalance every {basket.rebalance_days} days; budget {basket.budget:g}"
+                     + (f" -> scale {scale:.3g}" if scale is not None else "") + ("" if basket.enabled else "  [disabled]"))
     risk = config.risk
     venues = f", venues {risk.max_venue_exposure}" if risk.max_venue_exposure else ""
     derisk = (f"de-risk from {risk.drawdown_derisk_start:.0%} drawdown to {risk.drawdown_derisk_floor:.0%} size at {risk.max_drawdown:.0%}, then flatten"

@@ -21,13 +21,14 @@ each sleeve alone can be compared on the same inputs.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from src.portfolio.allocation import allocate_history
+from src.portfolio.allocation import allocate_history, sleeve_scales
 from src.portfolio.config import InstrumentSpec, PortfolioConfig
 from src.portfolio.netting import net_history
 from src.portfolio.risk import array_overlay
@@ -44,12 +45,23 @@ def default_bar_loader(instrument: InstrumentSpec, interval: str) -> list[Any]:
 
     Nothing is downloaded when the cache already covers the range. Kraken
     spot only serves its last 720 candles, so spot sleeves have far less
-    history than perps.
+    history than perps. BTC and ETH have a stitched history from 2020; other
+    perps (a basket's altcoins) use their linear contract's own history,
+    which starts when Kraken listed it. The frozen final holdout is cut off.
     """
     from src.research.engine import load_bars
 
     if instrument.venue not in ("kraken", "kraken_futures"):
         raise ValueError(f"no history loader for venue {instrument.venue!r} ({instrument.id}); pass bar_loader")
+    if instrument.kind == "perp":
+        from src.data import kraken_futures
+        from src.research.governance import trim_bars
+
+        if instrument.symbol.upper() not in kraken_futures.HISTORY_SEGMENTS:
+            bars = kraken_futures._load_or_fetch_venue_history(kraken_futures.venue_symbol_for(instrument.symbol), instrument.symbol,
+                                                               interval_seconds=BAR_INTERVALS[interval], start=datetime(2020, 1, 1, tzinfo=timezone.utc),
+                                                               end=None, cache_dir="data/historical_cache", refresh=False)
+            return trim_bars(bars, label=f"kraken perp {instrument.symbol} {interval}")
     return load_bars(instrument.symbol, interval, source="perp" if instrument.kind == "perp" else "spot")
 
 
@@ -73,6 +85,7 @@ class PortfolioInputs:
     sleeve_weights: pd.DataFrame
     sleeve_instrument: dict[str, str]
     measure_start: pd.Timestamp
+    sleeve_groups: dict[str, str] = field(default_factory=dict)  # sleeve id -> allocation unit (a basket's members share one)
 
     @property
     def bars_per_day(self) -> float:
@@ -101,11 +114,16 @@ def _closes(bars: Sequence[Any]) -> pd.Series:
     return series[~series.index.duplicated(keep="last")].sort_index()
 
 
-def prepare_inputs(config: PortfolioConfig, *, bar_loader: BarLoader | None = None, strategies: Mapping[str, Any] | None = None) -> PortfolioInputs:
+def prepare_inputs(config: PortfolioConfig, *, bar_loader: BarLoader | None = None, strategies: Mapping[str, Any] | None = None,
+                   basket_panel: Callable[[Any], Any] | None = None) -> PortfolioInputs:
     """Load bars for every enabled sleeve and its instrument, run each sleeve over its history, and align them on one grid.
 
     `strategies` maps a sleeve id to a ready-made StrategyFn that replaces
     the registry lookup for that sleeve (a strategy still in a notebook).
+    `basket_panel(basket)` returns a basket's daily signal data (default: the
+    Binance archive, `basket.binance_panel`). A basket's coins join its
+    universe only on days their instrument has a price, so a coin listed on
+    Binance before the venue lists it can't unbalance the legs.
     """
     loader = bar_loader or default_bar_loader
     strategies = dict(strategies or {})
@@ -132,7 +150,25 @@ def prepare_inputs(config: PortfolioConfig, *, bar_loader: BarLoader | None = No
 
     weights: dict[str, pd.Series] = {}
     starts: list[pd.Timestamp] = []
+    for basket in config.baskets:
+        if not basket.enabled:
+            continue
+        from src.portfolio.basket import basket_weights, binance_panel
+
+        panel = (basket_panel or (lambda spec: binance_panel(spec.coins)))(basket)
+        members = basket.members()
+        tradable = pd.DataFrame({coin: _closes(bars_for(instrument, "1d")).notna() for coin, instrument in members.values()})
+        tradable.index = tradable.index.floor("D")
+        daily = basket_weights(basket, panel, tradable=tradable.groupby(level=0).last())
+        decided = daily.index - grid_step  # decided at each UTC midnight: the grid bar that closes then
+        for member_id, (coin, _instrument) in members.items():
+            series = pd.Series(daily[coin].to_numpy(), index=decided)
+            weights[member_id] = series.reindex(grid.union(series.index)).ffill().reindex(grid).fillna(0.0)
+        active = daily.index[(daily.abs().sum(axis=1) > 0).to_numpy()]
+        starts.append((active[0] if len(active) else daily.index[-1]) - grid_step)
     for sleeve in sleeves:
+        if sleeve.basket is not None:
+            continue
         bars = bars_for(sleeve.instrument, sleeve.interval)
         shift = pd.Timedelta(seconds=BAR_INTERVALS[sleeve.interval]) - grid_step
         decided = _timestamps(bars) + shift
@@ -150,6 +186,7 @@ def prepare_inputs(config: PortfolioConfig, *, bar_loader: BarLoader | None = No
         sleeve_weights=pd.DataFrame(weights).iloc[first:],
         sleeve_instrument={sleeve.id: sleeve.instrument for sleeve in sleeves},
         measure_start=grid[first],
+        sleeve_groups=config.allocation_groups(),
     )
 
 
@@ -182,17 +219,30 @@ def run_book(
     method = allocation or config.allocation
     chosen = list(sleeves) if sleeves is not None else list(inputs.sleeve_weights.columns)
     budgets = {sleeve_id: budget for sleeve_id, budget in config.budgets().items() if sleeve_id in chosen}
-    if method == "fixed" and sum(budgets.values()) > 1.0:
-        total = sum(budgets.values())
-        budgets = {sleeve_id: budget / total for sleeve_id, budget in budgets.items()}
+    groups = inputs.sleeve_groups or {sleeve_id: sleeve_id for sleeve_id in budgets}
     per_day = inputs.bars_per_day
-    instrument_returns = pd.DataFrame({sleeve_id: inputs.prices[inputs.sleeve_instrument[sleeve_id]].pct_change() for sleeve_id in budgets})
-    allocated = allocate_history(
-        inputs.sleeve_weights[list(budgets)], budgets, method,
-        instrument_returns=instrument_returns,
-        lookback=max(2, round(config.allocation_lookback_days * per_day)),
-        refit_every=max(1, round(config.allocation_refit_days * per_day)),
-    )
+    if any(groups.get(sleeve_id, sleeve_id) != sleeve_id for sleeve_id in budgets):
+        # A basket counts as one sleeve: fixed/equal scales per allocation unit, shared by the basket's members
+        if method not in ("fixed", "equal"):
+            raise ValueError("a book with baskets supports 'fixed' and 'equal' allocation only")
+        unit_budgets = {groups[sleeve_id]: budget for sleeve_id, budget in budgets.items()}
+        if method == "fixed" and sum(unit_budgets.values()) > 1.0:
+            total = sum(unit_budgets.values())
+            unit_budgets = {unit: budget / total for unit, budget in unit_budgets.items()}
+        unit_scales = sleeve_scales(unit_budgets, method)
+        allocated = inputs.sleeve_weights[list(budgets)] * pd.Series({sleeve_id: unit_scales[groups[sleeve_id]] for sleeve_id in budgets})
+        budgets = {sleeve_id: unit_budgets[groups[sleeve_id]] for sleeve_id in budgets}
+    else:
+        if method == "fixed" and sum(budgets.values()) > 1.0:
+            total = sum(budgets.values())
+            budgets = {sleeve_id: budget / total for sleeve_id, budget in budgets.items()}
+        instrument_returns = pd.DataFrame({sleeve_id: inputs.prices[inputs.sleeve_instrument[sleeve_id]].pct_change() for sleeve_id in budgets})
+        allocated = allocate_history(
+            inputs.sleeve_weights[list(budgets)], budgets, method,
+            instrument_returns=instrument_returns,
+            lookback=max(2, round(config.allocation_lookback_days * per_day)),
+            refit_every=max(1, round(config.allocation_refit_days * per_day)),
+        )
     allocated = allocated * config.scale
     targets = net_history(allocated, inputs.sleeve_instrument).reindex(columns=inputs.prices.columns, fill_value=0.0)
 
