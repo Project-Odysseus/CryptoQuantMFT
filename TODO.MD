@@ -124,6 +124,10 @@ direction is in `aspirations.md`.
   Tardis history. Needs the owner's approval
 - [ ] CPI release dates into `research/data/` by hand (bls.gov blocks scripts), to complete H2's news split
 - [ ] Maker-first execution (post-only limits, then taker after a timeout): the lever most likely to make intraday edges tradable
+- [ ] Book tearsheet (from the QIS review, step 4): one static HTML page per book with equity vs BTC, underwater curve, monthly
+  heatmap, rolling vol/Sharpe/beta, historical VaR/CVaR and sleeve correlations (matplotlib, or plotly if interactive is wanted)
+- [ ] Parameter stability in the scorecard (from the QIS review, step 5): the best parameters per walk-forward window, with a purge
+  gap between train and test and every configuration logged to the trial ledger
 - [x] A live performance review (2026-09-28, `scripts/research/performance_review.py`): the book vs buy-and-hold from the runtime's
   snapshots (beta, alpha, capture), fees, funding and sleeve P&L
 - [ ] The rest of the review, after weeks of fills: slippage vs decision price, trade durations, alpha decay
