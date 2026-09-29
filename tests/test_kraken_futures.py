@@ -61,10 +61,12 @@ def test_sandbox_liquidates_using_the_venue_maintenance_rate() -> None:
 
 
 def test_venue_symbol_mapping() -> None:
-    """Runtime symbols map to Kraken's perpetual names, and unknown symbols fail clearly."""
+    """Runtime symbols map to Kraken's perpetual names (PF_<COIN>USD, XBT for bitcoin); other shapes fail clearly."""
     assert venue_symbol_for("btc/usd") == "PF_XBTUSD"
-    with pytest.raises(ValueError, match="no Kraken perpetual"):
-        venue_symbol_for("DOGE/USD")
+    assert venue_symbol_for("DOGE/USD") == "PF_DOGEUSD"
+    for bad in ("DOGE/EUR", "BTCUSD", "D-GE/USD"):
+        with pytest.raises(ValueError, match="no Kraken perpetual"):
+            venue_symbol_for(bad)
 
 
 def test_client_parses_instruments_and_funding_history(monkeypatch: pytest.MonkeyPatch) -> None:

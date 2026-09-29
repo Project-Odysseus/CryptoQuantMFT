@@ -54,7 +54,10 @@ def research_cutoff(first: Any, last: Any) -> datetime:
     first, last = _utc(first), _utc(last)
     if first < SHORT_SERIES_START:
         return FINAL_HOLDOUT_START
-    return first + (last - first) * (1.0 - SHORT_SERIES_TAIL)
+    tail = first + (last - first) * (1.0 - SHORT_SERIES_TAIL)
+    # A series that began before the final holdout (e.g. a coin listed in 2025) must never reach past it: its own
+    # tail rule is only for series that begin inside the holdout (recordings), which would otherwise be all frozen.
+    return min(tail, FINAL_HOLDOUT_START) if first < FINAL_HOLDOUT_START else tail
 
 
 def unlocked_reason() -> str | None:

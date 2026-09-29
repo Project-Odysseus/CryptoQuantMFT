@@ -196,3 +196,12 @@ def test_funding_by_bar_handles_mixed_time_resolutions() -> None:
     opens = pd.date_range("2024-01-01", periods=3, freq="8h", tz="UTC").as_unit("ms")  # parquet bars come back in ms
     settlements = pd.DataFrame({"timestamp": pd.DatetimeIndex([opens[1]]).as_unit("us"), "rate": [0.01]})  # funding in us
     assert funding_by_bar(opens, settlements).tolist() == [0.01, 0.0, 0.0]
+
+
+def test_a_series_listed_before_the_final_holdout_never_reaches_into_it() -> None:
+    start = governance.FINAL_HOLDOUT_START
+    # listed mid-2025, data to late 2026: its own last-25% rule would reach past 2026-01-01; the cap stops it there
+    assert governance.research_cutoff("2025-06-01", "2026-09-01") == start
+    # a series starting inside the holdout (a recording) keeps its own tail
+    assert governance.research_cutoff("2026-09-01", "2026-12-01") > start
+    assert governance.research_cutoff("2020-01-01", "2026-09-01") == start

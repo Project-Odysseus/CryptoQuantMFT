@@ -30,11 +30,18 @@ PERP_VENUE_SYMBOLS: dict[str, str] = {
 
 
 def venue_symbol_for(symbol: str) -> str:
-    """Return Kraken's perpetual contract name for a runtime symbol such as ``BTC/USD``."""
+    """Return Kraken's perpetual contract name for a runtime symbol such as ``BTC/USD``.
+
+    Every linear USD perp is ``PF_<COIN>USD`` (bitcoin is XBT), so coins beyond the explicit map follow that rule;
+    whether the contract exists is checked where it is used (instrument lookup or the first candle fetch).
+    """
     normalized = symbol.strip().upper()
-    if normalized not in PERP_VENUE_SYMBOLS:
-        raise ValueError(f"no Kraken perpetual is mapped for {symbol!r}; known: {sorted(PERP_VENUE_SYMBOLS)}")
-    return PERP_VENUE_SYMBOLS[normalized]
+    if normalized in PERP_VENUE_SYMBOLS:
+        return PERP_VENUE_SYMBOLS[normalized]
+    base, _, quote = normalized.partition("/")
+    if quote != "USD" or not base.isalnum():
+        raise ValueError(f"no Kraken perpetual is mapped for {symbol!r}: expected COIN/USD, e.g. {sorted(PERP_VENUE_SYMBOLS)}")
+    return f"PF_{base}USD"
 
 
 @dataclass(frozen=True, slots=True)
