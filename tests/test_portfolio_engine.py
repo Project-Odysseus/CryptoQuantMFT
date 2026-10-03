@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -430,3 +431,111 @@ def test_the_held_book_is_checked_against_the_exposure_limits() -> None:
     breaches = engine.exposure_breaches(report.equity)
     assert {breach["rule"] for breach in breaches} == {"max_delta", "max_scenario_loss"}
     assert all(breach["value"] > breach["limit"] for breach in breaches) and engine.snapshot(report)["exposure_breaches"] == breaches
+
+
+# --- crashes inside a decision ------------------------------------------------------------------------------------
+
+class _Crash(BaseException):
+    """The process dies here: nothing after this line runs, and nothing is saved."""
+
+
+def _fills_of(logger: TradeLogger) -> list[tuple]:
+    return [(trade["pair"], trade["side"], trade["size"], trade["price"]) for trade in reversed(logger.list_trades())]
+
+
+def _run_with_a_crash(tmp_path, arm, *, bars: int = 150) -> tuple[PortfolioEngine, TradeLogger, PortfolioEngine, TradeLogger]:
+    """A clean run, and a run that dies where `arm(engine)` says, restarts on the same files and carries on."""
+    config = _config()
+    (tmp_path / "clean").mkdir()
+    (tmp_path / "crashed").mkdir()
+    clean_logger = TradeLogger(tmp_path / "clean" / "trades.db")
+    clean = _engine(config, tmp_path / "clean", logger=clean_logger, state=True)
+    for index in range(FIRST, FIRST + bars):
+        clean.run_cycle(bars_until(index), now=_now(index))
+
+    logger = TradeLogger(tmp_path / "crashed" / "trades.db")
+    engine = _engine(config, tmp_path / "crashed", logger=logger, state=True)
+    arm(engine)
+    index = FIRST
+    with pytest.raises(_Crash):
+        while True:
+            engine.run_cycle(bars_until(index), now=_now(index))
+            index += 1
+    del engine
+    restarted = _engine(config, tmp_path / "crashed", logger=logger, state=True)
+    resumed_at = int((restarted.last_grid_bar - START).total_seconds() // 14400)
+    restarted.run_cycle(bars_until(resumed_at), now=_now(resumed_at))  # the first poll after the restart: no new bar yet
+    assert restarted.pending_orders == {} and restarted.open_plan == [] and restarted.reconcile() == {}
+    for later in range(resumed_at + 1, FIRST + bars):
+        assert restarted.run_cycle(bars_until(later), now=_now(later)).mismatches == {}
+    return clean, clean_logger, restarted, logger
+
+
+def _die_after(engine: PortfolioEngine, name: str, nth: int, *, when=lambda engine: True) -> None:
+    original, calls = getattr(engine, name), {"n": 0}
+
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        result = original(*args, **kwargs)
+        if when(engine):
+            calls["n"] += 1
+            if calls["n"] == nth:
+                raise _Crash()
+        return result
+
+    setattr(engine, name, wrapped)
+
+
+@pytest.mark.parametrize("nth", [1, 2, 5])
+def test_a_crash_after_the_exchange_filled_an_order_books_it_once_and_sends_nothing_twice(tmp_path, nth: int) -> None:
+    def arm(engine: PortfolioEngine) -> None:
+        adapter = engine.adapters["kraken_futures"]
+        _die_after(adapter, "submit_order", nth)  # the paper exchange has the fill; the engine never saw the answer
+
+    clean, clean_logger, restarted, logger = _run_with_a_crash(tmp_path, arm)
+    assert restarted.book.to_dict() == clean.book.to_dict()
+    assert _fills_of(logger) == _fills_of(clean_logger) and len(_fills_of(logger)) >= nth
+    assert restarted.adapters["kraken_futures"].positions() == clean.adapters["kraken_futures"].positions()
+
+
+def test_a_crash_between_recording_an_order_and_sending_it_sends_it_after_the_restart(tmp_path) -> None:
+    clean, clean_logger, restarted, logger = _run_with_a_crash(tmp_path, lambda engine: _die_after(engine, "_save", 2, when=lambda e: bool(e.pending_orders)))
+    assert restarted.book.to_dict() == clean.book.to_dict() and _fills_of(logger) == _fills_of(clean_logger)
+    assert [event["event_type"] for event in logger.list_events(event_types=["portfolio_plan_resumed"])] == ["portfolio_plan_resumed"]
+
+
+def test_a_crash_after_a_fill_was_logged_does_not_log_it_again(tmp_path) -> None:
+    clean, clean_logger, restarted, logger = _run_with_a_crash(tmp_path, lambda engine: _die_after(engine, "_book_fill", 3))
+    assert restarted.book.to_dict() == clean.book.to_dict() and _fills_of(logger) == _fills_of(clean_logger)
+    recovered = logger.list_events(event_types=["portfolio_fill_recovered"])
+    assert len(recovered) == 1 and "logged before the crash" in recovered[0]["message"]
+
+
+def test_an_interrupted_plan_is_dropped_when_a_new_bar_closed_before_the_restart(tmp_path) -> None:
+    config = _config()
+    logger = TradeLogger(tmp_path / "trades.db")
+    engine = _engine(config, tmp_path, logger=logger, state=True)
+    index = FIRST
+    while len(engine.open_plan) < 1:  # stop inside the first decision that sends two or more orders: one sent, one still planned
+        original = engine._execute
+
+        def execute(entry, **kwargs):
+            original(entry, **kwargs)
+            if engine.open_plan:
+                raise _Crash()
+
+        engine._execute = execute
+        try:
+            engine.run_cycle(bars_until(index), now=_now(index))
+        except _Crash:
+            break
+        index += 1
+        assert index < LAST, "no decision with two orders in this history"
+    unsent = [entry["order_id"] for entry in json.loads((tmp_path / "engine.json").read_text())["open_plan"]]
+    assert unsent
+    del engine
+    restarted = _engine(config, tmp_path, logger=logger, state=True)
+    report = restarted.run_cycle(bars_until(index + 1), now=_now(index + 1))  # the process was down until the next bar closed
+    assert report.decided and restarted.open_plan == [] and report.mismatches == {}
+    dropped = logger.list_events(event_types=["portfolio_plan_dropped"])
+    assert len(dropped) == 1 and dropped[0]["metadata"]["orders"] == unsent
+    assert not {fill["order_id"] for fill in report.fills} & set(unsent)  # the old orders were never sent: the new decision planned its own

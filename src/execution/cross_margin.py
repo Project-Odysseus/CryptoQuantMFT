@@ -37,6 +37,7 @@ from src.execution.adapters import ExecutionAdapter, ExecutionOrder, ExecutionRe
 from src.execution.perps import PerpContract, initial_margin, maintenance_margin, unrealized_pnl
 
 _EPSILON = 1e-12
+RECENT_FILLS_KEPT = 200  # order ids the account still remembers after a restart (far more than one decision sends)
 
 
 class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
@@ -97,6 +98,8 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         self.realized_pnl_total = 0.0
         self.fees_paid_total = 0.0
         self.state_path = Path(state_path) if state_path is not None else None
+        self._recent_fills: dict[str, dict[str, Any]] = {}  # order id -> its fill, kept in the state file
+        self._tracked: set[str] = set()  # order ids a restarted engine is asking about
         self.restored_from_state = self._load_state()
 
     # --- account views -------------------------------------------------------------------------------------------
@@ -212,6 +215,10 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
     ) -> ExecutionReport:
         """Fill the order now if it passes the contract, reduce-only and account-wide margin checks, else reject it."""
         side = side.lower()
+        known = self._recent_fills.get(order_id)
+        if known is not None:  # an order id is filled once: a repeat (e.g. after a restart) gets the first outcome back
+            return ExecutionReport(order_id=order_id, status="FILLED", fill_price=known["fill_price"], filled_size=known["filled_size"], fee=known["fee"],
+                                   message="already filled under this order id")
         if symbol not in self.contracts:
             return self._reject(order_id, f"this account trades {sorted(self.contracts)}, not {symbol}")
         if side not in {"buy", "sell"}:
@@ -246,10 +253,34 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         order = ExecutionOrder(order_id=order_id, side=side, size=rounded, symbol=symbol, price=price, timestamp=timestamp, status="FILLED",
                                fill_price=fill_price, filled_size=rounded, fee=fee, exchange=self.exchange_name, message=f"filled in {self.exchange_name} cross-margin sandbox")
         self._orders[order_id] = order
+        self._recent_fills[order_id] = {"symbol": symbol, "side": side, "filled_size": rounded, "fill_price": fill_price, "fee": fee}
+        for stale in list(self._recent_fills)[:-RECENT_FILLS_KEPT]:
+            del self._recent_fills[stale]
         self._marks.setdefault(symbol, price)
         self._settle_fill(order)
         self.save_state()
         return ExecutionReport(order_id=order_id, status="FILLED", fill_price=fill_price, filled_size=rounded, fee=fee, message=order.message)
+
+    def track_order(self, *, order_id: str, symbol: str, side: str, size: float, price: float, timestamp: datetime) -> None:
+        """Ask about an order after a restart: `settle_orders` then says whether this account ever filled it.
+
+        The portfolio engine records an order before sending it. If the process died around the send, the restart
+        can't know whether the order arrived; a real exchange is asked by client order id, and this is the paper
+        account's version of that question.
+        """
+        self._tracked.add(order_id)
+
+    def settle_orders(self) -> list[dict[str, Any]]:
+        """The outcome of every tracked order, once: its fill if it was filled here, else `never_received`."""
+        settled: list[dict[str, Any]] = []
+        for order_id in sorted(self._tracked):
+            fill = self._recent_fills.get(order_id)
+            if fill is not None:
+                settled.append({"order_id": order_id, "status": "FILLED", **fill})
+            else:
+                settled.append({"order_id": order_id, "status": "CANCELED", "never_received": True})
+        self._tracked.clear()
+        return settled
 
     def _settle_fill(self, order: ExecutionOrder) -> None:
         """Track the position like the base adapter, but move only realized PnL and the fee through the wallet."""
@@ -358,6 +389,7 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
             "realized_pnl_total": self.realized_pnl_total,
             "fees_paid_total": self.fees_paid_total,
             "liquidation_count": self._liquidation_count,
+            "recent_fills": self._recent_fills,
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
@@ -391,5 +423,6 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         self.realized_pnl_total = float(payload.get("realized_pnl_total", 0.0))
         self.fees_paid_total = float(payload.get("fees_paid_total", 0.0))
         self._liquidation_count = int(payload.get("liquidation_count", 0))
+        self._recent_fills = {order_id: dict(fill) for order_id, fill in dict(payload.get("recent_fills", {})).items()}
         self._remote_balances = dict(self._balances)
         return True

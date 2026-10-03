@@ -203,7 +203,10 @@ class PortfolioEngine:
         self.last_decisions: dict[str, dict[str, Any]] = {}  # sleeve id -> its latest decision, for the dashboard
         self.record_tax = record_tax
         self.pending_tax: list[dict[str, Any]] = []  # flows the ledger couldn't take yet (e.g. no FX rate); retried each cycle
-        self.pending_orders: dict[str, dict[str, Any]] = {}  # sent to a live exchange, fill not settled yet (survives restarts)
+        # Orders the exchange may have: written to the checkpoint *before* each order is sent, removed when its outcome
+        # is booked. After a crash the restart asks the exchange about each one instead of sending it again.
+        self.pending_orders: dict[str, dict[str, Any]] = {}
+        self.open_plan: list[dict[str, Any]] = []  # the current decision's orders not sent yet (resumed after a crash)
         # Written off as unfilled, but watched for an hour in case the exchange's fill list was only late (survives restarts)
         self.written_off_orders: dict[str, dict[str, Any]] = {}
         self.unreconciled: dict[str, dict[str, float]] = {}  # book vs exchange disagreements: only reductions until resolved
@@ -233,6 +236,8 @@ class PortfolioEngine:
         for adapter in self.adapters.values():
             if hasattr(adapter, "client_id_prefix"):
                 adapter.client_id_prefix = f"cqm-{self.book_id}"
+        for meta in self.pending_orders.values():
+            meta["recovered"] = True  # its fill may have been logged before the process died: don't log it twice
         for order_id, meta in {**self.written_off_orders, **self.pending_orders}.items():  # re-register orders sent before a restart
             spec = self.config.instruments[meta["instrument"]]
             track = getattr(self.adapters[spec.venue], "track_order", None)
@@ -291,6 +296,13 @@ class PortfolioEngine:
         stale = sorted(set(stale) | {instrument for instrument, series in grid.items() if series[-1].timestamp < latest})
         new_grid_bars = sorted({bar.timestamp for series in grid.values() for bar in series if self.last_grid_bar is None or bar.timestamp > self.last_grid_bar})
         if not new_grid_bars:
+            if self.open_plan and not self.pending_orders:  # a decision cut short by a crash: send what was left of it
+                self._event("WARNING", "portfolio_plan_resumed", f"resuming {len(self.open_plan)} order(s) of the decision interrupted by a restart",
+                            {"orders": [entry["order_id"] for entry in self.open_plan]}, now)
+                self._run_plan(report, now)
+                self._settle_pending(report, now)
+                report.mismatches = self.reconcile()
+                self.unreconciled = dict(report.mismatches)
             self._sync_stops(prices, report, now)
             report.equity = float(self.book.equity())
             self._save()
@@ -316,6 +328,10 @@ class PortfolioEngine:
             for instrument in instruments:
                 if stamp in closes[instrument]:
                     self.last_grid_close[instrument] = closes[instrument][stamp]
+        if self.open_plan:  # left by a crash, and a new bar has closed since: this decision replaces it
+            self._event("WARNING", "portfolio_plan_dropped", f"dropped {len(self.open_plan)} unsent order(s) of an interrupted decision: a new bar has closed",
+                        {"orders": [entry["order_id"] for entry in self.open_plan]}, now)
+            self.open_plan = []
         self.last_grid_bar = new_grid_bars[-1]
         self.held_weights = {sleeve_id: float(self.states[sleeve_id].weight) for sleeve_id in self.sleeves}
         report.decided = True
@@ -495,8 +511,8 @@ class PortfolioEngine:
             else:
                 orders.append(order)
         report.orders, report.skipped = orders, plan.skipped
-        for number, order in enumerate(orders):
-            self._execute(order, number=number, attribution=attribution.get(order.instrument, {}), report=report, now=now)
+        self.open_plan = [self._plan_entry(order, number=number, attribution=attribution.get(order.instrument, {})) for number, order in enumerate(orders)]
+        self._run_plan(report, now)
         self._settle_pending(report, now)
         report.cooldowns = dict(self._cooldowns(now))
 
@@ -663,25 +679,51 @@ class PortfolioEngine:
             self._event("WARNING", "portfolio_rejection_cooldown", f"{instrument}: {streak} rejected orders in a row; only reductions until {until:%Y-%m-%d %H:%M} UTC",
                         {"instrument": instrument, "streak": streak, "until": until.isoformat()}, now)
 
-    def _execute(self, order: PlannedOrder, *, number: int, attribution: Mapping[str, float], report: CycleReport, now: datetime) -> None:
+    def _plan_entry(self, order: PlannedOrder, *, number: int, attribution: Mapping[str, float]) -> dict[str, Any]:
+        """One planned order as plain values (it is written to the checkpoint), with the id it will be sent under."""
         spec = self.config.instruments[order.instrument]
+        return {"order_id": f"pf-{self.cycle}-{number}-{spec.venue}-{spec.symbol}", "instrument": order.instrument, "side": order.side, "units": str(order.units),
+                "price": order.price, "reason": order.reason, "reduce_only": order.reduce_only, "sleeves": dict(attribution)}
+
+    def _run_plan(self, report: CycleReport, now: datetime) -> None:
+        """Send the orders in `open_plan`, in order. Each leaves the plan as it is sent."""
+        while self.open_plan:
+            self._execute(self.open_plan.pop(0), report=report, now=now)
+
+    def _execute(self, entry: Mapping[str, Any], *, report: CycleReport, now: datetime) -> None:
+        """Send one planned order, having first written to the checkpoint that it is about to be sent.
+
+        The exchange acts on an order before this process can record the outcome. If the process dies in between,
+        only the checkpoint written here tells the restart that the order may exist: it then asks the exchange for
+        the order by its id (`_settle_pending`) and books the fill once, where a checkpoint without it would plan
+        and send the same order again.
+        """
+        spec = self.config.instruments[entry["instrument"]]
         adapter = self.adapters[spec.venue]
-        order_id = f"pf-{self.cycle}-{number}-{spec.venue}-{spec.symbol}"
-        extra = {"reduce_only": order.reduce_only} if _accepts(adapter.submit_order, "reduce_only") else {}
-        result = adapter.submit_order(order_id=order_id, side=order.side, size=float(order.units), price=order.price, timestamp=now, symbol=spec.symbol, **extra)
-        meta = {"order_id": order_id, "instrument": order.instrument, "side": order.side, "units": str(order.units), "price": order.price,
-                "reason": order.reason, "reduce_only": order.reduce_only, "sleeves": dict(attribution), "submitted_at": now.isoformat()}
+        order_id = entry["order_id"]
+        meta = {**entry, "submitted_at": now.isoformat()}
+        meta.pop("recovered", None)
+        self.pending_orders[order_id] = meta
+        self._save()
+        extra = {"reduce_only": meta["reduce_only"]} if _accepts(adapter.submit_order, "reduce_only") else {}
+        result = adapter.submit_order(order_id=order_id, side=meta["side"], size=float(meta["units"]), price=meta["price"], timestamp=now, symbol=spec.symbol, **extra)
         if result.status == "SUBMITTED":  # a live exchange: the fill arrives later (settle_orders)
-            self.pending_orders[order_id] = meta
-            self._event("INFO", "portfolio_order_submitted", f"{order.side} {order.units} {order.instrument} sent ({order.reason})", meta, now)
+            self._event("INFO", "portfolio_order_submitted", f"{meta['side']} {meta['units']} {meta['instrument']} sent ({meta['reason']})", meta, now)
             return
+        self.pending_orders.pop(order_id, None)
         if result.status != "FILLED" or not result.filled_size:
-            rejection = {"order_id": order_id, "instrument": order.instrument, "side": order.side, "units": str(order.units), "reason": order.reason, "message": result.message}
+            rejection = {"order_id": order_id, "instrument": meta["instrument"], "side": meta["side"], "units": meta["units"], "reason": meta["reason"], "message": result.message}
             report.rejected.append(rejection)
-            self._event("WARNING", "portfolio_order_rejected", f"{order.side} {order.units} {order.instrument} rejected: {result.message}", rejection, now)
-            self._note_rejection(order.instrument, now)
+            self._event("WARNING", "portfolio_order_rejected", f"{meta['side']} {meta['units']} {meta['instrument']} rejected: {result.message}", rejection, now)
+            self._note_rejection(meta["instrument"], now)
             return
         self._book_fill(meta, filled_size=float(result.filled_size), fill_price=float(result.fill_price), fee=float(result.fee), report=report, now=now)
+
+    def _fill_logged(self, order_id: str) -> bool:
+        """Whether a fill of `order_id` is already in the event log (written before a crash that lost its booking)."""
+        if self.trade_logger is None:
+            return False
+        return any((event.get("metadata") or {}).get("order_id") == order_id for event in self.trade_logger.list_events(limit=100, event_types=["portfolio_fill"]))
 
     def _book_fill(self, meta: Mapping[str, Any], *, filled_size: float, fill_price: float, fee: float, report: CycleReport, now: datetime) -> None:
         """Book one fill (immediate or settled later): the book, the tax ledger, the trade log, the event log and Telegram."""
@@ -691,10 +733,14 @@ class PortfolioEngine:
         drivers = dict(meta.get("sleeves", {}))
         strategy_id = next(iter(drivers)) if len(drivers) == 1 else "portfolio"
         realized = self.book.apply_fill(instrument, meta["side"], self._on_lot_grid(instrument, filled_size), fill_price, fee)
-        self._tax_fill(instrument, meta["side"], filled_size, fill_price, fee, float(realized), now, meta["order_id"])
         fill = {"order_id": meta["order_id"], "instrument": instrument, "side": meta["side"], "units": filled_size, "price": fill_price,
                 "fee": fee, "reason": meta["reason"], "reduce_only": meta["reduce_only"], "strategy_id": strategy_id, "sleeves": drivers}
         report.fills.append(fill)
+        if meta.get("recovered") and self._fill_logged(meta["order_id"]):
+            # Found on the exchange after a restart, and the dead process had already logged it: the book needed it, the logs don't
+            self._event("WARNING", "portfolio_fill_recovered", f"{meta['side']} {filled_size} {instrument} @ {fill_price}: booked after a restart (it was logged before the crash)", fill, now)
+            return
+        self._tax_fill(instrument, meta["side"], filled_size, fill_price, fee, float(realized), now, meta["order_id"])
         if self.trade_logger is not None:
             self.trade_logger.log_trade(timestamp=now, source="portfolio", exchange=spec.venue, pair=spec.symbol, side=meta["side"], price=fill_price,
                                         size=filled_size, fee=fee, strategy_id=strategy_id)
@@ -724,6 +770,12 @@ class PortfolioEngine:
                     continue
                 meta = self.written_off_orders.pop(item["order_id"]) if late else self.pending_orders.get(item["order_id"])
                 if meta is None:
+                    continue
+                if item.get("never_received"):
+                    # A paper exchange knows for certain the order never arrived (the process died before sending it):
+                    # put it back at the front of the plan. A live exchange can't say that, so its orders are never resent.
+                    self.pending_orders.pop(item["order_id"], None)
+                    self.open_plan.insert(0, {key: value for key, value in meta.items() if key not in ("submitted_at", "recovered")})
                     continue
                 if item.get("filled_size"):
                     self._book_fill(meta, filled_size=float(item["filled_size"]), fill_price=float(item["fill_price"]), fee=float(item["fee"]), report=report, now=now)
@@ -965,8 +1017,8 @@ class PortfolioEngine:
         prices = {instrument: float(price) for instrument, price in self.book.marks.items()}
         plan = plan_orders(self.book.units(), {}, prices=prices, equity=float(self.book.equity()), instruments=self.config.instruments, band=0.0)
         report.orders, report.skipped = plan.orders, plan.skipped
-        for number, order in enumerate(plan.orders):
-            self._execute(order, number=number, attribution={}, report=report, now=now)
+        self.open_plan = [self._plan_entry(order, number=number, attribution={}) for number, order in enumerate(plan.orders)]  # replaces any interrupted decision
+        self._run_plan(report, now)
         for _attempt in range(3):  # live IOC fills show up in /fills within a moment
             self._settle_pending(report, now)
             if not self.pending_orders or not any(getattr(adapter, "live", False) for adapter in self.adapters.values()):
@@ -1114,6 +1166,7 @@ class PortfolioEngine:
             "last_decisions": self.last_decisions,
             "pending_tax": self.pending_tax,
             "pending_orders": self.pending_orders,
+            "open_plan": self.open_plan,
             "written_off_orders": self.written_off_orders,
             "unreconciled": self.unreconciled,
             "funding_booked_until": self.funding_booked_until,
@@ -1153,6 +1206,7 @@ class PortfolioEngine:
         self.last_decisions = dict(payload.get("last_decisions", {}))
         self.pending_tax = list(payload.get("pending_tax", []))
         self.pending_orders = dict(payload.get("pending_orders", {}))
+        self.open_plan = list(payload.get("open_plan", []))
         self.written_off_orders = dict(payload.get("written_off_orders", {}))
         self.unreconciled = dict(payload.get("unreconciled", {}))
         self.funding_booked_until = dict(payload.get("funding_booked_until", {}))

@@ -633,3 +633,51 @@ def test_fees_of_other_senders_are_left_alone(tmp_path) -> None:
         if report.decided and report.account_log:
             break
     assert report is not None and report.account_log["kraken_futures"]["fee_gap"] == 0.0
+
+
+def test_a_crash_right_after_kraken_took_an_order_is_settled_from_fills_and_never_resent(tmp_path) -> None:
+    """The process dies inside the decision: Kraken has the order, the engine never saw the answer or finished its cycle."""
+
+    class Rates:
+        def get_rate(self, pair: str = "EUR/NOK", at: Any = None) -> float:
+            return 10.0
+
+    class Died(BaseException):
+        pass
+
+    fake = FakeKraken()
+    logger = TradeLogger(tmp_path / "trades.db")
+    logger.fx_rate_collector = Rates()
+    engine = _live_engine(fake, tmp_path, logger=logger)
+    adapter = engine.adapters["kraken_futures"]
+    original = adapter.submit_order
+
+    def submit(**kwargs: Any):
+        original(**kwargs)
+        raise Died()
+
+    adapter.submit_order = submit
+    index = FIRST
+    with pytest.raises(Died):
+        while True:
+            _cycle(engine, fake, index)
+            index += 1
+    [sent] = fake.sent_orders()
+    saved = json.loads((tmp_path / "engine.json").read_text())
+    assert [f"{adapter.client_id_prefix}-{order_id}" for order_id in saved["pending_orders"]] == [sent["cliOrdId"]]  # written down before it was sent
+    del engine
+
+    restarted = _live_engine(fake, tmp_path, logger=logger)
+    report = _cycle(restarted, fake, index - 1)  # the first poll after the restart, still within the same bar
+    booked = [fill["order_id"] for fill in report.fills]
+    assert booked[0] == next(iter(saved["pending_orders"])) and restarted.pending_orders == {}  # found in Kraken's fills, booked first
+    assert booked[1:] == [entry["order_id"] for entry in saved["open_plan"]] and restarted.open_plan == []  # then the rest of the interrupted plan went out
+    for later in range(index, index + 3):
+        assert _cycle(restarted, fake, later).mismatches == {}
+    sent_ids = [order["cliOrdId"] for order in fake.sent_orders()]
+    assert len(sent_ids) == len(set(sent_ids)) and sent_ids.count(sent["cliOrdId"]) == 1  # nothing was sent twice
+    for instrument, venue_symbol in ((BTC, "PF_XBTUSD"), (ETH, "PF_ETHUSD")):
+        assert float(restarted.book.units().get(instrument, 0)) == pytest.approx(fake.positions.get(venue_symbol, [0.0])[0])
+    restarted._flush_tax(_now(index + 3))
+    fees = [event for event in logger.list_tax_events(transaction_types=["TRADING_FEE"]) if not event["metadata"].get("kind")]
+    assert len(fees) == len(fake.sent_orders())  # one fee record per order: the recovered fill is in the ledger once

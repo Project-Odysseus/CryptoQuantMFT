@@ -135,3 +135,22 @@ def test_closing_a_position_that_accumulated_float_residue_is_not_a_flip() -> No
     account._positions["BTC"] = -0.10369999999999999  # what a series of float fills left behind (seen in a paper run)
     report = _order(account, "close", BTC, "buy", 0.1037, 50_000.0, reduce_only=True)
     assert report.status == "FILLED" and account.positions() == {}
+
+
+def test_an_order_id_is_filled_once_and_a_restarted_account_can_say_what_became_of_an_order(tmp_path) -> None:
+    path = tmp_path / "cross.json"
+    account = _account(state_path=path)
+    first = _order(account, "pf-7-0", BTC, "buy", 0.01, 50_000.0)
+    again = _order(account, "pf-7-0", BTC, "buy", 0.01, 51_000.0)  # the same id again, e.g. a restart replaying its plan
+    assert again.status == "FILLED" and (again.fill_price, again.filled_size, again.fee) == (first.fill_price, first.filled_size, first.fee)
+    assert account.position_size(BTC) == pytest.approx(0.01)  # not filled twice
+
+    restored = _account(state_path=path)
+    assert restored.settle_orders() == []  # nothing asked about
+    restored.track_order(order_id="pf-7-0", symbol=BTC, side="buy", size=0.01, price=50_000.0, timestamp=T0)
+    restored.track_order(order_id="pf-7-1", symbol=ETH, side="buy", size=0.1, price=2_500.0, timestamp=T0)  # recorded by the engine, never sent
+    filled, lost = restored.settle_orders()
+    assert filled == {"order_id": "pf-7-0", "status": "FILLED", "symbol": BTC, "side": "buy", "filled_size": first.filled_size, "fill_price": first.fill_price, "fee": first.fee}
+    assert lost == {"order_id": "pf-7-1", "status": "CANCELED", "never_received": True}
+    assert restored.settle_orders() == []  # each answer is given once
+    assert _order(restored, "pf-7-0", BTC, "buy", 0.01, 50_000.0).message == "already filled under this order id" and restored.position_size(BTC) == pytest.approx(0.01)
