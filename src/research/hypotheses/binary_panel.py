@@ -37,6 +37,7 @@ from src.research import prediction_markets as pm
 SERIES = "KXBTCD"
 CACHE = Path("data/research/prediction_markets/kalshi_events")
 BUMP = 0.0025  # the strike bump for the call-price slope, as a share of the strike
+_EVENTS_THIS_RUN: dict[str, list[dict[str, Any]]] = {}  # an unsettled event's markets, fetched once per process (each list is ~160 KB)
 
 
 def daily_event_ticker(day: date) -> str:
@@ -83,10 +84,14 @@ def _event_markets(client: pm.KalshiClient, event: str, cache_dir: Path) -> list
     path = cache_dir / f"{event}.json"
     if path.exists():
         return json.loads(path.read_text())
+    memo = (str(cache_dir), event, id(client))
+    if memo in _EVENTS_THIS_RUN:
+        return _EVENTS_THIS_RUN[memo]
     markets = [{key: raw.get(key) for key in ("ticker", "event_ticker", "floor_strike", "open_time", "close_time", "result", "expiration_value")} for raw in client.event_markets(event)]
     if markets and all(market["result"] in ("yes", "no") for market in markets):
         cache_dir.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(markets))
+    _EVENTS_THIS_RUN[memo] = markets
     return markets
 
 
@@ -243,6 +248,26 @@ def window(panel: pd.DataFrame, start: str | None, end: str | None) -> pd.DataFr
     if end:
         mask &= panel["time"] < pd.Timestamp(end, tz="UTC")
     return panel[mask]
+
+
+def confirmatory_rows(panel: pd.DataFrame, start: str, end: str, *, min_events: int = 20) -> tuple[pd.DataFrame, str | None]:
+    """The confirmatory window's rows and the end date actually used, as the pre-registrations define it.
+
+    The window is [start, end). If it holds fewer than `min_events` settled daily events, its end moves forward one
+    day at a time until it does. Returns (rows, end used), or (the rows so far, None) while even every snapshot
+    recorded after `start` holds too few settled events: the test is not ready.
+    """
+    after = panel[panel["time"] >= pd.Timestamp(start, tz="UTC")] if len(panel) else panel
+    settled = after[after["yes"].notna()] if len(after) else after
+    stop = pd.Timestamp(end, tz="UTC")
+    last = after["time"].max() if len(after) else stop
+    while True:
+        inside = settled[settled["time"] < stop] if len(settled) else settled
+        if len(inside) and inside["event"].nunique() >= min_events:
+            return after[after["time"] < stop], f"{stop:%Y-%m-%d}"
+        if stop > last:
+            return after, None
+        stop += pd.Timedelta(days=1)
 
 
 def describe_interval(values: Sequence[float], *, percent: bool = False) -> str:

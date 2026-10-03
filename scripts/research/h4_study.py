@@ -63,7 +63,7 @@ def main() -> None:
     lock = governance.require_prereg(HYPOTHESIS)
     if args.collect:
         # Kalshi may not keep minute quotes forever, and the test must not be read early: store the data, show nothing of it
-        panel = load_panel(*WINDOWS["confirm"])
+        panel = load_panel(WINDOWS["confirm"][0], None)
         settled = int(panel["yes"].notna().sum()) if len(panel) else 0
         print(f"Confirmatory window so far: {len(panel)} rows, {panel['time'].nunique() if len(panel) else 0} snapshots, "
               f"{panel['event'].nunique() if len(panel) else 0} daily events, {settled} rows settled and cached in {PANEL}. No results are shown before {CONFIRM_NOT_BEFORE:%Y-%m-%d}.")
@@ -73,7 +73,15 @@ def main() -> None:
     if args.window == "confirm" and datetime.now(timezone.utc) < CONFIRM_NOT_BEFORE:
         raise SystemExit(f"The confirmatory window ends 2026-11-16; run this once, on or after {CONFIRM_NOT_BEFORE:%Y-%m-%d}.")
     start, end = WINDOWS[args.window]
-    panel = load_panel(start, end)
+    if args.window == "confirm":
+        # Fewer than MIN_EVENTS settled daily events by the planned end: the window runs on until it has them (pre-registered)
+        panel, end = bp.confirmatory_rows(load_panel(start, None), start, end, min_events=MIN_EVENTS)
+        if end is None:
+            events_so_far = panel[panel["yes"].notna()]["event"].nunique() if len(panel) else 0
+            raise SystemExit(f"Not ready: {events_so_far} settled daily events recorded since {start}, the pre-registration needs {MIN_EVENTS}. Nothing is shown until then.")
+        print(f"Confirmatory window: {start} to {end}")
+    else:
+        panel = load_panel(start, end)
     if panel.empty:
         raise SystemExit("No rows: no recorded chain snapshot in this window had a quoted Kalshi market in range.")
     out = Path("data/research") / f"h4_{args.window}_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
@@ -90,8 +98,6 @@ def main() -> None:
     print(f"  covering a long down to the level costs {result['mean_cover_bps']:.1f} bps of the position on average")
     print(f"Deribit put spread on {result['put_spread_rows']} comparable rows: {result['put_spread_buy']:.3f} per unit of payout, against Kalshi's {result['kalshi_cost_same_rows']:.3f} (a ramp at another expiry: context only)")
     result["detail"].to_csv(out / "protection_rows.csv", index=False)
-    if args.window == "confirm" and events < MIN_EVENTS:
-        print(f"Only {events} events: the pre-registration needs {MIN_EVENTS}. Extend the window's end as it says, and rerun then.")
     if not args.no_ledger:
         governance.record_trials(f"h4_study", 1, family=HYPOTHESIS, data=f"kalshi KXBTCD daily + deribit chains, {args.window} window",
                                  details={"window": args.window, "rows": int(len(panel)), "events": int(events), "prereg_version": lock["version"]})

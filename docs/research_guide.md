@@ -395,6 +395,11 @@ with a perp. The code is `src/research/prediction_markets.py`:
 First results are in the research log (2026-10-03). Whether trading these venues is allowed is not something the
 code can answer.
 
+H4 and H5 (Kalshi's daily BTC markets against Deribit's options; `research/prereg/H4.txt`, `H5.txt`) are tested on data
+recorded after they were locked. `scripts/research/h45_daily.py`, run daily by the LaunchAgent
+`deploy/launchd/com.cryptoquant.research-daily.plist`, stores the data as it comes in and runs the confirmatory
+studies once when the window is over; `logs/research/daily.log` shows each day's row counts.
+
 ## A research loop that works
 
 The signal research notebook walks through these steps in order.

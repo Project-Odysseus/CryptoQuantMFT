@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The daily research job for H4 and H5 (scripts/research/h45_daily.py) as a macOS LaunchAgent. Once a day at 09:15
+  local time (or at the next wake if the Mac was asleep then) it caches Kalshi's public quotes for the option chains
+  recorded so far, and on or after 2026-11-17 it runs the two pre-registered confirmatory studies once and sends one
+  Telegram message. Public data only: no keys, no orders. About 1-2 MB of network a day.
+    install:  cp deploy/launchd/com.cryptoquant.research-daily.plist ~/Library/LaunchAgents/
+              launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cryptoquant.research-daily.plist
+    run now:  launchctl kickstart gui/$(id -u)/com.cryptoquant.research-daily
+    log:      tail logs/research/daily.log
+    remove:   launchctl bootout gui/$(id -u)/com.cryptoquant.research-daily && rm ~/Library/LaunchAgents/com.cryptoquant.research-daily.plist
+  It needs the option-chain collector (com.cryptoquant.collectors) to be running: that is what records the chains.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.cryptoquant.research-daily</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin/python</string>
+    <string>scripts/research/h45_daily.py</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>9</integer>
+    <key>Minute</key><integer>15</integer>
+  </dict>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT/logs/research/daily.log</string>
+  <key>StandardErrorPath</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT/logs/research/daily.log</string>
+</dict>
+</plist>

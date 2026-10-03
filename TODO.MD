@@ -160,11 +160,12 @@ direction is in `aspirations.md`.
 - [ ] Prediction markets (research only; `notebooks/prediction_markets.ipynb`, research log 2026-10-03). Before anything else:
   check the employer's personal-trading rules and whether Polymarket and Kalshi are open to Norwegian residents. Further
   questions, each to pre-register: model-versus-market gaps on weeks of settled Kalshi 15-minute markets; quoting instead of taking
-- [ ] **H4 and H5, confirmatory run on or after 2026-11-17** (pre-registered and locked 2026-10-03; research log): `python
-  scripts/research/h5_study.py --window confirm`, then `h4_study.py --window confirm`, once each, then `research/reports/H4.md`
-  and `H5.md`. Until then run `python scripts/research/h5_study.py --collect` about weekly (it caches Kalshi's quotes for the
-  chains recorded so far and shows no results), and keep the option-chain collector running: the sample is only as large as
-  the hours the recorder was awake
+- [ ] **H4 and H5, confirmatory run on or after 2026-11-17** (pre-registered and locked 2026-10-03; research log). Automated:
+  the LaunchAgent `com.cryptoquant.research-daily` runs `scripts/research/h45_daily.py` once a day. It caches Kalshi's quotes
+  for the chains recorded so far (no results shown) and, once the window is over and holds 20 settled daily events, runs both
+  confirmatory studies once, saves them to `data/research/prediction_markets/H5_confirmatory.txt` / `H4_confirmatory.txt`
+  and sends one Telegram message. Left for a person: judge them against the pre-registrations and write
+  `research/reports/H4.md` and `H5.md`. The sample is only as large as the hours the option-chain collector was awake
 - [ ] Binance 1-minute klines for BTC/ETH/SOL from the public archive (on wifi): they carry taker-buy volume, enough for a
   1-minute cumulative volume delta without paid tick data
 - [x] A live performance review (2026-09-28, `scripts/research/performance_review.py`): the book vs buy-and-hold from the runtime's

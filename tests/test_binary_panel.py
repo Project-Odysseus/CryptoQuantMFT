@@ -92,7 +92,7 @@ def test_the_panel_has_one_row_per_snapshot_and_quoted_level_in_range(tmp_path) 
     assert (tmp_path / "KXBTCD-26SEP3017.json").exists()  # a settled event is cached
     events_before = sum(1 for kind, _ in client.calls if kind == "event")
     bp.build_panel(chains.iloc[: len(_chain())], client, cache_dir=tmp_path)
-    assert sum(1 for kind, _ in client.calls if kind == "event") == events_before + 1  # only the (empty) next-day event is asked for again
+    assert sum(1 for kind, _ in client.calls if kind == "event") == events_before  # settled events come from the cache, the rest are fetched once per run
 
     open_panel = bp.build_panel(_chain(NOW), FakeKalshi(settle=None), cache_dir=tmp_path / "open")
     assert open_panel["yes"].isna().all() and not (tmp_path / "open" / "KXBTCD-26SEP3017.json").exists()  # unsettled: no outcome, not cached
@@ -152,3 +152,17 @@ def test_h4_prices_protection_just_below_the_price_and_its_return() -> None:
     assert result["put_spread_rows"] == len(rows) and result["put_spread_buy"] == pytest.approx(0.3)
     assert bp.describe_interval(result["pnl"]).count("(") == 1 and bp.describe_interval((float("nan"),) * 3) == "n/a"
     assert len(bp.window(panel, "2026-10-10", "2026-10-12")) == 2 * 9
+
+
+def test_the_confirmatory_window_runs_on_until_it_holds_enough_events() -> None:
+    panel = _panel(np.random.default_rng(5), events=30)  # one event a day from 2026-10-05
+    rows, end = bp.confirmatory_rows(panel, "2026-10-05", "2026-10-25", min_events=20)
+    assert end == "2026-10-25" and rows["event"].nunique() == 20  # exactly enough by the planned end
+    rows, end = bp.confirmatory_rows(panel, "2026-10-05", "2026-10-15", min_events=20)
+    assert end == "2026-10-25" and rows["event"].nunique() == 20  # ten by the planned end: the end moves to the day the 20th is in
+    rows, end = bp.confirmatory_rows(panel, "2026-10-05", "2026-10-15", min_events=40)
+    assert end is None and rows["event"].nunique() == 30  # not ready: everything recorded so far, and no end
+    unsettled = panel.assign(yes=None)
+    assert bp.confirmatory_rows(unsettled, "2026-10-05", "2026-10-25", min_events=20)[1] is None  # quotes without outcomes don't count
+    assert bp.confirmatory_rows(panel.iloc[:0], "2026-10-05", "2026-10-25")[1] is None
+
