@@ -49,6 +49,8 @@ class InstrumentSpec:
         slippage_bps: Per side (research costs).
         min_order_size, lot_step: Order limits in units; 0 means unknown (the
             runtime then reads them from the exchange).
+        group: A name shared by instruments that are capped together
+            (`[risk.groups.<name>]`), e.g. "majors" or "alts".
     """
 
     id: str
@@ -59,6 +61,7 @@ class InstrumentSpec:
     slippage_bps: float = 5.0
     min_order_size: float = 0.0
     lot_step: float = 0.0
+    group: str | None = None
 
     @property
     def venue(self) -> str:
@@ -79,6 +82,13 @@ class InstrumentSpec:
     def taker_fee_pct(self) -> float:
         """The fee used in research backtests."""
         return self.fee_pct if self.fee_pct is not None else DEFAULT_FEE_PCT[self.kind]
+
+    @property
+    def underlying(self) -> str:
+        """The coin the instrument moves with ("BTC" for BTC/USD and XBT/EUR): one exposure across spot and perp."""
+        from src.portfolio.exposure_limits import base_coin
+
+        return base_coin(self.symbol)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +154,18 @@ class PortfolioConfig:
     def can_short(self) -> dict[str, bool]:
         """Instrument id to whether it may be short."""
         return {instrument_id: spec.can_short for instrument_id, spec in self.instruments.items()}
+
+    def groups(self) -> dict[str, str]:
+        """Instrument id to its group, for the instruments that have one."""
+        return {instrument_id: spec.group for instrument_id, spec in self.instruments.items() if spec.group}
+
+    def underlyings(self) -> dict[str, str]:
+        """Instrument id to the coin it moves with."""
+        return {instrument_id: spec.underlying for instrument_id, spec in self.instruments.items()}
+
+    def traded_instruments(self) -> list[str]:
+        """The instruments enabled sleeves trade, in a fixed order (the risk model's)."""
+        return sorted({sleeve.instrument for sleeve in self.enabled_sleeves})
 
 
 _PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "scale", "allocation", "allocation_lookback_days", "allocation_refit_days",
@@ -299,6 +321,12 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         baskets.append(basket)
     if baskets and portfolio.get("allocation", "equal") not in ("fixed", "equal"):
         errors.append("[portfolio] allocation must be 'fixed' or 'equal' in a portfolio with baskets (the others need one return series per sleeve)")
+    used_groups = {spec.group for spec in instruments.values() if spec.group}
+    for group in sorted(set(risk.groups) - used_groups):
+        errors.append(f"[risk.groups.{group}] has no instruments: add group = \"{group}\" to an [instruments] table")
+    traded = {sleeve.instrument for sleeve in sleeves if sleeve.enabled}
+    if risk.benchmark is not None and risk.benchmark not in traded:
+        errors.append(f"[risk] benchmark '{risk.benchmark}' must be an instrument an enabled sleeve trades (its bars feed the risk model)")
     if not any(sleeve.enabled for sleeve in sleeves) and not errors:
         errors.append("no enabled sleeves: add a [[sleeves]] block")
     if portfolio.get("allocation", "equal") == "fixed":
@@ -396,6 +424,19 @@ def describe(config: PortfolioConfig) -> str:
     daily = f"daily loss limit {risk.daily_loss_limit:.0%}" if risk.daily_loss_limit is not None else "no daily loss limit"
     daily += f"; positions at most {risk.max_gross_notional:,.0f} {config.base_currency} in total" if risk.max_gross_notional else ""
     lines.append(f"Risk: gross <= {risk.max_gross_exposure:g}x, net <= {risk.max_net_exposure:g}x, per instrument <= {risk.max_instrument_weight:g}x{venues}; {derisk}; {daily}")
+    extra = [f"group {group}: " + ", ".join(f"{key.removeprefix('max_')} <= {value:g}x" for key, value in limits.items())
+             + f" ({sum(1 for spec in config.instruments.values() if spec.group == group)} instruments)" for group, limits in risk.groups.items()]
+    if risk.max_beta_exposure is not None:
+        extra.append(f"beta to {risk.benchmark} <= {risk.max_beta_exposure:g}x")
+    if risk.max_portfolio_vol is not None:
+        stress = f"correlations floored at {risk.stress_correlation:g}" if risk.stress_correlation > 0 else "estimated correlations"
+        extra.append(f"book volatility <= {risk.max_portfolio_vol:.0%} a year ({stress}, {risk.vol_halflife_days:g}-day half-life)")
+    extra += [f"{key.removeprefix('max_')} <= {value:g}" for key, value in risk.exposure.items()]
+    if risk.max_average_correlation is not None or risk.min_effective_bets is not None:
+        extra.append("alert when the sleeves' average correlation is above " + (f"{risk.max_average_correlation:g}" if risk.max_average_correlation is not None else "-")
+                     + " or their effective bets below " + (f"{risk.min_effective_bets:g}" if risk.min_effective_bets is not None else "-"))
+    if extra:
+        lines.append("Exposure limits: " + "; ".join(extra))
     stop = (f"a reduce-only stop resting on the exchange {risk.exchange_stop_pct:.0%} beyond each position's price" if risk.exchange_stop_pct is not None
             else "no exchange stop (live: nothing caps the loss if the process dies)")
     cooldown = (f"after {risk.rejection_cooldown_after} rejected orders in a row, only reductions on that instrument for {risk.rejection_cooldown_hours:g}h"

@@ -67,6 +67,7 @@ class PortfolioResult:
     net_exposure: pd.Series
     positions: pd.Series
     periods_per_year: float = DAYS_PER_YEAR
+    weights: pd.DataFrame | None = None  # time x symbol: the position held after each bar's trades, as a share of equity
 
     def metrics(self, start: str | pd.Timestamp | None = None, end: str | pd.Timestamp | None = None) -> dict[str, float]:
         """CAGR, volatility, Sharpe, max drawdown, turnover and drags over [start, end)."""
@@ -166,6 +167,7 @@ def simulate_portfolio(
     peak_equity = initial_equity
     day_start_equity, current_day = initial_equity, None
     holdings = np.zeros(len(symbols))  # notional per coin after the last rebalance
+    held = np.zeros_like(close)
     for day in range(count):
         start_equity = equity
         long_pnl = float(np.sum(np.where(holdings > 0, holdings, 0.0) * day_return[day]))
@@ -213,6 +215,8 @@ def simulate_portfolio(
         series["gross"][day] = float(np.sum(np.abs(holdings))) / equity if equity > 0 else 0.0
         series["net"][day] = float(np.sum(holdings)) / equity if equity > 0 else 0.0
         series["positions"][day] = float(np.count_nonzero(holdings))
+        if equity > 0:
+            held[day] = holdings / equity
         if equity <= 0.0:  # ruined: stay flat and at zero
             holdings = np.zeros(len(symbols))
             equity = 0.0
@@ -221,7 +225,7 @@ def simulate_portfolio(
         equity=as_series["equity"], returns=as_series["returns"], long_pnl=as_series["long"], short_pnl=as_series["short"],
         costs=as_series["costs"], funding=as_series["funding"], turnover=as_series["turnover"],
         gross_exposure=as_series["gross"], net_exposure=as_series["net"], positions=as_series["positions"],
-        periods_per_year=float(periods_per_year),
+        periods_per_year=float(periods_per_year), weights=pd.DataFrame(held, index=dates, columns=symbols),
     )
 
 

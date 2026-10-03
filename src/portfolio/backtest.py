@@ -86,6 +86,7 @@ class PortfolioInputs:
     sleeve_instrument: dict[str, str]
     measure_start: pd.Timestamp
     sleeve_groups: dict[str, str] = field(default_factory=dict)  # sleeve id -> allocation unit (a basket's members share one)
+    warmup_prices: pd.DataFrame | None = None  # the grid closes before `measure_start`: they warm the risk model up
 
     @property
     def bars_per_day(self) -> float:
@@ -187,6 +188,7 @@ def prepare_inputs(config: PortfolioConfig, *, bar_loader: BarLoader | None = No
         sleeve_instrument={sleeve.id: sleeve.instrument for sleeve in sleeves},
         measure_start=grid[first],
         sleeve_groups=config.allocation_groups(),
+        warmup_prices=prices.iloc[:first],
     )
 
 
@@ -255,7 +257,15 @@ def run_book(
     )
     per_bar = funding_pct_per_day / 100.0 / per_day
     funding = pd.DataFrame({spec.id: per_bar if spec.kind == "perp" else 0.0 for spec in specs}, index=index)
-    overlay = array_overlay(instruments, config=config.risk, venues=config.venues(), can_short=config.can_short()) if risk_overlay else None
+    overlay = None
+    if risk_overlay:
+        estimates = None
+        if config.risk.needs_risk_model:
+            from src.portfolio.book_risk import estimate_stream
+
+            estimates = estimate_stream(config, inputs.grid_interval, inputs.prices, warmup_prices=inputs.warmup_prices)
+        overlay = array_overlay(instruments, config=config.risk, venues=config.venues(), can_short=config.can_short(),
+                                groups=config.groups(), underlyings=config.underlyings(), estimates=estimates)
     if lots:
         overlay = _lot_rounding(overlay, specs, inputs.prices.to_numpy(), config)
     # Simulated in money at the config's starting equity, so money limits (max_gross_notional) bind as in the runtime

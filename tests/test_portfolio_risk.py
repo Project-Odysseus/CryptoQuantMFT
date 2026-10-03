@@ -167,3 +167,115 @@ def test_the_money_cap_limits_total_position_value() -> None:
     assert _apply({BTC: 0.3, ETH: -0.2}, config, equity=10_000.0, peak_equity=10_000.0)[1] == []
     with pytest.raises(ValueError, match="max_gross_notional"):
         PortfolioRiskConfig(max_gross_notional=0.0)
+
+
+# --- group, exposure and correlation-aware caps -------------------------------------------------------------------
+
+SOL = "kraken_futures:SOL/USD"
+GROUPS = {BTC: "majors", ETH: "alts", SOL: "alts"}
+COINS = {BTC: "BTC", ETH: "ETH", SOL: "SOL", SPOT: "BTC"}
+
+
+def _loose(**limits: object) -> PortfolioRiskConfig:
+    return PortfolioRiskConfig(max_gross_exposure=10.0, max_net_exposure=10.0, max_instrument_weight=10.0, max_drawdown=0.9, daily_loss_limit=None, **limits)  # type: ignore[arg-type]
+
+
+def _two_asset_estimate(correlation: float = 0.8, *, stress: float | None = 0.9):
+    from src.portfolio.risk_model import RiskEstimate
+
+    std = np.array([0.02, 0.03])  # daily; ETH's beta to BTC is correlation * 1.5
+    matrix = lambda rho: np.array([[1.0, rho], [rho, 1.0]]) * np.outer(std, std)  # noqa: E731
+    return RiskEstimate((BTC, ETH), matrix(correlation), matrix(max(correlation, stress)) if stress is not None else None, 365.0)
+
+
+def test_group_caps_scale_a_groups_instruments_together_on_gross_and_on_net() -> None:
+    config = _loose(groups={"alts": {"max_gross": 0.4, "max_net": 0.1}})
+    out, actions = _apply({BTC: 0.9, ETH: 0.3, SOL: 0.3}, config, groups=GROUPS)
+    assert out == pytest.approx({BTC: 0.9, ETH: 0.05, SOL: 0.05})  # gross 0.6 -> 0.4, then net 0.4 -> 0.1; BTC is another group
+    assert {rule for rule, _ in actions} == {"group_gross_cap", "group_net_cap"}
+    hedged, actions = _apply({ETH: 0.2, SOL: -0.15}, config, groups=GROUPS)
+    assert hedged == {ETH: 0.2, SOL: -0.15} and actions == []  # gross 0.35 and net 0.05 are inside both caps
+    assert _apply({ETH: 0.5, SOL: 0.5}, config)[1] == []  # no group mapping: nothing to cap
+
+
+def test_the_delta_cap_treats_spot_and_perp_of_one_coin_as_one_exposure() -> None:
+    config = _loose(exposure={"max_delta": 0.5})
+    out, actions = _apply({BTC: 0.4, SPOT: 0.4, ETH: 0.45}, config, underlyings=COINS)
+    assert out == pytest.approx({BTC: 0.25, SPOT: 0.25, ETH: 0.45}) and {rule for rule, _ in actions} == {"delta_cap"}
+    assert _apply({BTC: 0.6, SPOT: 0.3, ETH: -0.4}, _loose(exposure={"max_delta": 1.0}), underlyings=COINS)[1] == []
+
+
+def test_the_scenario_cap_limits_the_loss_if_every_coin_moves_half_against_the_book() -> None:
+    config = _loose(exposure={"max_scenario_loss": 0.2})  # a 50% move may cost 20% of equity: |net| <= 0.4
+    out, actions = _apply({BTC: 0.5, ETH: 0.3}, config)
+    assert sum(out.values()) == pytest.approx(0.4) and out[BTC] / out[ETH] == pytest.approx(5 / 3)
+    assert {rule for rule, _ in actions} == {"scenario_cap"}
+    assert _apply({BTC: 0.9, ETH: -0.6}, config)[1] == []  # net 0.3
+
+
+def test_the_beta_cap_counts_correlated_instruments_as_one_bet() -> None:
+    config = _loose(benchmark=BTC, max_beta_exposure=0.8)
+    estimate = _two_asset_estimate(0.8)  # ETH beta 1.2: 0.5 BTC + 0.5 ETH is 1.1x BTC
+    out, actions = _apply({BTC: 0.5, ETH: 0.5}, config, estimate=estimate)
+    assert estimate.beta_exposure(out, BTC) == pytest.approx(0.8) and out[BTC] == pytest.approx(out[ETH])
+    assert {rule for rule, _ in actions} == {"beta_cap"}
+    hedged, actions = _apply({BTC: 1.2, ETH: -1.0}, config, estimate=estimate)  # 1.2 - 1.2 = 0 in BTC terms
+    assert hedged == {BTC: 1.2, ETH: -1.0} and actions == []
+
+
+def test_the_volatility_cap_scales_the_book_down_to_its_limit_at_crash_correlations() -> None:
+    estimate = _two_asset_estimate(0.2)
+    targets = {BTC: 0.6, ETH: 0.6}
+    normal, stressed = estimate.volatility(targets), estimate.stressed_volatility(targets)
+    assert stressed > normal
+    config = _loose(max_portfolio_vol=(normal + stressed) / 2)  # inside at the estimated correlation, outside at the stressed one
+    out, actions = _apply(targets, config, estimate=estimate)
+    assert estimate.stressed_volatility(out) == pytest.approx(config.max_portfolio_vol) and {rule for rule, _ in actions} == {"vol_cap"}
+    assert _apply({BTC: 0.1, ETH: 0.1}, config, estimate=estimate)[1] == []
+    relaxed = PortfolioRiskConfig(max_gross_exposure=10.0, max_net_exposure=10.0, max_instrument_weight=10.0, max_portfolio_vol=config.max_portfolio_vol)
+    assert _apply(targets, relaxed, estimate=_two_asset_estimate(0.2, stress=None))[1] == []  # without the stress the book fits
+
+
+def test_without_a_risk_estimate_the_correlation_caps_let_positions_shrink_only() -> None:
+    config = _loose(max_portfolio_vol=0.5)
+    out, actions = _apply({BTC: 0.6, ETH: -0.2}, config, current={BTC: 0.4, ETH: 0.1})
+    assert out == {BTC: 0.4, ETH: 0.0} and {rule for rule, _ in actions} == {"risk_model_unavailable"}
+    assert _apply({BTC: 0.6}, LOOSE, current={BTC: 0.4})[1] == []  # no correlation cap configured: no estimate needed
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"max_beta_exposure": 1.0}, "benchmark"),
+        ({"max_portfolio_vol": 0.0}, "max_portfolio_vol"),
+        ({"groups": {"alts": {"max_size": 1.0}}}, "risk.groups.alts"),
+        ({"groups": {"alts": {"max_gross": -1.0}}}, "risk.groups.alts.max_gross"),
+        ({"groups": {"alts": {}}}, "risk.groups.alts"),
+        ({"stress_correlation": 1.0}, "stress_correlation"),
+        ({"vol_halflife_days": 0.0}, "vol_halflife_days"),
+        ({"min_effective_bets": -1.0}, "min_effective_bets"),
+    ],
+)
+def test_exposure_limits_that_cannot_work_are_rejected(overrides: dict[str, object], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        PortfolioRiskConfig(**overrides)  # type: ignore[arg-type]
+
+
+def test_the_research_hook_applies_the_volatility_cap_from_each_bars_estimate() -> None:
+    estimate = _two_asset_estimate(0.2)
+    cap = estimate.stressed_volatility({BTC: 0.5, ETH: 0.5})
+    config = _loose(max_portfolio_vol=cap)
+    index = _days(4)
+    prices = pd.DataFrame({BTC: 100.0, ETH: 50.0}, index=index)
+    weights = pd.DataFrame({BTC: 1.0, ETH: 1.0}, index=index)
+    seen: list[int] = []
+
+    def estimates(bar: int):
+        seen.append(bar)
+        return estimate if bar >= 2 else None  # the model has no history on the first two bars
+
+    hook = array_overlay([BTC, ETH], config=config, venues=VENUES, can_short=CAN_SHORT, estimates=estimates)
+    result = simulate_portfolio(prices, weights, costs=FREE, adjust_targets=hook)
+    assert seen == [0, 1, 2, 3]
+    assert result.gross_exposure.tolist() == pytest.approx([0.0, 0.0, 1.0, 1.0])  # flat while unmeasurable, then scaled to the cap
+    assert result.weights.iloc[-1].to_dict() == pytest.approx({BTC: 0.5, ETH: 0.5})

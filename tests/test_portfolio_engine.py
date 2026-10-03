@@ -318,3 +318,115 @@ def test_the_cooldown_settings_are_validated() -> None:
     assert PortfolioRiskConfig(rejection_cooldown_after=0).rejection_cooldown_after == 0  # off
     with pytest.raises(ValueError, match="rejection_cooldown"):
         PortfolioRiskConfig(rejection_cooldown_hours=0)
+
+
+# --- the risk model in the engine ---------------------------------------------------------------------------------
+
+def _risk_config(**risk: Any):
+    config = _config()
+    from dataclasses import replace
+
+    from src.portfolio.config import InstrumentSpec as Spec
+    from src.portfolio.risk import PortfolioRiskConfig
+
+    limits = {field: getattr(config.risk, field) for field in ("max_drawdown", "max_gross_exposure", "max_net_exposure", "max_instrument_weight", "daily_loss_limit")}
+    instruments = {BTC: replace(config.instruments[BTC], group="majors"), ETH: replace(config.instruments[ETH], group="alts")}
+    assert all(isinstance(spec, Spec) for spec in instruments.values())
+    return replace(config, instruments=instruments, risk=PortfolioRiskConfig(**limits, vol_min_days=5, **risk))
+
+
+def test_the_engines_risk_model_matches_the_research_stream_bar_for_bar() -> None:
+    from src.portfolio.book_risk import estimate_stream
+
+    config = _risk_config()
+    engine = _engine(config)
+    seen = {}
+    for index in range(FIRST, FIRST + 60):
+        engine.run_cycle(bars_until(index), now=_now(index))
+        seen[START + timedelta(hours=4 * index)] = engine.risk_model.estimate().covariance.copy()
+
+    def loader(instrument: InstrumentSpec, interval: str) -> list[OHLCVBar]:
+        return bars_until(FIRST + 59)[(instrument.id, interval)]
+
+    inputs = prepare_inputs(config, bar_loader=loader)
+    stream = estimate_stream(config, inputs.grid_interval, inputs.prices, warmup_prices=inputs.warmup_prices)
+    checked = 0
+    for position, stamp in enumerate(inputs.prices.index):
+        estimate = stream(position)
+        if stamp in seen:
+            np.testing.assert_allclose(estimate.covariance, seen[stamp], rtol=1e-9)
+            checked += 1
+    assert checked >= 40
+
+
+def test_the_volatility_cap_scales_the_engines_targets_and_the_snapshot_reports_the_exposure() -> None:
+    free, capped = _engine(_risk_config()), _engine(_risk_config(max_portfolio_vol=0.10, groups={"alts": {"max_gross": 0.2}}))
+    acted = 0
+    for index in range(FIRST, FIRST + 120):
+        loose, tight = free.run_cycle(bars_until(index), now=_now(index)), capped.run_cycle(bars_until(index), now=_now(index))
+        assert tight.targets == pytest.approx(loose.targets)  # the sleeves ask for the same; only the overlay differs
+        estimate = capped.risk_model.estimate()
+        assert estimate.stressed_volatility(tight.adjusted) <= 0.10 + 1e-9 and abs(tight.adjusted.get(ETH, 0.0)) <= 0.2 + 1e-9
+        acted += any(action.rule == "vol_cap" for action in tight.risk_actions)
+    assert acted > 20
+    snap = capped.snapshot(tight)
+    exposure = snap["exposure"]
+    assert exposure["gross"] == pytest.approx(snap["gross"]) and exposure["net"] == pytest.approx(snap["net"])
+    assert set(exposure["groups"]) <= {"majors", "alts"} and exposure["benchmark"] == BTC
+    assert exposure["stressed_volatility"] is not None and exposure["stressed_volatility"] < 0.2  # lots and drift leave it near the 10% cap
+    assert snap["limits"]["max_portfolio_vol"] == 0.10 and snap["limits"]["groups"] == {"alts": {"max_gross": 0.2}}
+    assert snap["strategy_correlation"] is None or snap["strategy_correlation"]["units"] >= 2
+    import json
+
+    json.dumps(snap)  # the snapshot is stored as JSON
+
+
+def test_a_restart_keeps_the_risk_model_and_the_strategy_returns(tmp_path) -> None:
+    config = _risk_config(max_portfolio_vol=0.15)
+    straight = _engine(config)
+    for index in range(FIRST, FIRST + 100):
+        straight.run_cycle(bars_until(index), now=_now(index))
+    first = _engine(config, tmp_path, state=True)
+    for index in range(FIRST, FIRST + 50):
+        first.run_cycle(bars_until(index), now=_now(index))
+    del first
+    second = _engine(config, tmp_path, state=True)
+    assert second.restored and second.risk_model.bars_seen == straight.risk_model.bars_seen - 50
+    for index in range(FIRST + 50, FIRST + 100):
+        second.run_cycle(bars_until(index), now=_now(index))
+    np.testing.assert_array_equal(second.risk_model.estimate().covariance, straight.risk_model.estimate().covariance)
+    assert second.unit_returns.rows == straight.unit_returns.rows and second.held_weights == straight.held_weights
+    assert second.book.to_dict() == straight.book.to_dict()
+    assert straight.unit_returns.summary()["units"] == 3  # the three sleeves have all traded
+
+
+def test_a_checkpoint_from_before_the_risk_model_still_loads(tmp_path) -> None:
+    import json
+
+    config = _risk_config()
+    first = _engine(config, tmp_path, state=True)
+    for index in range(FIRST, FIRST + 5):
+        first.run_cycle(bars_until(index), now=_now(index))
+    path = tmp_path / "engine.json"
+    payload = json.loads(path.read_text())
+    for key in ("risk_model", "unit_returns", "held_weights"):
+        payload.pop(key)
+    path.write_text(json.dumps(payload))
+    second = _engine(config, tmp_path, state=True)
+    assert second.restored and second.risk_model.bars_seen == 0 and second.held_weights == {}
+    assert second.run_cycle(bars_until(FIRST + 5), now=_now(FIRST + 5)).decided
+
+
+def test_the_held_book_is_checked_against_the_exposure_limits() -> None:
+    from dataclasses import replace
+
+    engine = _engine(_risk_config())
+    for index in range(FIRST, FIRST + 80):
+        report = engine.run_cycle(bars_until(index), now=_now(index))
+        if engine.book.units():
+            break
+    assert engine.book.units() and engine.exposure_breaches(report.equity) == []  # no [risk.exposure] limits
+    engine.config = replace(engine.config, risk=replace(engine.config.risk, exposure={"max_delta": 0.001, "max_scenario_loss": 0.0001}))
+    breaches = engine.exposure_breaches(report.equity)
+    assert {breach["rule"] for breach in breaches} == {"max_delta", "max_scenario_loss"}
+    assert all(breach["value"] > breach["limit"] for breach in breaches) and engine.snapshot(report)["exposure_breaches"] == breaches

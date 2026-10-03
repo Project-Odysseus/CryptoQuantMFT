@@ -1994,6 +1994,18 @@ def print_portfolio_dashboard(config_path: str) -> int:
     print(f"Portfolio '{name}' at {snap['timestamp'][:16]} UTC (cycle {snap['cycle']})")
     print(f"Equity {snap['equity']:,.2f} ({change:+.1%}), peak {snap['peak_equity']:,.2f}, drawdown {snap['drawdown']:.1%} (flatten at {limits['max_drawdown']:.0%})")
     print(f"Exposure: gross {snap['gross']:.2f}x of {limits['max_gross_exposure']:g}x, net {snap['net']:+.2f}x of {limits['max_net_exposure']:g}x")
+    if snap.get("exposure"):  # snapshots written before the risk model existed have none
+        from src.portfolio.book_risk import format_exposure
+
+        for line in format_exposure(snap["exposure"], limits=limits)[1:]:
+            print(f"  {line}")
+        alike = snap.get("strategy_correlation")
+        if alike:
+            first, second, value = alike["most_correlated"]
+            print(f"  Strategies: {alike['effective_bets']:.1f} effective bets among {alike['units']}, average correlation {alike['average_correlation']:+.2f} "
+                  f"over {alike['bars']} bars (closest: {first} and {second} at {value:+.2f})")
+        for breach in snap.get("exposure_breaches") or []:
+            print(f"  EXPOSURE LIMIT BROKEN: {breach['rule']} on {breach['underlying']}: {breach['value']:.3g} against {breach['limit']:.3g}")
     print("Instruments (target and actual as a share of equity):")
     for instrument, row in snap["instruments"].items():
         target = f"{row['target']:+.1%}" if row["target"] is not None else "  n/a"

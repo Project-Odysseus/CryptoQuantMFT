@@ -43,10 +43,12 @@ from src.execution.cross_margin import SandboxCrossMarginPerpAdapter
 from src.execution.perps import assumed_perp_contract
 from src.portfolio.allocation import Allocator
 from src.portfolio.book import BookPosition, PortfolioBook
+from src.portfolio.book_risk import build_risk_model, exposure_summary
 from src.portfolio.config import PortfolioConfig
 from src.portfolio.netting import net_targets
 from src.portfolio.orders import FALLBACK_STEP, PlannedOrder, SkippedChange, plan_orders
 from src.portfolio.risk import RiskAction, apply_portfolio_risk
+from src.portfolio.risk_model import ReturnWindow, RiskModel
 from src.portfolio.sleeves import SleeveDecision, SleeveRunner, SleeveState, _Prefix
 from src.runtime.config import BAR_INTERVALS
 from src.utils.telegram import TradeAlert
@@ -189,6 +191,11 @@ class PortfolioEngine:
         per_day = 86400 / BAR_INTERVALS[self.grid_interval]
         self.allocator = Allocator(config.group_budgets(), config.allocation, lookback=max(2, round(config.allocation_lookback_days * per_day)),
                                    refit_every=max(1, round(config.allocation_refit_days * per_day)))
+        # The risk model: stepped with every grid bar's instrument returns, read by the overlay and the snapshot
+        self.risk_model = build_risk_model(config, self.grid_interval)
+        window = max(2, round(config.risk.correlation_lookback_days * per_day))
+        self.unit_returns = ReturnWindow(sorted(set(self.groups.values())), length=window, min_bars=min(window, max(30, round(10 * per_day))))
+        self.held_weights: dict[str, float] = {}  # each sleeve's own weight held into the current grid bar (survives restarts)
         self.states = {sleeve_id: SleeveState() for sleeve_id in self.sleeves}
         self.last_sleeve_bar: dict[str, datetime] = {}
         self.last_grid_bar: datetime | None = None
@@ -298,10 +305,19 @@ class PortfolioEngine:
             # the sleeves' own weights for the covariance methods; after a multi-bar catch-up they are the latest ones
             unit_scales = self.allocator.step(returns, weights={sleeve_id: float(self.states[sleeve_id].weight) for sleeve_id in self.sleeves})
             scales = {sleeve_id: unit_scales.get(self.groups.get(sleeve_id, sleeve_id), 0.0) for sleeve_id in self.sleeves}
+            self.risk_model.step({spec.instrument: returns[sleeve_id] for sleeve_id, spec in self.sleeves.items()})
+            if self.held_weights:  # what each strategy earned over the bar, from the weights it held into it
+                earned: dict[str, float] = {}
+                for sleeve_id, value in returns.items():
+                    unit = self.groups.get(sleeve_id, sleeve_id)
+                    held = self.held_weights.get(sleeve_id, 0.0)
+                    earned[unit] = earned.get(unit, 0.0) + (held * value if held and np.isfinite(value) else 0.0)
+                self.unit_returns.add(earned)
             for instrument in instruments:
                 if stamp in closes[instrument]:
                     self.last_grid_close[instrument] = closes[instrument][stamp]
         self.last_grid_bar = new_grid_bars[-1]
+        self.held_weights = {sleeve_id: float(self.states[sleeve_id].weight) for sleeve_id in self.sleeves}
         report.decided = True
         self._decide_and_trade(report, scales=scales, prices=prices, stale=stale, now=now)
         report.mismatches = self.reconcile()
@@ -462,6 +478,7 @@ class PortfolioEngine:
             report.targets, config=self.config.risk, venues=self.config.venues(), can_short=self.config.can_short(),
             current=self.book.weights(), equity=equity, peak_equity=float(self.book.peak_equity),
             day_start_equity=float(self.book.day_start_equity), stale=stale,
+            groups=self.config.groups(), underlyings=self.config.underlyings(), estimate=self.risk_model.estimate(),
         )
         plan = plan_orders(self.book.units(), report.adjusted, prices=prices, equity=equity, instruments=self.config.instruments, band=self.config.rebalance_band,
                            small_lot_cap=self.config.small_lot_cap(equity))
@@ -991,16 +1008,46 @@ class PortfolioEngine:
         gross = sum(abs(weight) for weight in weights.values())
         peak = float(self.book.peak_equity)
         risk = self.config.risk
+        exposure = exposure_summary(weights, config=self.config, estimate=self.risk_model.estimate(), units=self.groups,
+                                    sleeve_weights={sleeve_id: (row["instrument"], row["allocated_weight"]) for sleeve_id, row in sleeves.items()})
         return {
             "portfolio": self.config.name, "cycle": self.cycle, "equity": equity, "initial_equity": float(self.book.initial_equity),
             "peak_equity": peak, "drawdown": max(0.0, 1.0 - equity / peak) if peak > 0 else 0.0,
             "day_start_equity": float(self.book.day_start_equity), "gross": gross, "net": sum(weights.values()),
             "limits": {"max_gross_exposure": risk.max_gross_exposure, "max_net_exposure": risk.max_net_exposure,
-                       "max_instrument_weight": risk.max_instrument_weight, "max_drawdown": risk.max_drawdown, "daily_loss_limit": risk.daily_loss_limit},
+                       "max_instrument_weight": risk.max_instrument_weight, "max_drawdown": risk.max_drawdown, "daily_loss_limit": risk.daily_loss_limit,
+                       "groups": risk.groups, "max_beta_exposure": risk.max_beta_exposure, "max_portfolio_vol": risk.max_portfolio_vol,
+                       "exposure": risk.exposure, "max_average_correlation": risk.max_average_correlation, "min_effective_bets": risk.min_effective_bets},
+            "exposure": exposure, "strategy_correlation": self.unit_returns.summary(), "exposure_breaches": self.exposure_breaches(equity),
             "instruments": instruments, "sleeves": sleeves, "residual_pnl": float(attribution.get("residual", 0)),
             "risk_actions": [vars_of(action) for action in (report.risk_actions if report is not None else [])],
             "fills": len(report.fills) if report is not None else 0,
         }
+
+    def exposure_breaches(self, equity: float) -> list[dict[str, Any]]:
+        """`[risk.exposure]` limits the book as held breaks, options included (greeks by full revaluation).
+
+        The overlay keeps perp and spot targets inside the delta and scenario limits. Option positions aren't sized
+        by it, and a book can drift between decisions, so the held book is checked here and reported.
+        """
+        if not self.config.risk.exposure or equity <= 0:
+            return []
+        from src.portfolio.exposure import MarketState
+        from src.portfolio.exposure_limits import base_coin, book_positions, check_exposure
+
+        spot: dict[str, float] = {}
+        for instrument, spec in self.book.instruments.items():
+            mark = float(self.book.marks.get(instrument, 0) or 0)
+            if spec.kind != "option" and mark > 0 and (spec.kind == "perp" or base_coin(spec.symbol) not in spot):
+                spot[base_coin(spec.symbol)] = mark
+        try:
+            positions = [position for position in book_positions(self.book.units(), {instrument: spec.kind for instrument, spec in self.book.instruments.items()})
+                         if position.underlying in spot]
+            when = self.last_grid_bar + self.grid_step if self.last_grid_bar else datetime.now().astimezone()
+            _table, _grid, breaches = check_exposure(positions, MarketState(now=when, spot=spot), self.config.risk.exposure, equity)
+        except Exception:  # noqa: BLE001 - a report must not stop the book
+            return []
+        return [vars_of(breach) for breach in breaches]
 
     # --- reconciliation, logging, checkpoints ---------------------------------------------------------------------
 
@@ -1046,6 +1093,9 @@ class PortfolioEngine:
             "book": self.book.to_dict(),
             "states": {sleeve_id: state.to_dict() for sleeve_id, state in self.states.items()},
             "allocator": self.allocator.to_dict(),
+            "risk_model": self.risk_model.to_dict(),
+            "unit_returns": self.unit_returns.to_dict(),
+            "held_weights": self.held_weights,
             "last_sleeve_bar": {sleeve_id: stamp.isoformat() for sleeve_id, stamp in self.last_sleeve_bar.items()},
             "last_grid_bar": self.last_grid_bar.isoformat() if self.last_grid_bar else None,
             "last_grid_close": self.last_grid_close,
@@ -1088,6 +1138,15 @@ class PortfolioEngine:
         self.book = PortfolioBook.from_dict(payload["book"], instruments=self.config.instruments)
         self.states = {sleeve_id: SleeveState.from_dict(state) for sleeve_id, state in payload["states"].items()}
         self.allocator = Allocator.from_dict(payload["allocator"])
+        # Checkpoints written before the risk model existed have none: it then warms up again from the next bars
+        if payload.get("risk_model") and tuple(payload["risk_model"]["instruments"]) == self.risk_model.instruments:
+            restored = RiskModel.from_dict(payload["risk_model"])
+            restored_settings, settings = restored.to_dict(), self.risk_model.to_dict()
+            if all(restored_settings[key] == settings[key] for key in ("halflife_bars", "min_bars", "shrinkage", "prior_correlation", "stress_correlation")):
+                self.risk_model = restored
+        if payload.get("unit_returns") and tuple(payload["unit_returns"]["names"]) == self.unit_returns.names:
+            self.unit_returns.rows = ReturnWindow.from_dict(payload["unit_returns"]).rows[-self.unit_returns.length:]
+        self.held_weights = {sleeve_id: float(value) for sleeve_id, value in dict(payload.get("held_weights", {})).items()}
         self.last_sleeve_bar = {sleeve_id: datetime.fromisoformat(stamp) for sleeve_id, stamp in payload["last_sleeve_bar"].items()}
         self.last_grid_bar = datetime.fromisoformat(payload["last_grid_bar"]) if payload.get("last_grid_bar") else None
         self.last_grid_close = {instrument: float(close) for instrument, close in payload["last_grid_close"].items()}

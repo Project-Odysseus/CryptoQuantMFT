@@ -11,7 +11,8 @@ Each iteration:
    more than `stale_after_bars` grid bars old, so it can shrink but not grow;
 4. runs `PortfolioEngine.run_cycle` (which decides only on a new grid bar);
 5. alerts once when a problem starts and once when it clears (stale data, a
-   feed failure, a risk limit acting, rejected orders, a cycle error),
+   feed failure, a risk limit acting, rejected orders, a cycle error, the
+   strategies becoming too alike, a breached exposure limit),
    instead of repeating the same alert every minute;
 6. writes a portfolio snapshot to SQLite on every decision and hourly
    otherwise, which is what the dashboard reads.
@@ -35,7 +36,8 @@ from src.utils.logger import logger
 
 CYCLE_ERROR_LIMIT = 5  # consecutive failed cycles before the runtime stops itself
 SNAPSHOT_EVERY = timedelta(hours=1)
-LIMIT_RULES = {"instrument_cap", "venue_cap", "net_cap", "gross_cap", "notional_cap", "drawdown_derisk", "max_drawdown_halt", "daily_loss_halt", "stale_instrument"}
+LIMIT_RULES = {"instrument_cap", "venue_cap", "net_cap", "gross_cap", "notional_cap", "drawdown_derisk", "max_drawdown_halt", "daily_loss_halt", "stale_instrument",
+               "group_gross_cap", "group_net_cap", "delta_cap", "scenario_cap", "beta_cap", "vol_cap", "risk_model_unavailable"}
 
 
 class PortfolioRuntime:
@@ -234,6 +236,8 @@ class PortfolioRuntime:
                                 {"instrument": action.instrument})
             for key in [name for name in self._active_alerts if name.startswith("risk_limit:") and name not in acting]:
                 self._clear(key)
+        if report.decided:
+            self._watch_diversification(report)
         for instrument, until in report.cooldowns.items():
             self._alert(f"rejection_cooldown:{instrument}", f"{instrument}: repeated order rejections; only reductions are sent until {until[:16].replace('T', ' ')} UTC.",
                         {"instrument": instrument, "until": until})
@@ -245,6 +249,29 @@ class PortfolioRuntime:
             key = f"order_rejected:{rejection['order_id']}"
             self._alert(key, f"Order rejected: {rejection['side']} {rejection['units']} {rejection['instrument']}: {rejection['message']}", rejection)
             self._active_alerts.pop(key, None)
+
+    def _watch_diversification(self, report: CycleReport) -> None:
+        """Alert when the strategies have become one bet, or the held book breaks an exposure limit. Nothing is resized."""
+        risk = self.engine.config.risk
+        summary = self.engine.unit_returns.summary()
+        pair = f"{summary['most_correlated'][0]} and {summary['most_correlated'][1]} at {summary['most_correlated'][2]:+.2f}" if summary else ""
+        too_alike = summary is not None and risk.max_average_correlation is not None and summary["average_correlation"] > risk.max_average_correlation
+        if too_alike:
+            self._alert("strategy_correlation", f"The strategies' average correlation is {summary['average_correlation']:+.2f} over the last {summary['bars']} bars "
+                        f"(alert level {risk.max_average_correlation:g}); the closest pair is {pair}. They diversify less than the book assumes.", dict(summary))
+        else:
+            self._clear("strategy_correlation")
+        too_few = summary is not None and risk.min_effective_bets is not None and summary["effective_bets"] < risk.min_effective_bets
+        if too_few:
+            self._alert("effective_bets", f"The {summary['units']} strategies are worth {summary['effective_bets']:.1f} independent bets "
+                        f"(alert level {risk.min_effective_bets:g}); the closest pair is {pair}.", dict(summary))
+        else:
+            self._clear("effective_bets")
+        breaches = {f"exposure_limit:{breach['rule']}:{breach['underlying']}": breach for breach in self.engine.exposure_breaches(report.equity)}
+        for key, breach in breaches.items():
+            self._alert(key, f"Exposure limit {breach['rule']} is broken on {breach['underlying']}: {breach['value']:.3g} of equity against a limit of {breach['limit']:.3g}.", breach)
+        for key in [name for name in self._active_alerts if name.startswith("exposure_limit:") and name not in breaches]:
+            self._clear(key)
 
     def _alert(self, key: str, message: str, metadata: dict[str, Any]) -> None:
         """Send an alert once per problem; `_clear` sends the all-clear and lets it fire again later."""

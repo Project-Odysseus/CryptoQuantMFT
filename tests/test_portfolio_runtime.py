@@ -222,7 +222,9 @@ def test_the_cli_refuses_live_and_runs_a_mock_portfolio(tmp_path, monkeypatch, c
     monkeypatch.setattr(sys, "argv", ["main.py", "--portfolio", "config/portfolio.example.toml", "--dashboard"])
     with pytest.raises(SystemExit) as exited:
         main.main()
-    assert exited.value.code == 0 and "Instruments (target and actual" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert exited.value.code == 0 and "Instruments (target and actual" in out
+    assert "Venues: kraken_futures gross" in out and "Coins: BTC gross" in out  # the exposure summary stored with each snapshot
 
 
 def test_live_spot_fills_go_through_the_fifo_tax_ledger(tmp_path) -> None:
@@ -358,3 +360,30 @@ def test_a_rejection_cooldown_alerts_once_when_it_starts_and_once_when_it_ends(t
     kinds = [alert["event_type"] for alert in notifier.alerts]
     assert kinds == ["rejection_cooldown", "rejection_cooldown_resolved"]
     assert "2024-01-02 04:00 UTC" in notifier.alerts[0]["message"]
+
+
+def test_strategies_that_become_one_bet_and_a_broken_exposure_limit_alert_once(tmp_path) -> None:
+    from dataclasses import replace
+
+    runtime, logger, notifier = _runtime(tmp_path)
+    engine = runtime.engine
+    engine.config = replace(engine.config, risk=replace(engine.config.risk, max_average_correlation=0.5, min_effective_bets=1.5))
+    engine.unit_returns.min_bars = 10
+    asyncio.run(runtime.run(iterations=3))
+    quiet = [alert["event_type"] for alert in notifier.alerts]
+    assert "strategy_correlation" not in quiet and "effective_bets" not in quiet and "exposure_limit" not in quiet
+    for step in range(40):  # both strategies now earn the same returns: one bet
+        engine.unit_returns.add({"btc_ma_1d": 0.01 * (-1) ** step, "eth_ma_4h": 0.0101 * (-1) ** step})
+    breach = {"rule": "max_vega_per_point", "underlying": "BTC", "value": 0.02, "limit": 0.01}
+    engine.exposure_breaches = lambda equity: [breach]  # e.g. an option position: the overlay doesn't size those
+    asyncio.run(runtime.run(iterations=2))
+    kinds = [alert["event_type"] for alert in notifier.alerts]
+    assert kinds.count("strategy_correlation") == 1 and kinds.count("effective_bets") == 1 and kinds.count("exposure_limit") == 1  # once, not every cycle
+    alert = next(alert for alert in notifier.alerts if alert["event_type"] == "strategy_correlation")
+    assert "btc_ma_1d and eth_ma_4h" in alert["message"]
+    assert logger.list_portfolio_snapshots(portfolio="runtime-test", limit=1)[0]["exposure_breaches"] == [breach]
+    engine.unit_returns.rows.clear()
+    engine.exposure_breaches = lambda equity: []
+    asyncio.run(runtime.run(iterations=1))
+    kinds = [alert["event_type"] for alert in notifier.alerts]
+    assert kinds.count("strategy_correlation_resolved") == 1 and kinds.count("effective_bets_resolved") == 1 and kinds.count("exposure_limit_resolved") == 1

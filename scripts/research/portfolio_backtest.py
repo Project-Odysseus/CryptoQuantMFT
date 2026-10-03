@@ -39,7 +39,9 @@ import pandas as pd
 
 from src.portfolio.allocation import ALLOCATION_METHODS
 from src.portfolio.backtest import PortfolioBacktest, daily_returns, period_metrics, prepare_inputs, run_book
+from src.portfolio.book_risk import estimate_stream, exposure_history, exposure_summary, format_exposure
 from src.portfolio.config import load_portfolio_config
+from src.portfolio.risk_model import average_correlation, effective_bets
 from src.research.benchmark import benchmark_metrics
 from src.research.governance import write_manifest
 
@@ -114,6 +116,15 @@ def main() -> None:
     versus.to_csv(out / "benchmark.csv", index=False)
     main_book = books[config.allocation]
     main_book.targets.to_csv(out / "weights.csv")
+    # What the book was exposed to, daily, from the positions it held after the risk limits
+    per_day = max(1, round(inputs.bars_per_day))
+    exposure = exposure_history(config, inputs.grid_interval, inputs.prices, main_book.result.weights, warmup_prices=inputs.warmup_prices, every=per_day)
+    exposure.to_csv(out / "exposure.csv")
+    held = main_book.result.weights
+    last_estimate = estimate_stream(config, inputs.grid_interval, inputs.prices, warmup_prices=inputs.warmup_prices)(len(held) - 1)
+    latest = exposure_summary(held.iloc[-1].to_dict(), config=config, estimate=last_estimate, units=inputs.sleeve_groups,
+                              sleeve_weights={sleeve_id: (inputs.sleeve_instrument[sleeve_id], float(main_book.allocated[sleeve_id].iloc[-1])) for sleeve_id in main_book.allocated.columns})
+    limits = {"groups": config.risk.groups, "max_beta_exposure": config.risk.max_beta_exposure, "max_portfolio_vol": config.risk.max_portfolio_vol}
     pd.DataFrame({name: book.result.equity for name, book in books.items()}).to_csv(out / "equity.csv")
 
     with pd.option_context("display.width", 200, "display.max_columns", 20):
@@ -123,6 +134,13 @@ def main() -> None:
         print(_table(book_rows).round(2).to_string())
         print("\nCorrelation of the sleeves' daily returns:")
         print(correlation.round(2).to_string())
+        if len(correlation) > 1:
+            print(f"The {len(correlation)} sleeves are worth {effective_bets(correlation.fillna(0.0)):.1f} independent bets; average correlation {average_correlation(correlation.fillna(0.0)):+.2f}")
+        print(f"\nExposure of the '{config.allocation}' book after its risk limits (daily; volatility is annualised, 'stressed' at crash correlations):")
+        print(exposure.describe().loc[["mean", "50%", "max"]].rename(index={"50%": "median"}).T.round(2).to_string())
+        print(f"\nAt the last bar ({held.index[-1]:%Y-%m-%d %H:%M}):")
+        for line in format_exposure(latest, limits=limits):
+            print(f"  {line}")
         print(f"\nAgainst buy-and-hold of {benchmark_id} (daily returns; alpha is annualised):")
         print(versus.pivot_table(index="series", columns="period", values=["beta", "alpha_ann", "down_capture"], sort=False).round(2).to_string())
     print(f"\nWrote {out}")

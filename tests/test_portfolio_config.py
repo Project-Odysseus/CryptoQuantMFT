@@ -172,3 +172,23 @@ def test_small_account_settings_are_read_and_checked(tmp_path) -> None:
     bad.write_text(base.replace("small_account_max_lot_weight = 0.9", "small_account_max_lot_weight = 1.5"))
     with pytest.raises(PortfolioConfigError, match="small_account_max_lot_weight"):
         load_portfolio_config(bad)
+
+
+def test_groups_the_benchmark_and_the_exposure_limits_are_validated_and_described() -> None:
+    config = _parse(instruments={"kraken_futures:BTC/USD": {"kind": "perp", "group": "majors"}, "kraken:BTC/EUR": {"kind": "spot", "group": "majors"}},
+                    risk={"groups": {"majors": {"max_gross": 1.0, "max_net": 0.8}}, "benchmark": "kraken_futures:BTC/USD", "max_beta_exposure": 1.0,
+                          "max_portfolio_vol": 0.4, "exposure": {"max_delta": 1.0}, "max_average_correlation": 0.8, "min_effective_bets": 1.5})
+    assert config.groups() == {"kraken_futures:BTC/USD": "majors", "kraken:BTC/EUR": "majors"}
+    assert config.underlyings() == {"kraken_futures:BTC/USD": "BTC", "kraken:BTC/EUR": "BTC"}
+    assert config.traded_instruments() == ["kraken:BTC/EUR", "kraken_futures:BTC/USD"] and config.risk.needs_risk_model
+    text = describe(config)
+    assert "group majors: gross <= 1x, net <= 0.8x (2 instruments)" in text and "beta to kraken_futures:BTC/USD <= 1x" in text
+    assert "book volatility <= 40% a year (correlations floored at 0.9, 20-day half-life)" in text and "delta <= 1" in text
+    assert "average correlation is above 0.8 or their effective bets below 1.5" in text
+    assert "Exposure limits" not in describe(_parse()) and not _parse().risk.needs_risk_model
+
+    assert "[risk.groups.alts] has no instruments" in _problems(risk={"groups": {"alts": {"max_gross": 0.5}}})
+    assert "risk.groups.alts takes" in _problems(instruments={"kraken_futures:BTC/USD": {"kind": "perp", "group": "alts"}}, risk={"groups": {"alts": {"gross": 0.5}}})
+    assert "benchmark 'kraken_futures:SOL/USD' must be an instrument an enabled sleeve trades" in _problems(risk={"benchmark": "kraken_futures:SOL/USD"})
+    assert "max_beta_exposure needs risk.benchmark" in _problems(risk={"max_beta_exposure": 1.0})
+    assert "unknown key 'sector'" in _problems(instruments={"kraken_futures:BTC/USD": {"kind": "perp", "sector": "majors"}})
