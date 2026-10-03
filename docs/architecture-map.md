@@ -187,7 +187,12 @@ Plan and status: `docs/portfolio_plan.md`.
   volatility caps (`[risk.groups]`, `max_beta_exposure`, `max_portfolio_vol`) and enforces `[risk.exposure]`
   `max_delta` and `max_scenario_loss` on linear targets.
 - `src/portfolio/tearsheet.py`: one static HTML page per book (matplotlib charts embedded), from a research
-  backtest or from the runtime's snapshots (`main.py --portfolio PATH --tearsheet`).
+  backtest or from the runtime's snapshots (`main.py --portfolio PATH --tearsheet`). It shares its look with the
+  research signal report through `src/utils/report.py`.
+- Research tools outside the runtime (see `docs/research_guide.md`): `src/research/events.py` (event studies with
+  matched controls, drawdown episodes, regimes, data checks), `src/research/signal_report.py` (the standard
+  one-page report per signal) and `src/research/governance.py` (the frozen holdout, the trial ledger, and
+  pre-registration locks; `scripts/research/new_hypothesis.py` scaffolds a hypothesis).
 - `src/portfolio/book.py`: positions, cash per venue, FX, funding and per-sleeve attribution, in `Decimal`.
 - `src/portfolio/engine.py`: `PortfolioEngine.run_cycle`, which runs bars -> sleeves -> targets -> orders -> one
   adapter per venue (`SandboxCrossMarginPerpAdapter` in `src/execution/cross_margin.py` for paper perps) -> book,

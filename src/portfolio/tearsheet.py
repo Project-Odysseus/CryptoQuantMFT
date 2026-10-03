@@ -12,52 +12,24 @@ its numbers in the cells, and the summary table carries the headline figures as 
 
 from __future__ import annotations
 
-import base64
 import html
-import io
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-import matplotlib
+import numpy as np
+import pandas as pd
+from matplotlib import pyplot as plt
+from matplotlib.figure import Figure
 
-matplotlib.use("Agg")
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
-from matplotlib import pyplot as plt  # noqa: E402
-from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
-from matplotlib.figure import Figure  # noqa: E402
-
-from src.portfolio.risk_model import average_correlation, effective_bets  # noqa: E402
-from src.research.benchmark import benchmark_metrics, rolling_beta  # noqa: E402
+from src.portfolio.risk_model import average_correlation, effective_bets
+from src.research.benchmark import benchmark_metrics, rolling_beta
+from src.utils.report import AXIS, DIVERGING, INK, MUTED, SERIES, html_page, image
+from src.utils.report import legend as _legend
+from src.utils.report import png as _png
+from src.utils.report import style_axis as _style
 
 DAYS_PER_YEAR = 365.0
-SERIES = ("#2a78d6", "#eb6834", "#1baf7a")  # blue, orange, aqua: a fixed order, checked for colour-blind separation
-SURFACE, INK, MUTED, GRID, AXIS = "#fcfcfb", "#0b0b0b", "#898781", "#e1e0d9", "#c3c2b7"
-DIVERGING = LinearSegmentedColormap.from_list("red_gray_blue", ["#e34948", "#f0efec", "#2a78d6"])
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-
-
-def _style(axis: Any, title: str) -> None:
-    axis.set_title(title, loc="left", fontsize=11, color=INK)
-    axis.set_facecolor(SURFACE)
-    axis.grid(True, color=GRID, linewidth=0.6)
-    axis.set_axisbelow(True)
-    axis.tick_params(colors=MUTED, labelsize=8)
-    for name, spine in axis.spines.items():
-        spine.set_visible(name in ("left", "bottom"))
-        spine.set_color(AXIS)
-
-
-def _png(figure: Figure) -> str:
-    buffer = io.BytesIO()
-    figure.savefig(buffer, format="png", dpi=110, facecolor=SURFACE, bbox_inches="tight")
-    plt.close(figure)
-    return base64.b64encode(buffer.getvalue()).decode("ascii")
-
-
-def _legend(axis: Any) -> None:
-    # above the plot, right of the title: a legend inside the axes would sit on the lines
-    axis.legend(frameon=False, fontsize=8, labelcolor=INK, loc="lower right", bbox_to_anchor=(1.0, 1.0), ncols=3, borderaxespad=0.2)
 
 
 def summary_table(returns: pd.Series, benchmark: pd.Series | None, benchmark_name: str) -> pd.DataFrame:
@@ -217,12 +189,8 @@ def tearsheet_html(title: str, equity: pd.Series, *, benchmark: pd.Series | None
             *[f"<p>{html.escape(note)}</p>" for note in notes],
             f"<table><thead><tr><th></th>{head}</tr></thead><tbody>{rows}</tbody></table>",
             f"<p>{html.escape(alike)}</p>" if alike else "",
-            *[f"<h2>{html.escape(name)}</h2><img alt='{html.escape(name)}' src='data:image/png;base64,{data}'>" for name, data in charts]]
-    style = (f"body{{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#f9f9f7;color:{INK};max-width:1000px;margin:24px auto;padding:0 16px}}"
-             f"h1{{font-size:22px}}h2{{font-size:15px;margin:28px 0 8px}}.muted{{color:#52514e}}img{{max-width:100%;height:auto}}"
-             f"table{{border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}}th,td{{padding:4px 14px 4px 0;text-align:right;border-bottom:1px solid {GRID}}}"
-             "tbody th,thead th:first-child{text-align:left;font-weight:500}")
-    return f"<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{html.escape(title)}</title><style>{style}</style></head><body>{''.join(body)}</body></html>"
+            *[image(name, data) for name, data in charts]]
+    return html_page(title, body)
 
 
 def snapshot_inputs(snapshots: Sequence[Mapping[str, Any]], *, benchmark: str | None = None) -> dict[str, Any]:

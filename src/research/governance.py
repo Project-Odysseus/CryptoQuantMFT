@@ -145,6 +145,73 @@ def total_trials(*, family: str | None = None, include_backfill: bool = True) ->
     return sum(int(entry["configurations"]) for entry in entries) + (BACKFILL_TRIALS if include_backfill and family is None else 0)
 
 
+# --- pre-registrations ------------------------------------------------------------------------------------------------
+
+PREREG_DIR = Path("research/prereg")
+PLACEHOLDER = "TODO"
+
+
+class PreregNotLocked(RuntimeError):
+    """A study was started before its pre-registration was written and locked, or the text changed after the lock."""
+
+
+def prereg_path(hypothesis: str) -> Path:
+    """Where a hypothesis's pre-registration lives (`CQM_PREREG_DIR` overrides the folder, e.g. in tests)."""
+    return Path(os.environ.get("CQM_PREREG_DIR") or PREREG_DIR) / f"{hypothesis}.txt"
+
+
+def _prereg_hash(hypothesis: str) -> str:
+    return hashlib.sha256(prereg_path(hypothesis).read_bytes()).hexdigest()
+
+
+def prereg_locks(hypothesis: str) -> list[dict[str, Any]]:
+    """Every lock of this hypothesis in the ledger, oldest first (one per version)."""
+    return [entry for entry in ledger_entries() if entry.get("type") == "prereg" and entry.get("hypothesis") == hypothesis]
+
+
+def lock_prereg(hypothesis: str) -> dict[str, Any]:
+    """Record the pre-registration's text (its SHA-256) in the ledger, so results can't quietly reshape it afterwards.
+
+    Locking the same text again changes nothing. Locking a changed text is a new version: allowed, visible in the
+    ledger, and a reason to count the earlier runs as extra trials. A file that still has unfilled `TODO` fields
+    is refused.
+    """
+    path = prereg_path(hypothesis)
+    if not path.exists():
+        raise FileNotFoundError(f"no pre-registration at {path}; create it with scripts/research/new_hypothesis.py new {hypothesis} \"title\"")
+    if PLACEHOLDER in path.read_text(encoding="utf-8"):
+        raise PreregNotLocked(f"{path} still has {PLACEHOLDER} fields: fill every section in before locking")
+    digest, locks = _prereg_hash(hypothesis), prereg_locks(hypothesis)
+    if locks and locks[-1]["sha256"] == digest:
+        return locks[-1]
+    _append({"type": "prereg", "hypothesis": hypothesis, "sha256": digest, "version": len(locks) + 1, "path": str(path)})
+    return prereg_locks(hypothesis)[-1]
+
+
+def prereg_status(hypothesis: str) -> str:
+    """missing | unlocked | locked | changed (the text differs from its latest lock)."""
+    if not prereg_path(hypothesis).exists():
+        return "missing"
+    locks = prereg_locks(hypothesis)
+    if not locks:
+        return "unlocked"
+    return "locked" if locks[-1]["sha256"] == _prereg_hash(hypothesis) else "changed"
+
+
+def require_prereg(hypothesis: str) -> dict[str, Any]:
+    """The hypothesis's current lock; raises `PreregNotLocked` unless the text on disk is the locked one.
+
+    Call it first in a study script: the rules are then on record before the first result exists.
+    """
+    status = prereg_status(hypothesis)
+    if status != "locked":
+        fix = {"missing": f"write it: python scripts/research/new_hypothesis.py new {hypothesis} \"title\"",
+               "unlocked": f"lock it: python scripts/research/new_hypothesis.py lock {hypothesis}",
+               "changed": f"the text changed after its lock; bump its version line and lock it again: python scripts/research/new_hypothesis.py lock {hypothesis}"}[status]
+        raise PreregNotLocked(f"pre-registration {hypothesis} is {status}. {fix}")
+    return prereg_locks(hypothesis)[-1]
+
+
 # --- reproducibility ------------------------------------------------------------------------------------------------
 
 def git_commit() -> str:

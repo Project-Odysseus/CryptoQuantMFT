@@ -344,6 +344,40 @@ recording_gaps()                                                            # ex
 - Book samples are snapshots every second, not every change, which is enough for imbalance features at minute
   horizons and up.
 
+## From a hypothesis to a report: the standard path (2026-10-03)
+
+One command starts a hypothesis, and the same tools measure every one, so studies can be compared and nothing is
+decided after the results are in.
+
+```bash
+python scripts/research/new_hypothesis.py new H4 "Drawdowns of 10% reverse within a week"
+# fill in every TODO in research/prereg/H4.txt, then define_events() and the settings in scripts/research/h4_study.py
+python scripts/research/new_hypothesis.py lock H4     # the text's hash goes into the trial ledger
+python scripts/research/h4_study.py                   # refuses to run until the text is locked; writes data/research/h4_<time>/
+python scripts/research/new_hypothesis.py status      # every hypothesis: locked or not, report written or not
+```
+
+- **The pre-registration** (`research/prereg/<ID>.txt`) says, before any number exists: the behaviour, the mechanism,
+  the expected sign, the exact event rule, one primary outcome, the grid of nearby definitions that will be run, the
+  pass criteria and what kills it. Changing it after the lock is allowed, but it is a new version, locked again and
+  visible in the ledger (`governance.lock_prereg`, `require_prereg`).
+- **The event study** (`src/research/events.py`): `event_study(frame, events, horizons=..., matching=...)` gives, per
+  horizon, the mean, median, hit rate, quantiles, a bootstrap interval, the average worst and best excursion, and
+  the same horizon after volatility-matched control bars. An event at bar p is known at its close; the position is
+  taken at the next open. `first_crossings(condition, min_gap=...)` turns any true/false series into events.
+- **Drawdown episodes:** `drawdown_episodes(close, thresholds=(0.05, 0.07, 0.10))` keeps one selloff as one row with
+  the first bar it crossed each depth, its trough, its recovery, and a flag when it hasn't recovered yet.
+  `episode_progression` says how often a 5% dip went on to 10% and how often the peak came back within n bars
+  (unfinished episodes are left out of that share, not counted as failures). `episode_events(episodes, 0.10)` feeds
+  the crossings to `event_study`.
+- **The signal report** (`src/research/signal_report.py`): `signal_report(name, frame, events, ...)` writes one HTML
+  page with the data-quality check, events per year, the event study with its charts, the outcome by trend and
+  volatility regime at the event, and the primary outcome under the nearby definitions you pass as `variants`. Look
+  for a plateau across them, not the best cell. `report.trials` is what to log in the ledger.
+- **After the report:** judge it against the pass criteria you wrote, then write `research/reports/<ID>.md` and the
+  research log entry, failures included. A signal that passes becomes a sleeve only after `candidate_report` shows
+  it improves the book (`src/portfolio/backtest.py`).
+
 ## A research loop that works
 
 The signal research notebook walks through these steps in order.

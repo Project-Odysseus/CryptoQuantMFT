@@ -143,8 +143,20 @@ direction is in `aspirations.md`.
 - [x] Book tearsheet (2026-10-03, `src/portfolio/tearsheet.py`): one static HTML page with equity vs BTC, the underwater curve, a
   monthly heatmap, rolling vol/Sharpe/beta, historical VaR/ES, exposure over time and strategy correlations. Written by
   `portfolio_backtest.py` for a backtest and by `main.py --portfolio PATH --tearsheet` for a running book
+- [x] Research tools for hypothesis work (2026-10-03; research guide, "From a hypothesis to a report"): a general event-study
+  engine with matched controls and drawdown episodes (`src/research/events.py`), one standard signal report per idea
+  (`src/research/signal_report.py`: data quality, frequency, event study, regimes, nearby definitions), and
+  `scripts/research/new_hypothesis.py` (pre-registration template, study skeleton, a lock the study checks). No hypothesis has
+  been run with them yet
 - [ ] Parameter stability in the scorecard (from the QIS review, step 5): the best parameters per walk-forward window, with a purge
-  gap between train and test and every configuration logged to the trial ledger
+  gap between train and test and every configuration logged to the trial ledger. For event-type signals the signal report's
+  "nearby definitions" table now covers this; strategies swept with `research.py sweep` still lack it
+- [ ] Ideas from outside conversations (`chat_discussions.md`, 2026-10-03), each needing its own pre-registration before any test:
+  monthly rotation between sleeves by recent performance (only worth testing with more than ~3 independent bets); an intraday
+  signal used only to time the entry of a multi-day hold (the intraday studies failed at short holds, not at this); BTC/ETH
+  drawdown episodes as the first use of the event engine (close to H2, which failed)
+- [ ] Binance 1-minute klines for BTC/ETH/SOL from the public archive (on wifi): they carry taker-buy volume, enough for a
+  1-minute cumulative volume delta without paid tick data
 - [x] A live performance review (2026-09-28, `scripts/research/performance_review.py`): the book vs buy-and-hold from the runtime's
   snapshots (beta, alpha, capture), fees, funding and sleeve P&L
 - [ ] The rest of the review, after weeks of fills: slippage vs decision price, trade durations, alpha decay
