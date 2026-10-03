@@ -542,3 +542,34 @@ def test_an_interrupted_plan_is_dropped_when_a_new_bar_closed_before_the_restart
     dropped = logger.list_events(event_types=["portfolio_plan_dropped"])
     assert len(dropped) == 1 and dropped[0]["metadata"]["orders"] == unsent
     assert not {fill["order_id"] for fill in report.fills} & set(unsent)  # the old orders were never sent: the new decision planned its own
+
+
+def test_another_books_fill_with_the_same_order_id_does_not_hide_a_recovered_fill(tmp_path) -> None:
+    """Found by the live drill: the paper soak's "pf-1-0" fill made the live book's recovered "pf-1-0" fill look logged."""
+    config = _config()
+    logger = TradeLogger(tmp_path / "shared.db")
+    (tmp_path / "other").mkdir()
+    other = _engine(config, tmp_path / "other", logger=logger, state=True)  # e.g. the paper soak, writing to the same database
+    index = FIRST
+    while not logger.list_trades():
+        other.run_cycle(bars_until(index), now=_now(index))
+        index += 1
+    others_fills = len(logger.list_trades())
+
+    (tmp_path / "book").mkdir()
+    engine = _engine(config, tmp_path / "book", logger=logger, state=True)
+    _die_after(engine.adapters["kraken_futures"], "submit_order", 1)
+    crashed_at = FIRST
+    with pytest.raises(_Crash):
+        while True:
+            engine.run_cycle(bars_until(crashed_at), now=_now(crashed_at))
+            crashed_at += 1
+    del engine
+    restarted = _engine(config, tmp_path / "book", logger=logger, state=True)
+    assert restarted.book_id != other.book_id
+    report = restarted.run_cycle(bars_until(crashed_at), now=_now(crashed_at))
+    assert report.fills and report.fills[0]["order_id"] in {event["metadata"]["order_id"] for event in logger.list_events(event_types=["portfolio_fill"])
+                                                            if event["metadata"]["book_id"] == other.book_id}  # the ids really do collide
+    assert len(logger.list_trades()) == others_fills + len(report.fills)  # the recovered fill reached the trade log
+    assert logger.list_events(event_types=["portfolio_fill_recovered"]) == []
+

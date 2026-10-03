@@ -38,10 +38,12 @@ direction is in `aspirations.md`.
   decision and at random, on three configs) and `scripts/drills/network_drill.py` (the network cut around a kill -9, on
   real candles). The first run found a real fault, now fixed: a kill between the exchange's fill and the checkpoint left
   the book and the exchange apart for good (`todo_important.md`)
-- [ ] The same drill live at one lot: `python scripts/drills/live_restart_drill.py config/portfolio.btc_live.toml --confirm
-  ENABLE_LIVE_TRADING` (real orders; runbook, "Crash and network drills"). It kills the live book right after an order
-  goes out, restarts it, checks for a duplicate order and that the book matches Kraken, then closes the position. The
-  script is written and its read-only checks pass (2026-10-03: account flat, 19.12 USD); it has not been run
+- [x] The same drill live at one lot (2026-10-03, `scripts/drills/live_restart_drill.py`): the live book was killed with
+  SIGKILL right after Kraken accepted its first order (buy 0.0001 BTC at 84,619) and restarted. 17 of 18 checks passed:
+  one order on Kraken, nothing sent twice, the book equal to the account, the 20% stop resting, the position closed at
+  84,618, cost 0.0084 USD. The failed check found a bug, fixed (`todo_important.md`)
+- [ ] Run `python scripts/maintenance/backfill_drill_buy_20261003.py --write` once: the drill's buy is missing from the trade
+  log and the tax ledger (its fee, 0.0042 USD)
 - [x] Paper and live runs of one config no longer share a name in `portfolio_snapshots` (2026-10-03): a live book is
   stored as `<name>-live`, and the dashboard, tearsheet and performance review show the two apart
 - [x] A dead-man's switch and a daily summary (2026-09-27, `src/utils/heartbeat.py`; runbook). To switch it on:

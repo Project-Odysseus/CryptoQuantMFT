@@ -745,10 +745,19 @@ class PortfolioEngine:
         self._book_fill(meta, filled_size=float(result.filled_size), fill_price=float(result.fill_price), fee=float(result.fee), report=report, now=now)
 
     def _fill_logged(self, order_id: str) -> bool:
-        """Whether a fill of `order_id` is already in the event log (written before a crash that lost its booking)."""
+        """Whether this book's fill of `order_id` is already in the event log (written before a crash that lost its booking).
+
+        Order ids count cycles from 1 in every book, so a paper book and a live book sharing the database both have
+        a "pf-1-0-..." fill. Only an event carrying this book's own id counts; otherwise another book's fill would
+        make this one look logged, and it would never reach the trade log or the tax ledger.
+        """
         if self.trade_logger is None:
             return False
-        return any((event.get("metadata") or {}).get("order_id") == order_id for event in self.trade_logger.list_events(limit=100, event_types=["portfolio_fill"]))
+        for event in self.trade_logger.list_events(limit=200, event_types=["portfolio_fill"]):
+            metadata = event.get("metadata") or {}
+            if metadata.get("order_id") == order_id and metadata.get("book_id") == self.book_id:
+                return True
+        return False
 
     def _book_fill(self, meta: Mapping[str, Any], *, filled_size: float, fill_price: float, fee: float, report: CycleReport, now: datetime) -> None:
         """Book one fill (immediate or settled later): the book, the tax ledger, the trade log, the event log and Telegram."""
@@ -770,7 +779,7 @@ class PortfolioEngine:
             # the mode is part of the source, so a paper soak's fills can never be read as real ones
             self.trade_logger.log_trade(timestamp=now, source=f"portfolio_{self.mode}", exchange=spec.venue, pair=spec.symbol, side=meta["side"], price=fill_price,
                                         size=filled_size, fee=fee, strategy_id=strategy_id)
-            self._event("INFO", "portfolio_fill", f"{meta['side']} {filled_size} {instrument} @ {fill_price} ({meta['reason']})", fill, now)
+            self._event("INFO", "portfolio_fill", f"{meta['side']} {filled_size} {instrument} @ {fill_price} ({meta['reason']})", {**fill, "book_id": self.book_id}, now)
         if self.notifier is not None:
             self.notifier.send_trade_alert(self._trade_alert(meta, fill, report, now))
 

@@ -82,6 +82,13 @@ Dropped: Kraken/Firi counterparty monitoring (all trading is on Kraken).
 - [x] **Portfolio fills were logged with the same source in every mode** (`portfolio`), so a paper soak's fills
   would have sat next to live ones in `trades`. They now carry the mode (`portfolio_paper`, `portfolio_live`). The
   tax ledger was never affected (paper doesn't write it).
+- [x] **Found by the live drill (2026-10-03): a recovered fill was not logged when another book had a fill with the
+  same order id.** Order ids count cycles from 1 in every book, so the paper soak's `pf-1-0-kraken_futures-BTC/USD`
+  made the live book's recovered `pf-1-0-...` buy look "already logged": it was booked in the book but never
+  reached the trade log or the tax ledger. Fixed: fill events carry the book's id, and only this book's own event
+  counts. The missing buy is added by `scripts/maintenance/backfill_drill_buy_20261003.py --write` (not yet run).
+  Everything else held against real Kraken: the order was found by its client id, nothing was resent, the stop was
+  placed after the restart, and the engine closed the position.
 - [ ] **Residual window, accepted for now:** a crash between the tax-ledger write and the fill's event-log write
   (microseconds apart) would record that fill's tax rows twice after the restart. The fill event is what marks a
   fill as already logged.
