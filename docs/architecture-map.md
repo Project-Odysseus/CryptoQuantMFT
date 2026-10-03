@@ -175,6 +175,19 @@ Plan and status: `docs/portfolio_plan.md`.
   allocation counts a basket as one sleeve (`PortfolioConfig.allocation_groups`).
 - `src/portfolio/allocation.py`, `netting.py`, `risk.py`, `orders.py`: the pure core. It allocates sleeves, nets
   them per instrument, applies the portfolio risk limits, and plans the orders.
+- `src/portfolio/risk_model.py`: the book's risk model. `RiskModel` is an EWMA covariance of instrument returns
+  stepped once per grid bar (shrunk correlations, a stressed version with correlations floored for crashes, JSON
+  checkpoint); `RiskEstimate` answers what a set of weights amounts to (volatility, beta to a benchmark, risk
+  shares, diversification ratio); `ReturnWindow` keeps the strategies' recent returns for their correlations and
+  effective number of bets.
+- `src/portfolio/book_risk.py`: `exposure_summary` (long/short, gross/net per group, venue and coin, beta,
+  volatility, VaR, risk shares; stored in every snapshot and printed by the dashboard and the research script),
+  `build_risk_model` from a config, and `estimate_stream` / `exposure_history`, which replay the model over a
+  backtest bar by bar as the runtime steps it. The overlay in `risk.py` reads the estimate for its group, beta and
+  volatility caps (`[risk.groups]`, `max_beta_exposure`, `max_portfolio_vol`) and enforces `[risk.exposure]`
+  `max_delta` and `max_scenario_loss` on linear targets.
+- `src/portfolio/tearsheet.py`: one static HTML page per book (matplotlib charts embedded), from a research
+  backtest or from the runtime's snapshots (`main.py --portfolio PATH --tearsheet`).
 - `src/portfolio/book.py`: positions, cash per venue, FX, funding and per-sleeve attribution, in `Decimal`.
 - `src/portfolio/engine.py`: `PortfolioEngine.run_cycle`, which runs bars -> sleeves -> targets -> orders -> one
   adapter per venue (`SandboxCrossMarginPerpAdapter` in `src/execution/cross_margin.py` for paper perps) -> book,
@@ -190,7 +203,8 @@ Plan and status: `docs/portfolio_plan.md`.
   (`validation.py`), calibration in vol points (`calibration.py`), the SVI market surface (`surface.py`), and Deribit
   chain snapshots (`deribit.py`). Design: `docs/options_plan.md`.
 - `src/portfolio/runtime.py`: `PortfolioRuntime`, the loop. It fetches, finds stale instruments, runs a cycle,
-  alerts once per problem, writes snapshots to SQLite (`portfolio_snapshots`), checks the kill switch and handles
+  alerts once per problem (including the strategies becoming one bet and a broken exposure limit,
+  `_watch_diversification`), writes snapshots to SQLite (`portfolio_snapshots`), checks the kill switch and handles
   SIGTERM. Repeated order rejections on an instrument put it in a reduce-only cooldown (`PortfolioEngine._note_rejection`,
   `[risk] rejection_cooldown_*`), kept in the checkpoint. With `[risk] exchange_stop_pct`, `PortfolioEngine._sync_stops`
   keeps one reduce-only stop resting on Kraken per open perp position (`KrakenFuturesCrossMarginAdapter.sync_protective_stops`)

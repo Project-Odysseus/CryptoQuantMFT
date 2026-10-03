@@ -1,0 +1,415 @@
+# Multi-asset, multi-strategy book, PAPER: five trend sleeves on the BTC, ETH and SOL perps plus the cross-sectional
+# taker-buy basket on 40 Kraken Futures perps, under the correlation-aware limits (docs/portfolio_plan.md, phase 7).
+# Research: docs/research_log.md 2026-10-03 ("A multi-strategy book under correlation-aware limits").
+# Everything decides on daily bars, so the book needs daily candles only.
+# Not for live at small capital: one lot of the largest-minimum coin needs a few hundred USD of equity per coin weight,
+# and the basket's edge depends on Kraken's real alt spreads (TODO.MD, section 2).
+# Check:    python main.py --portfolio-check config/portfolio.multi_paper.toml
+# Backtest: python scripts/research/portfolio_backtest.py config/portfolio.multi_paper.toml
+# Paper:    python main.py --runtime paper --portfolio config/portfolio.multi_paper.toml --runtime-iterations 0 --runtime-interval 300
+
+[portfolio]
+name = "multi-paper"
+base_currency = "USD"
+initial_equity = 10000             # paper equity: large enough that every coin's weight is at least a few lots
+rebalance_band = 0.01
+allocation = "equal"               # six units: five trend sleeves and the basket (the basket counts as one)
+allocation_lookback_days = 90
+allocation_refit_days = 30
+
+[risk]
+max_gross_exposure = 2.0
+max_net_exposure = 1.0
+max_instrument_weight = 0.6
+max_drawdown = 0.40                # kill: flatten and stay flat until --portfolio-reset-peak
+daily_loss_limit = 0.10
+stale_after_bars = 2
+# Correlation-aware limits (src/portfolio/risk_model.py): set before the study, not tuned on it
+benchmark = "kraken_futures:BTC/USD"
+max_beta_exposure = 1.0            # the book never amounts to more than 1x BTC, however it is spread over coins
+max_portfolio_vol = 0.40           # annual, with every correlation floored at stress_correlation
+stress_correlation = 0.9
+max_average_correlation = 0.8      # alerts only: the strategies have become one bet
+min_effective_bets = 1.5
+
+[risk.groups.alts]
+max_gross = 1.0                    # everything outside BTC and ETH
+max_net = 0.3                      # the basket is dollar-neutral; the SOL trend sleeve is the only directional alt bet
+
+[[sleeves]]
+id = "btc_ma_1d"
+instrument = "kraken_futures:BTC/USD"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+long_only = true
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[sleeves]]
+id = "btc_keltner_ls"
+instrument = "kraken_futures:BTC/USD"
+interval = "1d"
+strategy = "keltner_breakout"
+params = { window = 40, atr_multiplier = 2.0 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[sleeves]]
+id = "eth_ma_1d"
+instrument = "kraken_futures:ETH/USD"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+long_only = true
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[sleeves]]
+id = "eth_keltner_ls"
+instrument = "kraken_futures:ETH/USD"
+interval = "1d"
+strategy = "keltner_breakout"
+params = { window = 40, atr_multiplier = 2.0 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[sleeves]]
+id = "sol_ma_1d"
+instrument = "kraken_futures:SOL/USD"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+long_only = true
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[baskets]]
+id = "taker"
+signal = "taker_buy_share_7d"
+top_n = 30                          # each day: the 30 most-traded of the coins below (Binance 30-day volume)
+quantile = 0.2                      # long the top fifth by taker-buy share, short the bottom fifth
+gross = 1.0
+min_names = 12
+rebalance_days = 10
+coins = ["BTC", "ETH", "SOL", "ZEC", "XRP", "NEAR", "SUI", "LINK", "HYPE", "HBAR", "DOGE", "QNT", "TAO", "PUMP", "ADA", "UNI", "AVAX", "ONDO", "LTC", "BCH", "ENA", "CRV", "WLD", "XLM", "DASH", "WIF", "ALGO", "ARB", "TRUMP", "FARTCOIN", "INJ", "PEPE", "FET", "DOT", "GALA", "AAVE", "ZRO", "XMR", "PENGU", "FIL"]
+
+[instruments."kraken_futures:BTC/USD"]
+kind = "perp"
+group = "majors"
+max_leverage = 2.0
+lot_step = 0.0001
+min_order_size = 0.0001
+slippage_bps = 5              # 24h volume 415,583,879 USD
+
+[instruments."kraken_futures:ETH/USD"]
+kind = "perp"
+group = "majors"
+max_leverage = 2.0
+lot_step = 0.001
+min_order_size = 0.001
+slippage_bps = 5              # 24h volume 104,260,764 USD
+
+[instruments."kraken_futures:SOL/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 5              # 24h volume 60,077,925 USD
+
+[instruments."kraken_futures:ZEC/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 10              # 24h volume 47,570,951 USD
+
+[instruments."kraken_futures:XRP/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 10              # 24h volume 41,776,818 USD
+
+[instruments."kraken_futures:NEAR/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 10              # 24h volume 21,899,471 USD
+
+[instruments."kraken_futures:SUI/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 10              # 24h volume 21,465,687 USD
+
+[instruments."kraken_futures:LINK/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 10              # 24h volume 21,379,044 USD
+
+[instruments."kraken_futures:HYPE/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 10              # 24h volume 19,893,390 USD
+
+[instruments."kraken_futures:HBAR/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 10              # 24h volume 19,455,722 USD
+
+[instruments."kraken_futures:DOGE/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 10              # 24h volume 15,998,052 USD
+
+[instruments."kraken_futures:QNT/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 10              # 24h volume 13,582,499 USD
+
+[instruments."kraken_futures:TAO/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 10              # 24h volume 11,878,925 USD
+
+[instruments."kraken_futures:PUMP/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 100
+min_order_size = 100
+slippage_bps = 20              # 24h volume 8,962,258 USD
+
+[instruments."kraken_futures:ADA/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 8,031,086 USD
+
+[instruments."kraken_futures:UNI/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 20              # 24h volume 7,968,106 USD
+
+[instruments."kraken_futures:AVAX/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 20              # 24h volume 7,055,229 USD
+
+[instruments."kraken_futures:ONDO/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 6,279,913 USD
+
+[instruments."kraken_futures:LTC/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 20              # 24h volume 5,842,063 USD
+
+[instruments."kraken_futures:BCH/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 20              # 24h volume 4,821,329 USD
+
+[instruments."kraken_futures:ENA/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 4,425,439 USD
+
+[instruments."kraken_futures:CRV/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 3,712,451 USD
+
+[instruments."kraken_futures:WLD/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 3,523,679 USD
+
+[instruments."kraken_futures:XLM/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 3,325,608 USD
+
+[instruments."kraken_futures:DASH/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 20              # 24h volume 3,289,043 USD
+
+[instruments."kraken_futures:WIF/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 3,213,885 USD
+
+[instruments."kraken_futures:ALGO/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 2,825,880 USD
+
+[instruments."kraken_futures:ARB/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 2,298,209 USD
+
+[instruments."kraken_futures:TRUMP/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 20              # 24h volume 2,236,403 USD
+
+[instruments."kraken_futures:FARTCOIN/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 20              # 24h volume 2,208,158 USD
+
+[instruments."kraken_futures:INJ/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 20              # 24h volume 2,206,647 USD
+
+[instruments."kraken_futures:PEPE/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1000
+min_order_size = 1000
+slippage_bps = 20              # 24h volume 2,048,816 USD
+
+[instruments."kraken_futures:FET/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 30              # 24h volume 1,953,087 USD
+
+[instruments."kraken_futures:DOT/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 30              # 24h volume 1,937,862 USD
+
+[instruments."kraken_futures:GALA/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 30              # 24h volume 1,761,373 USD
+
+[instruments."kraken_futures:AAVE/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 30              # 24h volume 1,719,914 USD
+
+[instruments."kraken_futures:ZRO/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 1
+min_order_size = 1
+slippage_bps = 30              # 24h volume 1,605,514 USD
+
+[instruments."kraken_futures:XMR/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 30              # 24h volume 1,538,222 USD
+
+[instruments."kraken_futures:PENGU/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 10
+min_order_size = 10
+slippage_bps = 30              # 24h volume 1,491,764 USD
+
+[instruments."kraken_futures:FIL/USD"]
+kind = "perp"
+group = "alts"
+max_leverage = 2.0
+lot_step = 0.1
+min_order_size = 0.1
+slippage_bps = 30              # 24h volume 1,435,223 USD

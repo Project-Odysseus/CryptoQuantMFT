@@ -6,6 +6,56 @@ accident.
 
 ---
 
+## 2026-10-03: A multi-strategy book under correlation-aware limits
+
+The first book with strategies that are really different: five daily trend sleeves (BTC, ETH, SOL) plus the taker-buy
+basket on 40 Kraken perps, `config/portfolio.multi_paper.toml`, run through the new risk model
+(`src/portfolio/risk_model.py`: an EWMA covariance of instrument returns, 20-day half-life, correlations shrunk 20%
+towards 0.5 and floored at 0.9 for the volatility cap). The limits were written into the config before the run and
+not tuned: beta to BTC at most 1.0x, book volatility at most 40% at crash correlations, the altcoin group at most 1.0x
+gross and 0.3x net. `python scripts/research/multi_book_study.py`; 2022-10-09 to 2025-12-31, holdout from 2024-10-01
+(the frozen final holdout stays locked); 7 books logged (family `portfolio_construction`).
+
+The six units (each trend sleeve, and the basket as one) correlate +0.38 on average in-sample and are worth **2.9
+independent bets**: the five trend sleeves correlate 0.34-0.76 with each other and 0.01-0.05 with the basket.
+
+| Allocation (limits on), IS / HO | Sharpe | CAGR | Vol | Max DD | Costs %/yr | Avg beta to BTC |
+| --- | --- | --- | --- | --- | --- | --- |
+| equal | 0.92 / 1.69 | 24% / 44% | 27% / 23% | 23% / 15% | 2.7 / 2.8 | 0.42 / 0.44 |
+| risk_parity | 0.58 / 2.82 | 11% / 64% | 22% / 18% | 16% / 11% | 5.3 / 5.5 | 0.29 / 0.30 |
+| hrp | -0.26 / 3.73 | -7% / 90% | 20% / 18% | 25% / 7% | 7.9 / 8.4 | 0.14 / 0.18 |
+
+| Limits (allocation equal), IS / HO | Sharpe | Vol | Max DD | Max beta to BTC | Max vol at crash correlations |
+| --- | --- | --- | --- | --- | --- |
+| Plain caps only (gross, net, per instrument) | 0.95 / 1.67 | 32% / 24% | 26% / 16% | 1.20 / 1.17 | 63% / 53% |
+| + group caps | 0.95 / 1.67 | 32% / 24% | 26% / 16% | 1.20 / 1.17 | 63% / 53% |
+| + beta cap | 0.93 / 1.71 | 32% / 24% | 26% / 15% | 1.03 / 1.03 | 61% / 53% |
+| + volatility cap | 0.92 / 1.66 | 27% / 23% | 23% / 16% | 1.01 / 1.08 | 43% / 43% |
+| All (the config) | 0.92 / 1.69 | 27% / 23% | 23% / 15% | 1.00 / 1.01 | 43% / 43% |
+
+- **Keep `equal`.** `risk_parity` and `hrp` (which can now treat a basket as one unit, by its own return) move
+  capital from trend to the calm, uncorrelated basket. Chosen in-sample that loses (0.58 and -0.26 against 0.92): the
+  basket made nothing in-sample on Kraken prices and costs 5-8% a year at these weights. Their holdout Sharpes (2.8,
+  3.7) are the basket's lucky 15 months again (2026-09-29 entry), not evidence for the allocation.
+- **The limits are insurance, at a small price.** In-sample the volatility cap cuts volatility from 32% to 27% and
+  the worst drawdown from 26% to 23% for 0.03 of Sharpe; the book's largest volatility at crash correlations falls
+  from 63% to 43%. The beta cap trims the few weeks the book amounted to 1.2x BTC. The caps hold on the targets;
+  held positions sit a little over them (1.00-1.01 beta, 43% volatility) because prices drift between decisions and
+  the rebalance band leaves small gaps alone.
+- **The group caps never bound** in this book: under `equal` the basket is a sixth of the book, so altcoin gross
+  peaked at 0.33x and net at 0.16x. They are there for a book where the basket is larger.
+- The new limits default to off, so the BTC live book and the example book behave as before.
+
+**What this changes:** the multi book is a paper candidate with `equal` allocation and all limits on. It doesn't
+change the funding decision on the basket, which still waits for Kraken's real alt spreads (TODO section 2). More
+uncorrelated sleeves, not a cleverer allocation, are what would raise the 2.9 bets.
+
+Found on the way: the engine's `inverse_vol`, `risk_parity` and `hrp` scales differ from the research backtest's after
+a cold start, because each counts its refit schedule from its own first bar (`code-optimize.md`). `equal` and
+`fixed`, which every config uses, are unaffected.
+
+---
+
 ## 2026-09-29: The taker-buy basket on Kraken's own prices, through the portfolio engine
 
 The cross-sectional taker-buy book (2026-09-26 entry: top 30, 20% legs, every 10 days, chosen then) replayed with the

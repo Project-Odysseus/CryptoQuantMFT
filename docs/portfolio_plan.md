@@ -181,7 +181,7 @@ name = "trend-core"
 base_currency = "USD"            # equity and caps are measured in this currency
 initial_equity = 10000           # paper and dry-run starting equity, in base currency
 rebalance_band = 0.02            # skip trades smaller than 2% of equity (exits always go through)
-allocation = "inverse_vol"       # fixed | equal | inverse_vol
+allocation = "inverse_vol"       # fixed | equal | inverse_vol | risk_parity | hrp
 
 [risk]
 max_gross_exposure = 1.5         # sum of |weights| across instruments
@@ -488,9 +488,18 @@ ledger written).
 - Promotion checklist in `docs/runbook.md`.
 
 ### Phase 7: Enhancements (after the core runs in paper)
-- 7.1 Portfolio-level volatility targeting (scale the whole book to a target vol).
-- 7.2 Correlation-aware caps (cluster exposure: BTC and ETH move together).
-- 7.3 Sleeve health: auto-disable a sleeve after repeated errors or a sleeve-level drawdown, and alert.
+- 7.1 Portfolio-level volatility targeting (scale the whole book to a target vol). **Done 2026-10-03 as a cap**
+  (`[risk] max_portfolio_vol`): the book is scaled down, never up, to an annual volatility measured with correlations
+  floored at `stress_correlation`. A two-sided target would lever the book up in calm markets; not built.
+- 7.2 Correlation-aware caps (cluster exposure: BTC and ETH move together). **Done 2026-10-03:** the risk model
+  (`src/portfolio/risk_model.py`), `max_beta_exposure` (the book in benchmark terms), group caps
+  (`[risk.groups.<name>]` with `group` on instruments), `[risk.exposure]` `max_delta` and `max_scenario_loss`
+  enforced on linear targets, the exposure summary in every snapshot (`src/portfolio/book_risk.py`), alerts when
+  the strategies become one bet, baskets as one unit under `risk_parity` and `hrp`, and the book tearsheet. Pairwise
+  correlation limits were not built: they are noisy, and crypto correlations go to 1 in a crash, which the stressed
+  volatility cap covers. All default to off. Study and the multi-strategy paper config: research log 2026-10-03.
+- 7.3 Sleeve health: auto-disable a sleeve after repeated errors or a sleeve-level drawdown, and alert. The
+  drawdown part is `stops = { sleeve_drawdown_pause_pct = ... }` (2026-10-03): a pause until the signal resets.
 - 7.4 Cross-sectional sleeves: a sleeve whose target is a basket (from `scripts/research/cross_sectional_study.py`),
   after the wifi download and research.
 - 7.5 Regime filters as sleeve inputs (the crowding composite from the positioning research).
@@ -590,7 +599,8 @@ ledger written).
 - [x] 4.4 Alerts (2026-09-26): stale or failing data per instrument, risk limits acting, rejected orders, reconciliation mismatches, sleeves disabled after 3 failing cycles, and repeated cycle errors. Each is sent once when it starts and once when it clears.
 - [ ] 5 `live_dry_run` soak (tracked in `TODO.MD` section 1)
 - [ ] 6 Live readiness (user go-ahead; tracked in `TODO.MD` section 1). Built and tested against a fake Kraken (2026-09-26, see Phase 6); a first real run at minimum size is left.
-- [ ] 7 Enhancements
+- [ ] 7 Enhancements: 7.1 (as a volatility cap), 7.2, 7.3 and 7.4 are done (2026-09-28 to 2026-10-03). Left: 7.5 regime
+  filters as sleeve inputs, 7.6 option sleeves.
 
 **Open decisions for the user** (don't block on them; use the default and note it):
 - Default sizing in the single-strategy runtime: `fixed_fraction` 10% (current) or `vol_target`. Default: keep

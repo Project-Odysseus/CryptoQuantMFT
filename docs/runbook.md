@@ -219,6 +219,7 @@ python main.py --portfolio-check config/portfolio.example.toml
 python scripts/research/portfolio_backtest.py config/portfolio.example.toml
 python main.py --runtime paper --portfolio config/portfolio.example.toml --runtime-iterations 0 --runtime-interval 60
 python main.py --portfolio config/portfolio.example.toml --dashboard      # from another terminal, any time
+python main.py --portfolio config/portfolio.example.toml --tearsheet      # charts of the running book -> plots/tearsheet_<name>.html
 ```
 
 - `--runtime-iterations 0` runs until Ctrl-C (or SIGTERM). The current cycle finishes and the checkpoint is written
@@ -230,12 +231,38 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
   the cross-sectional taker-buy book. Each day it ranks the most-traded of its coins by Binance's taker-buy share
   (Binance's public daily candles, fetched once a day, no keys), and every `rebalance_days` (10) it goes long the top
   fifth and short the bottom fifth on the Kraken perps. In the book each coin is a member sleeve (`taker__sol`, ...);
-  allocation counts the basket as one sleeve (`fixed` or `equal` only). The coin list and each coin's lot size come
+  allocation counts the basket as one sleeve (`fixed`, `equal`, `risk_parity` or `hrp`; the last two measure it by its
+  own return). The coin list and each coin's lot size come
   from `python scripts/portfolio/basket_instruments.py --out <file>` (Kraken's public instrument list); review the
   diff before using a refreshed list. It needs capital: one lot of the priciest coin (about 15 USD) must be a small
   part of each coin's weight, so paper-run it at a realistic equity (10,000 USD in the paper config) until the account
   is a few thousand USD. `python scripts/research/basket_backtest.py` replays it on Kraken prices. If Binance can't be
   reached, the basket keeps its weights and retries next cycle (`portfolio_basket_data_failed` in the events).
+- **Exposure and correlation-aware limits:** the engine keeps a risk model of how the instruments move together (an
+  EWMA covariance of their grid-bar returns, saved in the checkpoint; a fresh start warms it up from the candle
+  history). Every snapshot stores what the book is exposed to, and `--dashboard` prints it: long and short, gross and
+  net per group, venue and coin, the book in BTC terms (sum of weight x beta), its volatility at the estimated and at
+  crash correlations, a 1-in-20 day's loss, and each instrument's and sleeve's share of the risk. Optional limits in
+  `[risk]`, all off unless set (`config/portfolio.example.toml` lists them; `config/portfolio.multi_paper.toml` uses them):
+  - `[risk.groups.<name>]` `max_gross` / `max_net`, for instruments tagged `group = "<name>"`;
+  - `max_beta_exposure` with `benchmark`: the book may not amount to more than this many x of the benchmark;
+  - `max_portfolio_vol`: the book is scaled down (never up) to this annual volatility, with correlations floored at
+    `stress_correlation` (0.9);
+  - `[risk.exposure]` `max_delta` (per coin, spot and perp together) and `max_scenario_loss` (every coin 50% against
+    the book) are enforced on perp and spot targets; all four exposure limits are checked on the held book, options
+    included, and alerted (`exposure_limit`).
+  While the model lacks history (`vol_min_days`, 20), a book with a beta or volatility cap may only shrink
+  (`risk_model_unavailable`). Each limit that acts shows on the dashboard and alerts once, like the other caps.
+- **Strategies becoming one bet:** `max_average_correlation` and `min_effective_bets` alert (they resize nothing)
+  when the sleeves' returns over `correlation_lookback_days` (90) correlate above the level, or are worth fewer
+  independent bets. A basket counts as one strategy. The dashboard shows both numbers and the closest pair.
+- **Sleeve drawdown pause:** `stops = { sleeve_drawdown_pause_pct = 0.2 }` on a sleeve closes it once its own return
+  is 20% below its peak, and keeps it out until its signal has left that side (reason `sleeve_drawdown_pause`). The
+  count then restarts, so it is a break, not a kill. Off unless set.
+- **Tearsheet:** `--portfolio PATH --tearsheet` writes one HTML page from the SQLite snapshots (it needs three days
+  of them): equity against BTC, drawdown, monthly returns, rolling volatility, Sharpe and beta, exposure over time,
+  and the strategies' correlations. `scripts/research/portfolio_backtest.py` writes the same page (`tearsheet.html`)
+  for the backtest, plus `exposure.csv`, so the two can be compared.
 - **Execution:** `paper` and `live_dry_run` both trade against sandbox accounts shaped like the venues: one
   cross-margin account per perp venue, with fees, slippage, funding and liquidation. For `--runtime live`, see
   "Live portfolio trading" below.
@@ -244,8 +271,8 @@ python main.py --portfolio config/portfolio.example.toml --dashboard      # from
   it never touches the real paper state.
 - **Telegram:** one message per fill (which sleeves drove it and which risk limits acted). There are also alerts,
   sent once when a problem starts and once when it clears, for: stale or failing market data per instrument, a risk
-  limit acting, rejected orders, reconciliation mismatches, a sleeve disabled after 3 failing cycles, and failed
-  cycles (the runtime stops itself after 5 in a row).
+  limit acting, rejected orders, reconciliation mismatches, a sleeve disabled after 3 failing cycles, the strategies
+  becoming too alike, a broken exposure limit, and failed cycles (the runtime stops itself after 5 in a row).
 - **Rejection cooldown:** after 3 rejected orders in a row on one instrument (`[risk] rejection_cooldown_after`), the
   book sends only reductions on it for 24 hours (`rejection_cooldown_hours`), then tries once more; a fill resets the
   count. It survives restarts and alerts when it starts and ends. Rejections usually mean margin, size or account

@@ -67,8 +67,14 @@ direction is in `aspirations.md`.
   (research log 2026-09-29)
 - [ ] Only if real costs are below the tiers: paper-run the taker basket (`--runtime paper --portfolio config/portfolio.taker_paper.toml
   --runtime-interval 300`) next to the BTC book on the always-on machine
-- [ ] Phase 7 enhancements: portfolio vol targeting, correlation-aware caps, regime filters as sleeve inputs. Sleeve health (disable
-  after 3 failing cycles) and risk-parity/HRP allocation (2026-09-28, no gain yet: the sleeves are too correlated) are done
+- [x] Phase 7, correlation-aware risk (2026-10-03): a risk model of the instruments (`src/portfolio/risk_model.py`), caps on beta to
+  BTC, on book volatility at crash correlations and per instrument group, an exposure summary in every snapshot and on the
+  dashboard, alerts when the strategies become one bet, baskets as one unit under risk parity/HRP, a per-sleeve drawdown pause.
+  All off by default. `config/portfolio.multi_paper.toml` (trend on BTC/ETH/SOL plus the taker basket) uses them: `equal` stays
+  the allocation, the limits cut volatility and drawdown for 0.03 of Sharpe (research log 2026-10-03)
+- [ ] Paper-run `config/portfolio.multi_paper.toml` on the always-on machine, once the basket's real costs are measured (above)
+- [ ] Phase 7, left: regime filters as sleeve inputs. Sleeve health (disable after 3 failing cycles) and risk-parity/HRP
+  allocation (2026-09-28) are done
 
 ## 2b. One engine for every strategy type (plan: `docs/engine_plan.md`)
 
@@ -124,8 +130,9 @@ direction is in `aspirations.md`.
   Tardis history. Needs the owner's approval
 - [ ] CPI release dates into `research/data/` by hand (bls.gov blocks scripts), to complete H2's news split
 - [ ] Maker-first execution (post-only limits, then taker after a timeout): the lever most likely to make intraday edges tradable
-- [ ] Book tearsheet (from the QIS review, step 4): one static HTML page per book with equity vs BTC, underwater curve, monthly
-  heatmap, rolling vol/Sharpe/beta, historical VaR/CVaR and sleeve correlations (matplotlib, or plotly if interactive is wanted)
+- [x] Book tearsheet (2026-10-03, `src/portfolio/tearsheet.py`): one static HTML page with equity vs BTC, the underwater curve, a
+  monthly heatmap, rolling vol/Sharpe/beta, historical VaR/ES, exposure over time and strategy correlations. Written by
+  `portfolio_backtest.py` for a backtest and by `main.py --portfolio PATH --tearsheet` for a running book
 - [ ] Parameter stability in the scorecard (from the QIS review, step 5): the best parameters per walk-forward window, with a purge
   gap between train and test and every configuration logged to the trial ledger
 - [x] A live performance review (2026-09-28, `scripts/research/performance_review.py`): the book vs buy-and-hold from the runtime's
@@ -139,7 +146,9 @@ direction is in `aspirations.md`.
 - [x] O1: option chains recorded hourly since 2026-09-28 (the collectors; moves to the always-on machine with section 3)
 - [x] Options building blocks (2026-09-27): USDC-settled chains, a contract picker with roll rules, exposure limits
   (`[risk.exposure]`), option positions in the book with expiry and tax, and a Deribit trading adapter (fake-exchange tests only)
-- [ ] O3b: enforce `[risk.exposure]` in the engine, and an exposure section on the dashboard
+- [x] O3b (2026-10-03): `[risk.exposure]` `max_delta` and `max_scenario_loss` are enforced on perp and spot targets; all four
+  limits are checked on the held book (options included) and alerted; the dashboard has an exposure section. Option sleeves
+  (E4) still need their own sizing against the vega and gamma limits (`scale_for_limits`)
 - [ ] E4: option sleeves (tail hedge first) in the config and engine, marked from recorded USDC chains, paper first
 - [x] O4: the IV vs realized-vol premium study (2026-09-28, H3: BTC +6 vol pts, t 3.4; ETH not significant; IV sizing no
   better than EWMA)
