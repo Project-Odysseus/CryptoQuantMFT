@@ -157,6 +157,11 @@ direction is in `aspirations.md`.
   monthly rotation between sleeves by recent performance (only worth testing with more than ~3 independent bets); an intraday
   signal used only to time the entry of a multi-day hold (the intraday studies failed at short holds, not at this); BTC/ETH
   drawdown episodes as the first use of the event engine (close to H2, which failed)
+- [ ] Prediction markets (research only; `notebooks/prediction_markets.ipynb`, research log 2026-10-03). Before anything else:
+  check the employer's personal-trading rules and whether Polymarket and Kalshi are open to Norwegian residents. Research
+  questions, each to pre-register: model-versus-market gaps on weeks of settled Kalshi markets; Deribit-implied versus quoted
+  probability on daily markets (needs the smile's slope); binaries as capped-loss protection for a perp position; quoting
+  instead of taking
 - [ ] Binance 1-minute klines for BTC/ETH/SOL from the public archive (on wifi): they carry taker-buy volume, enough for a
   1-minute cumulative volume delta without paid tick data
 - [x] A live performance review (2026-09-28, `scripts/research/performance_review.py`): the book vs buy-and-hold from the runtime's

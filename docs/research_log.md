@@ -6,6 +6,40 @@ accident.
 
 ---
 
+## 2026-10-03: Prediction markets on BTC (Polymarket, Kalshi): a fair-value model and a first look. Research only
+
+Both venues list binary markets on the BTC price: above a level at a time, inside a range, and up or down over a
+window (15 minutes to a day). Their price is a probability, so each is a binary option. New read-only tools
+(`src/research/prediction_markets.py`, `notebooks/prediction_markets.ipynb`; public data, no keys, no orders): both
+venues' markets in one shape, fair value N(d2) with a recent-volatility or Deribit-implied sigma, edges after each
+venue's taker fee (0.07 x p x (1 - p) per contract on both), the perp hedge (the binary's delta), a Deribit
+call-spread cross-check, cross-venue pairs, and calibration tests. 7 configurations logged (family
+`prediction_markets`).
+
+**The model against history** (Binance 5m BTC perp, 2021-03 to 2025-12; every 15-minute and 1-hour window as an
+up/down question, priced partway through from the move so far and an EWMA volatility of past returns):
+
+| | Forecasts | Brier (coin flip 0.25) | Said 60-70%, happened | Said 30-40%, happened |
+| --- | --- | --- | --- | --- |
+| 15-minute windows | 339,070 | 0.173 | 71.5% | 28.9% |
+| 1-hour windows | 466,213 | 0.165 | 71.7% | 29.0% |
+
+- The model has information, about the same every year (Brier 0.171-0.174), and it is **underconfident in the
+  middle**: the volatility estimate is an average pulled up by violent bars, so an ordinary window moves less than
+  assumed. Scaling volatility by ~0.85 gives the best log loss on the last 120,000 bars.
+- **Against Kalshi's own quotes** (30 settled 15-minute markets, 420 market-minutes, today only): the market's
+  midpoint was closer to the outcomes than the model (Brier 0.124 against 0.142), with spreads of 0.3 to 1 cent.
+  The model sees Binance 1-minute closes; the market sees the settlement index (CF Benchmarks' BRTI) and the flow.
+- Kalshi's 15-minute BTC markets traded 2-3 million contracts each today; Polymarket's a few thousand USD. Same-level,
+  same-hour pairs across the venues exist (hourly "above" markets); today none was locked after fees, and the venues
+  settle on different price sources, so a small positive pair is basis risk.
+
+**What this changes:** nothing is tradable from this. The naive model does not beat the market it would trade
+against, as expected. The tools are there for properly pre-registered questions (notebook, section 9). Whether these
+venues may be used at all (employer rules, availability in Norway) is unchecked and comes before any of it.
+
+---
+
 ## 2026-10-03: The taker-buy basket, side by side: do the shorts earn their place?
 
 Question from the owner: the basket shorts the coins with the lowest taker-buy share, but is there evidence those

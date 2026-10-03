@@ -378,6 +378,23 @@ python scripts/research/new_hypothesis.py status      # every hypothesis: locked
   research log entry, failures included. A signal that passes becomes a sleeve only after `candidate_report` shows
   it improves the book (`src/portfolio/backtest.py`).
 
+## Prediction markets (Polymarket, Kalshi): research only
+
+`notebooks/prediction_markets.ipynb` reads both venues' public BTC markets (no keys, no orders) and works through
+fair value, edges after fees, cross-venue pairs, a Deribit cross-check, calibration on history, and hedging a binary
+with a perp. The code is `src/research/prediction_markets.py`:
+
+- `KalshiClient` / `PolymarketClient`: open markets as `BinaryMarket` (above a level, inside a range, up/down over a
+  window), order books, and for Kalshi the settled markets with their minute candles.
+- `fair_value`, `prob_above`, `binary_delta`, `hedge_units`: the binary-option model and its perp hedge.
+- `edges`, `taker_fee`, `match_markets`, `locked_edge`: what taking a quote earns after fees, alone or as a pair.
+- `chain_implied_vol`, `call_spread_bounds`: what a Deribit chain says about the same bet.
+- `calibration_table`, `backtest_updown_model`, `kalshi_model_vs_market`: the model against outcomes and against the
+  market's own quotes.
+
+First results are in the research log (2026-10-03). Whether trading these venues is allowed is not something the
+code can answer.
+
 ## A research loop that works
 
 The signal research notebook walks through these steps in order.
