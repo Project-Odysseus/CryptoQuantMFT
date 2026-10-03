@@ -190,7 +190,7 @@ class PortfolioEngine:
         self.grid_step = timedelta(seconds=BAR_INTERVALS[self.grid_interval])
         per_day = 86400 / BAR_INTERVALS[self.grid_interval]
         self.allocator = Allocator(config.group_budgets(), config.allocation, lookback=max(2, round(config.allocation_lookback_days * per_day)),
-                                   refit_every=max(1, round(config.allocation_refit_days * per_day)))
+                                   refit_every=max(1, round(config.allocation_refit_days * per_day)), groups=self.groups)
         # The risk model: stepped with every grid bar's instrument returns, read by the overlay and the snapshot
         self.risk_model = build_risk_model(config, self.grid_interval)
         window = max(2, round(config.risk.correlation_lookback_days * per_day))

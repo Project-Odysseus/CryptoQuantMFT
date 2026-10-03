@@ -117,8 +117,8 @@ def test_the_config_expands_a_basket_into_member_sleeves_and_checks_it() -> None
     with pytest.raises(PortfolioConfigError, match="ZZZ needs a perp"):
         parse_portfolio_config(bad)
     bad = _raw_config()
-    bad["portfolio"]["allocation"] = "risk_parity"
-    with pytest.raises(PortfolioConfigError, match="'fixed' or 'equal' in a portfolio with baskets"):
+    bad["portfolio"]["allocation"] = "inverse_vol"
+    with pytest.raises(PortfolioConfigError, match="can't be 'inverse_vol' in a portfolio with baskets"):
         parse_portfolio_config(bad)
 
 

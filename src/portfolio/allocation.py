@@ -33,6 +33,13 @@ sleeve with fewer than `MIN_ACTIVE_BARS` positioned bars gets the median
 volatility of the others, as `inverse_vol` does for a sleeve without data.
 Before enough history exists, scales follow the budgets alone.
 
+A basket (`basket.py`) is one allocation unit: its member sleeves share one
+scale. `fixed` and `equal` give it its budget or an equal share like any sleeve.
+`risk_parity` and `hrp` use the basket's own return, the sum of its members'
+(each member's weight times its instrument's return), so a market-neutral basket
+is measured by what it actually earns and loses, not by its coins' volatility.
+`inverse_vol` can't be used with baskets: it sizes by one instrument's volatility.
+
 Volatilities and covariances come from past data only and are refreshed every
 `refit_every` bars, so budgets don't churn every bar.
 """
@@ -190,8 +197,14 @@ def allocate_history(
     instrument_returns: pd.DataFrame | None = None,
     lookback: int = 90,
     refit_every: int = 30,
+    groups: Mapping[str, str] | None = None,
 ) -> pd.DataFrame:
     """Scale each sleeve's weight history (columns = sleeve ids) by its allocation over time.
+
+    `groups` maps a sleeve to its allocation unit (a basket's members share
+    one; default: every sleeve is its own). Only `risk_parity` and `hrp` take
+    it: a unit's return is the sum of its members', its budget its first
+    member's, and its scale goes to every member.
 
     `instrument_returns` has one column per sleeve with the returns of that
     sleeve's instrument on the same index; `inverse_vol`, `risk_parity` and
@@ -204,12 +217,20 @@ def allocate_history(
     if method in COVARIANCE_METHODS:
         if instrument_returns is None:
             raise ValueError(f"{method} allocation needs instrument_returns")
-        sleeve_returns = (sleeve_weights[sleeves].shift(1) * instrument_returns[sleeves]).to_numpy(dtype=float)
-        ordered = {sleeve: budgets[sleeve] for sleeve in sleeves}
+        unit_of = {sleeve: (groups or {}).get(sleeve, sleeve) for sleeve in sleeves}
+        earned = sleeve_weights[sleeves].shift(1) * instrument_returns[sleeves]
+        ordered: dict[str, float] = {}
+        for sleeve in sleeves:
+            ordered.setdefault(unit_of[sleeve], budgets[sleeve])
+        # a unit's return: the sum of its members' (NaN only when none of them has one, e.g. the first bar)
+        unit_returns = np.column_stack([earned[[sleeve for sleeve in sleeves if unit_of[sleeve] == unit]].sum(axis=1, min_count=1).to_numpy(dtype=float)
+                                        for unit in ordered])
         for start in range(0, len(scales), refit_every):
-            values = covariance_scales(ordered, method, sleeve_returns[max(0, start - lookback) : start], min_periods=max(10, lookback // 3))
-            scales.iloc[start : start + refit_every] = [values[sleeve] for sleeve in sleeves]
+            values = covariance_scales(ordered, method, unit_returns[max(0, start - lookback) : start], min_periods=max(10, lookback // 3))
+            scales.iloc[start : start + refit_every] = [values[unit_of[sleeve]] for sleeve in sleeves]
         return sleeve_weights[sleeves] * scales
+    if groups and any(groups.get(sleeve, sleeve) != sleeve for sleeve in sleeves):
+        raise ValueError(f"{method} allocation takes no groups: scale baskets with sleeve_scales on their unit budgets")
     volatility = None
     if method == "inverse_vol":
         if instrument_returns is None:
@@ -235,11 +256,19 @@ class Allocator:
     `to_dict` / `from_dict` for checkpoints.
     """
 
-    def __init__(self, budgets: Mapping[str, float], method: str, *, lookback: int = 90, refit_every: int = 30) -> None:
-        """Validate the method now, so a bad config fails at startup rather than at the first refit."""
+    def __init__(self, budgets: Mapping[str, float], method: str, *, lookback: int = 90, refit_every: int = 30,
+                 groups: Mapping[str, str] | None = None) -> None:
+        """Validate the method now, so a bad config fails at startup rather than at the first refit.
+
+        `budgets` is per allocation unit. `groups` maps each sleeve to its
+        unit when some units are baskets; `step` then takes returns and
+        weights per sleeve and, for `risk_parity` and `hrp`, sums a unit's
+        members into its return.
+        """
         if method not in ALLOCATION_METHODS:
             raise ValueError(f"unknown allocation {method!r}; choose from {ALLOCATION_METHODS}")
         self.budgets = dict(budgets)
+        self.groups = dict(groups) if groups is not None else {unit: unit for unit in self.budgets}
         self.method = method
         self.lookback = lookback
         self.refit_every = max(1, refit_every)
@@ -273,15 +302,22 @@ class Allocator:
             else:
                 volatility = self._volatility() if self.method == "inverse_vol" else None
                 self.scales = sleeve_scales(self.budgets, self.method, volatility=volatility)
-        for sleeve in self.history:
-            value = (instrument_returns or {}).get(sleeve, float("nan"))
-            value = float(value) if value is not None else float("nan")
+        earned: dict[str, list[float]] = {}
+        if covariance:  # each member's weight held into the bar times its instrument's return, collected per unit
+            for sleeve, unit in self.groups.items():
+                value = (instrument_returns or {}).get(sleeve)
+                earned.setdefault(unit, []).append((float(value) if value is not None else float("nan")) * self.previous_weights.get(sleeve, float("nan")))
+        for unit in self.history:
             if covariance:
-                value *= self.previous_weights.get(sleeve, float("nan"))
-            self.history[sleeve].append(value)
-            del self.history[sleeve][: -self.lookback]
+                finite = [value for value in earned.get(unit, []) if np.isfinite(value)]
+                value = float(sum(finite)) if finite else float("nan")
+            else:
+                value = (instrument_returns or {}).get(unit, float("nan"))
+                value = float(value) if value is not None else float("nan")
+            self.history[unit].append(value)
+            del self.history[unit][: -self.lookback]
         if covariance:
-            self.previous_weights = {sleeve: float((weights or {}).get(sleeve, 0.0)) for sleeve in self.budgets}
+            self.previous_weights = {sleeve: float((weights or {}).get(sleeve, 0.0)) for sleeve in self.groups}
         self.bars_seen += 1
         return dict(self.scales)
 
@@ -289,14 +325,15 @@ class Allocator:
         """JSON-ready state (NaN returns become None)."""
         return {
             "budgets": self.budgets, "method": self.method, "lookback": self.lookback, "refit_every": self.refit_every,
-            "bars_seen": self.bars_seen, "scales": self.scales, "previous_weights": self.previous_weights,
+            "bars_seen": self.bars_seen, "scales": self.scales, "previous_weights": self.previous_weights, "groups": self.groups,
             "history": {sleeve: [value if np.isfinite(value) else None for value in values] for sleeve, values in self.history.items()},
         }
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "Allocator":
         """Rebuild from `to_dict` output."""
-        allocator = cls(payload["budgets"], payload["method"], lookback=payload["lookback"], refit_every=payload["refit_every"])  # type: ignore[arg-type]
+        allocator = cls(payload["budgets"], payload["method"], lookback=payload["lookback"], refit_every=payload["refit_every"],  # type: ignore[arg-type]
+                        groups=payload.get("groups"))  # type: ignore[arg-type]
         allocator.bars_seen = int(payload["bars_seen"])  # type: ignore[arg-type]
         allocator.scales = dict(payload["scales"])  # type: ignore[arg-type]
         allocator.history = {sleeve: [float("nan") if value is None else float(value) for value in values] for sleeve, values in dict(payload["history"]).items()}  # type: ignore[union-attr]

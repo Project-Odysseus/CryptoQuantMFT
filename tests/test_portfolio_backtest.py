@@ -166,6 +166,10 @@ def test_a_notebook_strategy_can_be_scored_as_a_candidate_sleeve() -> None:
     assert set(report["books"]["book"]) == {"without", "with eth_notebook"} and set(report["books"]["period"]) == {"is", "ho"}
     assert list(report["correlation"].index) == ["btc_1d", "eth_4h"] and report["correlation"]["eth_notebook"].between(-1, 1).all()
     assert report["alone"]["avg_gross_exposure"].gt(0).all()
+    spread = report["diversification"]
+    assert list(spread.columns) == ["without", "with eth_notebook"] and spread.loc["sleeves"].tolist() == [2, 3]
+    assert 1.0 <= spread.loc["effective_bets", "without"] <= 2.0 and spread.loc["effective_bets", "with eth_notebook"] <= 3.0
+    assert 0.0 < spread.loc["candidate_risk_share", "with eth_notebook"] < 1.0 and np.isnan(spread.loc["candidate_risk_share", "without"])
 
     with pytest.raises(ValueError, match="already has a sleeve"):
         candidate_report(config, config.sleeves[0], bar_loader=synthetic_loader)

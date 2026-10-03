@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.portfolio.allocation import allocate_history, sleeve_scales
+from src.portfolio.allocation import Allocator, allocate_history, sleeve_scales
 from src.portfolio.netting import net_history, net_targets
 
 DAYS = pd.date_range("2024-01-01", periods=200, freq="D", tz="UTC")
@@ -188,3 +188,33 @@ def test_covariance_allocations_use_only_past_sleeve_returns() -> None:
             pd.testing.assert_frame_equal(perturbed.iloc[: cut + 1], scaled.iloc[: cut + 1])
         with pytest.raises(ValueError, match="instrument_returns"):
             allocate_history(weights, {"calm": 1.0, "wild": 1.0}, method)
+
+
+@pytest.mark.parametrize("method", ["risk_parity", "hrp"])
+def test_a_basket_is_one_unit_measured_by_its_own_return(method: str) -> None:
+    """A market-neutral basket earns little from the market move its coins share, so it gets more than a trend sleeve on one of them."""
+    import json
+
+    rng = np.random.default_rng(8)
+    bars = 400
+    index = pd.date_range("2024-01-01", periods=bars, freq="4h", tz="UTC")
+    market = rng.normal(0.0, 0.01, bars)
+    returns = pd.DataFrame({"trend": market, "b__x": market + rng.normal(0.0, 0.002, bars), "b__y": market + rng.normal(0.0, 0.002, bars)}, index=index)
+    weights = pd.DataFrame({"trend": 1.0, "b__x": 0.5, "b__y": -0.5}, index=index)  # the basket is long x, short y
+    groups = {"trend": "trend", "b__x": "b", "b__y": "b"}
+    budgets = {"trend": 1.0, "b__x": 1.0, "b__y": 1.0}
+    allocated = allocate_history(weights, budgets, method, instrument_returns=returns, lookback=120, refit_every=30, groups=groups)
+    scales = allocated / weights
+    assert np.allclose(scales["b__x"], scales["b__y"])  # members share their unit's scale
+    assert np.allclose(scales["trend"] + scales["b__x"], 1.0)  # two units, not three sleeves
+    assert scales["b__x"].iloc[-1] > 3 * scales["trend"].iloc[-1]  # the hedged basket is far calmer than the trend sleeve
+    assert np.allclose(scales.iloc[0], 0.5)  # no history yet: the budgets alone
+
+    allocator = Allocator({"trend": 1.0, "b": 1.0}, method, lookback=120, refit_every=30, groups=groups)
+    for position, stamp in enumerate(index):
+        row = allocator.step(returns.loc[stamp].to_dict() if position else None, weights=weights.loc[stamp].to_dict())
+        assert row["trend"] == pytest.approx(scales["trend"].iloc[position], rel=1e-9) and row["b"] == pytest.approx(scales["b__x"].iloc[position], rel=1e-9)
+        if position % 97 == 0:
+            allocator = Allocator.from_dict(json.loads(json.dumps(allocator.to_dict())))
+    with pytest.raises(ValueError, match="takes no groups"):
+        allocate_history(weights, budgets, "inverse_vol", instrument_returns=returns, groups=groups)

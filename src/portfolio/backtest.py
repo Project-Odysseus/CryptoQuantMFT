@@ -223,10 +223,11 @@ def run_book(
     budgets = {sleeve_id: budget for sleeve_id, budget in config.budgets().items() if sleeve_id in chosen}
     groups = inputs.sleeve_groups or {sleeve_id: sleeve_id for sleeve_id in budgets}
     per_day = inputs.bars_per_day
-    if any(groups.get(sleeve_id, sleeve_id) != sleeve_id for sleeve_id in budgets):
+    grouped = any(groups.get(sleeve_id, sleeve_id) != sleeve_id for sleeve_id in budgets)
+    if grouped and method == "inverse_vol":
+        raise ValueError("a book with baskets can't use 'inverse_vol' allocation (use fixed, equal, risk_parity or hrp)")
+    if grouped and method in ("fixed", "equal"):
         # A basket counts as one sleeve: fixed/equal scales per allocation unit, shared by the basket's members
-        if method not in ("fixed", "equal"):
-            raise ValueError("a book with baskets supports 'fixed' and 'equal' allocation only")
         unit_budgets = {groups[sleeve_id]: budget for sleeve_id, budget in budgets.items()}
         if method == "fixed" and sum(unit_budgets.values()) > 1.0:
             total = sum(unit_budgets.values())
@@ -244,6 +245,7 @@ def run_book(
             instrument_returns=instrument_returns,
             lookback=max(2, round(config.allocation_lookback_days * per_day)),
             refit_every=max(1, round(config.allocation_refit_days * per_day)),
+            groups=groups if grouped else None,  # risk_parity and hrp: a basket's return is the sum of its members'
         )
     allocated = allocated * config.scale
     targets = net_history(allocated, inputs.sleeve_instrument).reindex(columns=inputs.prices.columns, fill_value=0.0)
@@ -330,7 +332,12 @@ def candidate_report(
     Returns:
         {"books": metrics per period for "without" and "with", "alone": the
         candidate at full size, "correlation": its daily-return correlation
-        with every existing sleeve}.
+        with every existing sleeve, "diversification": the effective number
+        of independent bets and the average correlation of the sleeves
+        without and with the candidate, and the candidate's share of the new
+        book's risk (its allocated return's covariance with the book's, over
+        the book's variance: a share near its share of the capital means it
+        adds the same bet again, a small or negative one that it offsets)}.
     """
     if candidate.instrument not in config.instruments:
         raise ValueError(f"{candidate.instrument} is not in the config's [instruments]; add an InstrumentSpec for it first")
@@ -343,12 +350,28 @@ def candidate_report(
     without = run_book(extended, inputs, sleeves=existing, funding_pct_per_day=funding_pct_per_day)
     with_candidate = run_book(extended, inputs, funding_pct_per_day=funding_pct_per_day)
     alone = run_book(extended, inputs, allocation="equal", sleeves=[candidate.id], risk_overlay=False, funding_pct_per_day=funding_pct_per_day)
+    from src.portfolio.risk_model import average_correlation, effective_bets
+
     candidate_returns = daily_returns(alone)
-    correlation = {
-        sleeve_id: candidate_returns.corr(daily_returns(run_book(extended, inputs, allocation="equal", sleeves=[sleeve_id], risk_overlay=False, funding_pct_per_day=funding_pct_per_day)))
-        for sleeve_id in existing
-    }
+    alone_returns = {sleeve_id: daily_returns(run_book(extended, inputs, allocation="equal", sleeves=[sleeve_id], risk_overlay=False, funding_pct_per_day=funding_pct_per_day))
+                     for sleeve_id in existing}
+    correlation = {sleeve_id: candidate_returns.corr(returns) for sleeve_id, returns in alone_returns.items()}
+    before = pd.DataFrame(alone_returns).corr().fillna(0.0).to_numpy(copy=True)  # a sleeve that never traded: uncorrelated
+    after = pd.DataFrame({**alone_returns, candidate.id: candidate_returns}).corr().fillna(0.0).to_numpy(copy=True)
+    for matrix in (before, after):
+        np.fill_diagonal(matrix, 1.0)
+    instrument_returns = inputs.prices.pct_change(fill_method=None)
+    earned = pd.DataFrame({sleeve_id: with_candidate.allocated[sleeve_id].shift(1) * instrument_returns[inputs.sleeve_instrument[sleeve_id]]
+                           for sleeve_id in with_candidate.allocated.columns}).fillna(0.0)
+    book_return = earned.sum(axis=1)
+    variance = float(book_return.var())
+    diversification = pd.DataFrame({
+        "without": {"sleeves": len(before), "effective_bets": effective_bets(before), "average_correlation": average_correlation(before), "candidate_risk_share": float("nan")},
+        f"with {candidate.id}": {"sleeves": len(after), "effective_bets": effective_bets(after), "average_correlation": average_correlation(after),
+                                 "candidate_risk_share": float(earned[candidate.id].cov(book_return) / variance) if variance > 0 else float("nan")},
+    })
     return {
+        "diversification": diversification,
         "books": pd.DataFrame(period_metrics(without, holdout, label="without") + period_metrics(with_candidate, holdout, label=f"with {candidate.id}")),
         "alone": pd.DataFrame(period_metrics(alone, holdout, label=f"{candidate.id} alone")),
         "correlation": pd.Series(correlation, name=candidate.id).to_frame(),

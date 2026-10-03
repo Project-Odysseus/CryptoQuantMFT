@@ -192,3 +192,8 @@ def test_groups_the_benchmark_and_the_exposure_limits_are_validated_and_describe
     assert "benchmark 'kraken_futures:SOL/USD' must be an instrument an enabled sleeve trades" in _problems(risk={"benchmark": "kraken_futures:SOL/USD"})
     assert "max_beta_exposure needs risk.benchmark" in _problems(risk={"max_beta_exposure": 1.0})
     assert "unknown key 'sector'" in _problems(instruments={"kraken_futures:BTC/USD": {"kind": "perp", "sector": "majors"}})
+
+
+def test_the_sleeve_drawdown_pause_is_a_validated_stop() -> None:
+    assert _parse(sleeve0={"stops": {"sleeve_drawdown_pause_pct": 0.2}}).sleeves[0].stops == {"sleeve_drawdown_pause_pct": 0.2}
+    assert "sleeve_drawdown_pause_pct must be above 0 and below 1" in _problems(sleeve0={"stops": {"sleeve_drawdown_pause_pct": 20}})

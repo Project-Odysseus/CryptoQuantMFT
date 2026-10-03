@@ -96,7 +96,7 @@ def main() -> None:
 
     book_rows: list[dict[str, object]] = []
     books: dict[str, PortfolioBacktest] = {}
-    methods = ALLOCATION_METHODS if not config.baskets else ("fixed", "equal")  # baskets allow fixed/equal only
+    methods = ALLOCATION_METHODS if not config.baskets else tuple(method for method in ALLOCATION_METHODS if method != "inverse_vol")
     for method in methods:
         books[method] = run_book(config, inputs, allocation=method, funding_pct_per_day=args.funding_pct_per_day)
         book_rows += period_metrics(books[method], holdout)

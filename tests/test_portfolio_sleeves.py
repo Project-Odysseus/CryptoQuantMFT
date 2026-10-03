@@ -207,3 +207,38 @@ def test_prefix_view_behaves_like_a_list_slice() -> None:
     assert view[::-1] == [5, 4, 3, 2, 1, 0] and view[4::-2] == [4, 2, 0]
     with pytest.raises(IndexError):
         view[6]
+
+
+class _Scripted:
+    """A strategy that returns a fixed signal per bar (all long by default)."""
+
+    def __init__(self, signals: list[float] | None = None) -> None:
+        self.signals = signals
+
+    def signal_series(self, bars: list) -> np.ndarray:
+        return np.ones(len(bars)) if self.signals is None else np.array(self.signals[: len(bars)], dtype=float)
+
+
+def test_a_sleeve_pauses_once_its_own_return_is_too_far_below_its_peak_and_then_starts_a_fresh_count() -> None:
+    closes = [100.0, 110.0, 120.0, 108.0, 100.0, 95.0, 90.0, 80.0, 70.0]  # up 20%, then down
+    spec = _spec(strategy="notebook", stops={"sleeve_drawdown_pause_pct": 0.15})
+    run = run_sleeve(spec, _bars(closes), strategy=_Scripted())
+    reasons = [(decision.action, decision.reason) for decision in run.decisions]
+    assert reasons[:4] == [("enter", None), ("hold", None), ("hold", None), ("hold", None)]  # 108/120: 10% below the peak
+    assert reasons[4] == ("stop", "sleeve_drawdown_pause") and run.decisions[4].details["drawdown"] == pytest.approx(1 - 100 / 120)
+    assert run.weights.tolist() == [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # paused while the signal stays long
+    assert reasons[5:] == [("blocked", "reentry_after_stop")] * 4
+    assert run.state.equity == pytest.approx(1.0) and run.state.peak_equity == pytest.approx(1.0)  # 100 -> 120 -> 100, and the peak restarted there
+
+    wavy = [100.0, 120.0, 100.0, 100.0, 100.0, 97.0, 90.0, 84.0]
+    run = run_sleeve(spec, _bars(wavy), strategy=_Scripted([1, 1, 1, 0, 1, 1, 1, 1]))  # the signal leaves at bar 3, so the pause lifts
+    assert [decision.action for decision in run.decisions] == ["enter", "hold", "stop", "flat", "enter", "hold", "hold", "stop"]
+    assert run.decisions[-1].details["drawdown"] == pytest.approx(0.16)  # 100 -> 84 from the restarted peak, not from 120
+
+    assert SleeveState.from_dict(json.loads(json.dumps(run.state.to_dict()))) == run.state
+    old_checkpoint = {"weight": 0.5, "entry_price": 10.0, "bars_held": 2, "reentry_block": None, "last_signal": 1.0, "trade_returns": []}
+    assert SleeveState.from_dict(old_checkpoint).peak_equity == 1.0
+    plain = run_sleeve(_spec(strategy="notebook"), _bars(closes), strategy=_Scripted())
+    assert plain.state.equity == 1.0 and plain.state.last_price is None and plain.weights.tolist() == [1.0] * 9  # nothing is tracked without the pause
+    with pytest.raises(ValueError, match="sleeve_drawdown_pause_pct"):
+        SleeveRunner(_spec(stops={"sleeve_drawdown_pause_pct": 1.5}))

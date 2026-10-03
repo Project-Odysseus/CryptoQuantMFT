@@ -8,7 +8,14 @@ the whole portfolio to itself (0.8 = long 80% of equity). Allocation
 a time, in this order:
 1. the re-entry gate (`gate_reentry`): after a stop, the stopped side waits
    until the signal has left it;
-2. sleeve stops (ATR, time, drawdown), when configured;
+2. the sleeve's drawdown pause (`sleeve_drawdown_pause_pct`), when configured:
+   the sleeve's own return (its weight times its instrument's return, bar by
+   bar, before costs) is tracked as an equity curve, and once that falls this
+   far from its peak the sleeve closes and waits like after any stop. The peak
+   then restarts from there, so the pause is a break, not a permanent kill.
+   It is a loss budget for the strategy across trades, where the position
+   stops below cap one trade;
+   then the position stops (ATR, time, drawdown), when configured;
 3. an exit when the signal goes flat or flips;
 4. an entry, sized by the sleeve's sizer at the entry bar and then held at that
    size until the position closes. This is what the runtime does, and research
@@ -31,7 +38,8 @@ import numpy as np
 from src.risk.controls import RiskControlConfig, RiskManager, gate_reentry
 from src.risk.sizing import PositionSizer, SizingContext, build_sizer
 
-STOP_KEYS = ("atr_stop_multiplier", "atr_window", "atr_trailing", "time_stop_bars", "position_drawdown_stop_pct")
+PAUSE_KEY = "sleeve_drawdown_pause_pct"
+STOP_KEYS = ("atr_stop_multiplier", "atr_window", "atr_trailing", "time_stop_bars", "position_drawdown_stop_pct", PAUSE_KEY)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +58,8 @@ class SleeveSpec:
             sleeve's weight at entry.
         stops: Optional exits: `atr_stop_multiplier`, `atr_window`, `atr_trailing`
             (trail the ATR stop behind the best close), `time_stop_bars`,
-            `position_drawdown_stop_pct`.
+            `position_drawdown_stop_pct`, `sleeve_drawdown_pause_pct` (close
+            and wait once the sleeve's own return is this far below its peak).
         warmup_bars: History to load before the first decision.
         enabled: A disabled sleeve holds nothing.
     """
@@ -90,6 +99,10 @@ class SleeveState:
     reentry_block: str | None = None
     last_signal: float = 0.0
     trade_returns: list[float] = field(default_factory=list)
+    # The sleeve's own return as an equity curve, for the drawdown pause (tracked only when the pause is configured)
+    equity: float = 1.0
+    peak_equity: float = 1.0
+    last_price: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-ready copy."""
@@ -160,7 +173,11 @@ class SleeveRunner:
         unknown = sorted(set(spec.stops) - set(STOP_KEYS))
         if unknown:
             raise ValueError(f"sleeve {spec.id}: unknown stops {unknown}; use {list(STOP_KEYS)}")
-        self._exits = RiskManager(RiskControlConfig(**spec.stops)) if spec.stops else None
+        self._pause = spec.stops.get(PAUSE_KEY)
+        if self._pause is not None and not 0.0 < float(self._pause) < 1.0:
+            raise ValueError(f"sleeve {spec.id}: {PAUSE_KEY} must be above 0 and below 1 (0.2 = pause after losing 20% from the sleeve's peak)")
+        exits = {key: value for key, value in spec.stops.items() if key != PAUSE_KEY}
+        self._exits = RiskManager(RiskControlConfig(**exits)) if exits else None
 
     def signals(self, bars: Sequence[Any]) -> np.ndarray:
         """The strategy's signal (-1/0/1) at every bar, using data up to each bar only."""
@@ -175,12 +192,24 @@ class SleeveRunner:
         new = SleeveState(
             weight=state.weight, entry_price=state.entry_price, bars_held=state.bars_held,
             reentry_block=state.reentry_block, last_signal=float(signal), trade_returns=list(state.trade_returns),
+            equity=state.equity, peak_equity=state.peak_equity, last_price=state.last_price,
         )
         gated, new.reentry_block, blocked = gate_reentry(float(signal), state.reentry_block)
         side = 1.0 if new.weight > 0 else -1.0 if new.weight < 0 else 0.0
+        if self._pause is not None:
+            if side != 0.0 and state.last_price:
+                new.equity = state.equity * (1.0 + state.weight * (price / state.last_price - 1.0))
+                new.peak_equity = max(state.peak_equity, new.equity)
+            new.last_price = price
 
         if side != 0.0:
             new.bars_held += 1
+            if self._pause is not None and new.peak_equity > 0 and 1.0 - new.equity / new.peak_equity >= float(self._pause):
+                drawdown = 1.0 - new.equity / new.peak_equity
+                self._close_position(new, price)
+                new.reentry_block = "long" if side > 0 else "short"
+                new.peak_equity = new.equity  # the count restarts: the next pause needs a fresh loss of the same size
+                return new, SleeveDecision("stop", 0.0, "sleeve_drawdown_pause", {"drawdown": drawdown})
             if self._exits is not None:
                 decision = self._exits.evaluate_exit(
                     bars=bars, current_bar=bars[-1], position_side="long" if side > 0 else "short",

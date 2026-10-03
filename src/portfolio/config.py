@@ -23,7 +23,7 @@ from src.portfolio.allocation import ALLOCATION_METHODS
 from src.portfolio.basket import BasketSpec
 from src.portfolio.review import ReviewConfig
 from src.portfolio.risk import PortfolioRiskConfig
-from src.portfolio.sleeves import STOP_KEYS, SleeveSpec
+from src.portfolio.sleeves import PAUSE_KEY, STOP_KEYS, SleeveSpec
 from src.runtime.config import BAR_INTERVALS
 
 INTERVALS = tuple(BAR_INTERVALS)  # the runtime's bar lengths, so a config never asks for one it can't build
@@ -285,6 +285,9 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
             errors.append(f"{label} sizing: {exc}")
         for key in sorted(set(table.get("stops", {})) - set(STOP_KEYS)):
             errors.append(f"{label} stops: unknown key '{key}'; allowed: {list(STOP_KEYS)}")
+        pause = dict(table.get("stops", {})).get(PAUSE_KEY)
+        if pause is not None and (isinstance(pause, bool) or not isinstance(pause, (int, float)) or not 0 < pause < 1):
+            errors.append(f"{label} stops: {PAUSE_KEY} must be above 0 and below 1 (0.2 = pause after losing 20% from the sleeve's peak)")
         if not set(table) - allowed_sleeve_keys and budget is not None:
             values = dict(table)
             if "sizing_params" not in values and values.get("sizing", "fixed_fraction") != "fixed_fraction":
@@ -319,8 +322,9 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
             sleeves.append(SleeveSpec(id=member_id, instrument=instrument_id, interval=basket.interval, strategy="basket", budget=basket.budget,
                                       warmup_bars=0, enabled=basket.enabled, basket=basket.id))
         baskets.append(basket)
-    if baskets and portfolio.get("allocation", "equal") not in ("fixed", "equal"):
-        errors.append("[portfolio] allocation must be 'fixed' or 'equal' in a portfolio with baskets (the others need one return series per sleeve)")
+    if baskets and portfolio.get("allocation", "equal") == "inverse_vol":
+        errors.append("[portfolio] allocation can't be 'inverse_vol' in a portfolio with baskets (it sizes by one instrument's volatility); "
+                      "use fixed, equal, risk_parity or hrp")
     used_groups = {spec.group for spec in instruments.values() if spec.group}
     for group in sorted(set(risk.groups) - used_groups):
         errors.append(f"[risk.groups.{group}] has no instruments: add group = \"{group}\" to an [instruments] table")
@@ -395,6 +399,7 @@ def describe(config: PortfolioConfig) -> str:
         lines.append(f"  {spec.id:<28} {spec.kind:<4} short={'yes' if spec.can_short else 'no':<3} max leverage {spec.max_leverage:g}x, fee {spec.taker_fee_pct:.2f}%, slippage {spec.slippage_bps:g} bps")
     groups = config.allocation_groups()
     group_scales = sleeve_scales(config.group_budgets(), config.allocation) if config.allocation in ("fixed", "equal") else {}
+    by_risk = "scale set by volatility" if config.allocation == "inverse_vol" else "scale set by its risk and correlations"
     scales = {sleeve_id: group_scales[group] for sleeve_id, group in groups.items() if group in group_scales}
     lines.append("Sleeves:")
     for sleeve in config.sleeves:
@@ -406,7 +411,7 @@ def describe(config: PortfolioConfig) -> str:
         elif sleeve.id in scales:
             share = f"scale {scales[sleeve.id]:.3g}"
         else:
-            share = "scale set by volatility"
+            share = by_risk
         state = "" if sleeve.enabled else "  [disabled]"
         params = ", ".join(f"{k}={v}" for k, v in sleeve.params.items())
         lines.append(f"  {sleeve.id:<18} {sleeve.instrument:<24} {sleeve.interval:<3} {sleeve.strategy}({params}){' long-only' if sleeve.long_only else ''}; "
@@ -416,7 +421,7 @@ def describe(config: PortfolioConfig) -> str:
         legs = "long only" if basket.long_only else f"long top {basket.quantile:.0%} / short bottom {basket.quantile:.0%}"
         lines.append(f"  {basket.id:<18} basket of {len(basket.coins)} {basket.venue} perps: {basket.signal}, top {basket.top_n} by Binance volume, {legs}, "
                      f"gross {basket.gross:g}, rebalance every {basket.rebalance_days} days; budget {basket.budget:g}"
-                     + (f" -> scale {scale:.3g}" if scale is not None else "") + ("" if basket.enabled else "  [disabled]"))
+                     + (f" -> scale {scale:.3g}" if scale is not None else f" -> {by_risk}") + ("" if basket.enabled else "  [disabled]"))
     risk = config.risk
     venues = f", venues {risk.max_venue_exposure}" if risk.max_venue_exposure else ""
     derisk = (f"de-risk from {risk.drawdown_derisk_start:.0%} drawdown to {risk.drawdown_derisk_floor:.0%} size at {risk.max_drawdown:.0%}, then flatten"
