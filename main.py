@@ -2027,6 +2027,29 @@ def print_portfolio_dashboard(config_path: str) -> int:
     return 0
 
 
+def write_portfolio_tearsheet(config_path: str, out_path: str | None = None) -> int:
+    """Write the running book's tearsheet from its SQLite snapshots; reads only the database."""
+    from src.portfolio.config import PortfolioConfigError, load_portfolio_config
+    from src.portfolio.tearsheet import snapshot_inputs, tearsheet_html
+
+    try:
+        name = load_portfolio_config(config_path).name
+    except PortfolioConfigError as exc:
+        print(f"Portfolio config is not valid.\n{exc}")
+        return 1
+    snapshots = TradeLogger(database_path=settings.database_path).list_portfolio_snapshots(portfolio=name)
+    try:
+        page = tearsheet_html(f"{name}: running book", notes=[f"From {len(snapshots)} runtime snapshots of {config_path}."], **snapshot_inputs(snapshots))
+    except ValueError as exc:
+        print(f"Not enough history for a tearsheet of '{name}' yet ({exc}): it needs snapshots from at least three days.")
+        return 0
+    target = Path(out_path or f"plots/tearsheet_{name}.html")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(page, encoding="utf-8")
+    print(f"Wrote {target}")
+    return 0
+
+
 def telegram_test() -> int:
     """Send one sample trade message, marked TEST, so delivery and formatting can be checked end to end.
 
@@ -2179,6 +2202,8 @@ def main() -> None:
     parser.add_argument("--list-sizing", action="store_true", help="Print every sizing method with its parameters and defaults, then exit")
     parser.add_argument("--telegram-test", action="store_true", help="Send one sample trade message (marked TEST) to the Telegram chat in .env, to check delivery, then exit")
     parser.add_argument("--portfolio", metavar="PATH", default=None, help="Run a portfolio config (several sleeves and instruments) with --runtime paper or live_dry_run; with --dashboard alone, show its latest snapshot. --runtime-iterations 0 runs until Ctrl-C")
+    parser.add_argument("--tearsheet", action="store_true", help="With --portfolio: write a one-page HTML tearsheet of the running book from its SQLite snapshots (equity vs BTC, drawdown, monthly returns, rolling risk, exposure, strategy correlations)")
+    parser.add_argument("--tearsheet-path", default=None, help="Where --tearsheet writes (default plots/tearsheet_<portfolio name>.html)")
     parser.add_argument("--portfolio-state-dir", default=None, help="Where the portfolio checkpoint and paper exchange state live (default data/portfolio/<name>; a fresh temp dir with --use-mock-connector)")
     parser.add_argument("--portfolio-adopt-exchange", action="store_true", help="Live portfolio: set the book to the exchange's positions and collateral before running (after a manual trade or liquidation left it unreconciled); logged")
     parser.add_argument("--portfolio-reset-peak", action="store_true", help="Restart the portfolio's drawdown count from current equity before running (re-arms it after the max-drawdown kill); logged")
@@ -2267,7 +2292,9 @@ def main() -> None:
             raise SystemExit(run_portfolio_runtime(args))
         if args.dashboard:
             raise SystemExit(print_portfolio_dashboard(args.portfolio))
-        parser.error("--portfolio needs --runtime paper|live_dry_run (to run it) or --dashboard (to show it)")
+        if args.tearsheet:
+            raise SystemExit(write_portfolio_tearsheet(args.portfolio, args.tearsheet_path))
+        parser.error("--portfolio needs --runtime paper|live_dry_run (to run it), --dashboard (to show it) or --tearsheet (to chart it)")
     try:
         runtime_config = build_runtime_config_from_args(args, argv=sys.argv[1:])
         if args.runtime:

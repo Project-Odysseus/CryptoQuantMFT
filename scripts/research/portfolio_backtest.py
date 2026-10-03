@@ -42,6 +42,7 @@ from src.portfolio.backtest import PortfolioBacktest, daily_returns, period_metr
 from src.portfolio.book_risk import estimate_stream, exposure_history, exposure_summary, format_exposure
 from src.portfolio.config import load_portfolio_config
 from src.portfolio.risk_model import average_correlation, effective_bets
+from src.portfolio.tearsheet import tearsheet_html
 from src.research.benchmark import benchmark_metrics
 from src.research.governance import write_manifest
 
@@ -124,6 +125,12 @@ def main() -> None:
     last_estimate = estimate_stream(config, inputs.grid_interval, inputs.prices, warmup_prices=inputs.warmup_prices)(len(held) - 1)
     latest = exposure_summary(held.iloc[-1].to_dict(), config=config, estimate=last_estimate, units=inputs.sleeve_groups,
                               sleeve_weights={sleeve_id: (inputs.sleeve_instrument[sleeve_id], float(main_book.allocated[sleeve_id].iloc[-1])) for sleeve_id in main_book.allocated.columns})
+    unit_frame = pd.DataFrame(sleeve_returns)
+    page = tearsheet_html(f"{config.name}: research backtest ('{config.allocation}' allocation)", main_book.result.equity,
+                          benchmark=inputs.prices[benchmark_id], benchmark_name=benchmark_id.split(":", 1)[-1], unit_returns=unit_frame, exposure=exposure,
+                          notes=[f"{args.config}; fees, slippage and {args.funding_pct_per_day:g}%/day funding included; holdout from {holdout:%Y-%m-%d} is part of the period shown.",
+                                 "Strategy returns are each strategy alone at full size, before allocation."])
+    (out / "tearsheet.html").write_text(page, encoding="utf-8")
     limits = {"groups": config.risk.groups, "max_beta_exposure": config.risk.max_beta_exposure, "max_portfolio_vol": config.risk.max_portfolio_vol}
     pd.DataFrame({name: book.result.equity for name, book in books.items()}).to_csv(out / "equity.csv")
 

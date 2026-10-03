@@ -142,6 +142,10 @@ warmup_bars = 60
     assert pd.read_csv(out / "correlation.csv", index_col=0).shape == (2, 2)
     text = capsys.readouterr().out
     assert "Each sleeve alone at full size" in text and "Correlation of the sleeves' daily returns" in text
+    assert "independent bets" in text and "Exposure of the 'equal' book after its risk limits" in text and "At the last bar" in text
+    exposure = pd.read_csv(out / "exposure.csv", index_col=0)
+    assert {"gross", "net", "beta_exposure", "stressed_volatility"} <= set(exposure.columns) and len(exposure) > 100
+    assert "<h2>Exposure</h2>" in (out / "tearsheet.html").read_text()
 
 
 def test_a_venue_without_a_history_loader_is_reported() -> None:
