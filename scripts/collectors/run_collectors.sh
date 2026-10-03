@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Light research collectors that restart on failure: Binance + Bybit liquidations (no order books, a few MB a day)
-# and hourly Deribit option chains (~5 MB a day). History for these can't be downloaded later, so they should run
+# hourly Deribit option chains (~5 MB a day), and Kraken Futures spreads and book depth (~7 MB a day). History for these can't be downloaded later, so they should run
 # on the always-on machine. Funding, OI and long/short ratios are not collected: their history is backfilled from
 # public REST and the Binance archive (src/data/positioning.py).
 #
@@ -23,5 +23,7 @@ forever() {  # name, command...: rerun the command whenever it exits, with a sho
 
 forever liquidations "$PY" main.py --record-market-data --record-config config/market_data.liquidations.json &
 forever option_chains "$PY" main.py --record-option-chains BTC ETH --option-chain-interval 3600 &
+# Kraken Futures spreads (every perp, each 10 min) and book depth (the multi-strategy book's coins, each 2 h): ~7 MB a day
+forever kraken_spreads "$PY" scripts/collectors/kraken_spreads.py config/portfolio.multi_paper.toml &
 trap 'kill 0' INT TERM
 wait
