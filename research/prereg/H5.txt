@@ -1,0 +1,89 @@
+PRE-REGISTRATION H5: DERIBIT-IMPLIED PROBABILITIES PREDICT WHERE KALSHI DAILY BTC MARKETS SETTLE
+Version 1. Written 2026-10-03, before any H5 test was run. Changes after results = a new version (lock it again), logged
+as extra trials.
+
+PRIOR EXPOSURE
+- notebooks/prediction_markets.ipynb, run 2026-10-03: ONE live snapshot of Kalshi daily quotes next to a flat-volatility
+  N(d2) value from Deribit's implied volatility. In it Kalshi quoted in-the-money levels above the model (about 0.94
+  against 0.90 with a day left). No history of this comparison has been looked at.
+- H3 (research log 2026-09-28): BTC implied volatility ran about 6 points above realized. Options-implied
+  distributions are therefore expected to be too wide.
+- The same notebook compared a realized-volatility model with Kalshi's 15-MINUTE markets (the market won). That is a
+  different market and a different model.
+
+MARKET BEHAVIOUR
+Kalshi's quoted probability that BTC settles above a level differs from the probability Deribit's option prices imply
+for the same level and time, and where they differ the options are partly right.
+
+MECHANISM
+Deribit's option market is deeper and professional; Kalshi's flow is largely retail, pays a fee, and cannot easily be
+arbitraged against options (different venue, collateral and settlement index). Information in the option smile should
+therefore reach Kalshi's quotes late or incompletely. Against this, option prices carry a volatility risk premium
+(H3), which makes their implied probabilities too extreme in the tails; so the options need not be right everywhere.
+
+OBSERVABLE PREDICTION AND EXPECTED SIGN
+- gap = implied - Kalshi mid. In (outcome - Kalshi mid) = b x gap, b is above 0 (the options add information) and
+  below 1 (they are not simply right).
+- Mean gap is negative for levels below the price and positive for levels above it (the options' distribution is wider).
+
+DATA
+- Deribit: BTC option chain snapshots recorded about hourly by this project's collector (data/options/deribit/BTC; they
+  exist from 2026-09-26, with gaps whenever the recording machine slept). Each snapshot carries Deribit's index price.
+- Kalshi (public API): the daily "Bitcoin price at 5 PM New York" event, series KXBTCD, one event per day (ticker
+  KXBTCD-<yy><MON><dd>17), levels every 250 USD. Quote at a snapshot = the latest 1-minute candle's Yes bid and ask
+  within the 10 minutes before the snapshot; markets without a two-sided quote in that window are left out. Outcome
+  and settlement value from Kalshi after settlement.
+- Rows: every (snapshot, level) with the level within +-3% of Deribit's index (|ln(K/S)| <= 0.03) and 1 to 26 hours
+  left to settlement. Built by src/research/hypotheses/binary_panel.py (build_panel).
+- PILOT window: snapshots before 2026-10-04 00:00 UTC (already recorded when this was written). It checks that the
+  pipeline works. Its numbers are reported and labelled pilot; no conclusion is drawn from them and no rule below is
+  changed because of them (a change = a new version).
+- CONFIRMATORY window: snapshots from 2026-10-05 00:00 UTC to 2026-11-16 00:00 UTC. None of it existed when this was
+  written. It is run once, after 2026-11-17, when every market in it has settled. If it holds fewer than 20 daily
+  events with rows (the recorder sleeps with the laptop), the end date moves forward day by day until it holds 20.
+- This is stricter than the project's frozen-holdout rule (2026 price history is frozen for strategy research): the
+  test data are in the future.
+
+INFERENCE
+Rows overlap heavily (one event at many snapshots and many levels share one outcome). Every interval is a bootstrap
+over whole events (2000 resamples, 95%); rows are never treated as independent.
+
+SIGNAL DEFINITION (at each snapshot time t; nothing after t is used)
+- S = the snapshot's Deribit index price (median over the chain). T = Kalshi's settlement time.
+- sigma(K) = Deribit mark implied volatility at strike K and time T: linear in strike within each listed expiry, then
+  linear in total variance between the listed expiries around T (flat at the first expiry's value if T is earlier).
+- implied = -(C(K + h) - C(K - h)) / (2h), C = Black-76 call at forward S with sigma(.) at that strike, h = 0.25% of K.
+  This keeps the smile's slope. implied_flat = N(d2) at sigma(K) is the secondary definition.
+- Kalshi mid = (Yes bid + Yes ask) / 2 as of t.
+
+PRIMARY OUTCOME
+b, the slope through the origin of (outcome - Kalshi mid) on (implied - Kalshi mid), over all settled rows of the
+confirmatory window, with its event-bootstrap 95% interval.
+
+SECONDARY OUTCOMES
+- The same slope with implied_flat.
+- Brier score of the Kalshi mid and of implied.
+- Mean gap, Kalshi mid, implied and realized frequency in five moneyness buckets (K more than 1% below, 0.25-1% below,
+  within 0.25%, 0.25-1% above, more than 1% above the index).
+- Taker rule: buy Yes when implied - Yes ask - fee > 0.02; buy No when (1 - implied) - No ask - fee > 0.02; fee =
+  0.07 x p x (1 - p) per contract (Kalshi's general schedule); hold to settlement. Mean profit per contract with its
+  event-bootstrap interval, and the number of trades and events.
+
+PARAMETER GRID (2 configurations)
+implied (smile) and implied_flat. The 0.02 margin, the +-3% moneyness band, the 1-26 hour band and the 10-minute quote
+window are fixed above. Nothing else is run.
+
+PASS CRITERIA (confirmatory window, at least 20 events)
+- b > 0 with the interval excluding 0, AND
+- the taker rule's mean profit per contract > 0 with the interval excluding 0.
+If only the first holds, the options carry information that the spread and the fee absorb: reported, not tradable.
+
+KILL IF
+b's interval includes 0 or lies below it.
+
+KNOWN RISKS AND BIASES
+- Different settlement numbers: Kalshi uses a 60-second average of CF Benchmarks' BRTI; S is Deribit's index.
+- Quotes up to 10 minutes old; Deribit dailies expire at 08:00 UTC, so sigma is interpolated to Kalshi's time.
+- About 40 events in six weeks: only a large effect can pass. Snapshots cluster in the hours the laptop is awake.
+- Kalshi's fee rate is from its general schedule, not re-read for this series.
+- Capacity, and whether this venue may be used at all (employer rules, country availability), are not addressed.

@@ -1,0 +1,79 @@
+PRE-REGISTRATION H4: DOWNSIDE PROTECTION BOUGHT AS KALSHI "NO" CONTRACTS IS OVERPRICED
+Version 1. Written 2026-10-03, before any H4 test was run. Changes after results = a new version (lock it again), logged
+as extra trials.
+
+PRIOR EXPOSURE
+- notebooks/prediction_markets.ipynb, run 2026-10-03: one live snapshot of Kalshi daily quotes, and a table of how a
+  perp hedges a binary. No history of Kalshi's daily markets has been looked at.
+- H3 (research log 2026-09-28): BTC option buyers paid about 6 volatility points more than was realized. Insurance on
+  BTC has been expensive in the option market.
+
+MARKET BEHAVIOUR
+A "No" contract on "BTC above K" with K just below the price pays 1 if BTC settles below K: a digital put, i.e.
+protection for a long position. Bought at the ask plus the fee, it loses money on average.
+
+MECHANISM
+Insurance against a fall is in demand and its sellers are paid for carrying it (the same premium H3 measured in
+options). On Kalshi the buyer also pays the spread and a fee. The practical question behind this: is "perp long plus
+Kalshi No contracts" a sensible capped-loss position, and what does the cap cost?
+
+OBSERVABLE PREDICTION AND EXPECTED SIGN
+Mean profit per contract (payoff - cost) of buying this protection is below 0. Its cost exceeds the breach rate.
+
+DATA
+- Deribit: BTC option chain snapshots recorded about hourly by this project's collector (data/options/deribit/BTC; they
+  exist from 2026-09-26, with gaps whenever the recording machine slept). Each snapshot carries Deribit's index price.
+- Kalshi (public API): the daily "Bitcoin price at 5 PM New York" event, series KXBTCD, one event per day (ticker
+  KXBTCD-<yy><MON><dd>17), levels every 250 USD. Quote at a snapshot = the latest 1-minute candle's Yes bid and ask
+  within the 10 minutes before the snapshot; markets without a two-sided quote in that window are left out. Outcome
+  and settlement value from Kalshi after settlement.
+- Rows: every (snapshot, level) with the level within +-3% of Deribit's index (|ln(K/S)| <= 0.03) and 1 to 26 hours
+  left to settlement. Built by src/research/hypotheses/binary_panel.py (build_panel).
+- PILOT window: snapshots before 2026-10-04 00:00 UTC (already recorded when this was written). It checks that the
+  pipeline works. Its numbers are reported and labelled pilot; no conclusion is drawn from them and no rule below is
+  changed because of them (a change = a new version).
+- CONFIRMATORY window: snapshots from 2026-10-05 00:00 UTC to 2026-11-16 00:00 UTC. None of it existed when this was
+  written. It is run once, after 2026-11-17, when every market in it has settled. If it holds fewer than 20 daily
+  events with rows (the recorder sleeps with the laptop), the end date moves forward day by day until it holds 20.
+- This is stricter than the project's frozen-holdout rule (2026 price history is frozen for strategy research): the
+  test data are in the future.
+
+INFERENCE
+Rows overlap heavily (one event at many snapshots and many levels share one outcome). Every interval is a bootstrap
+over whole events (2000 resamples, 95%); rows are never treated as independent.
+
+SIGNAL DEFINITION (the protection bought; at each snapshot time t)
+- Rows with the level 0.5% to 2% below Deribit's index (-0.02 <= ln(K/S) <= -0.005) and at least 2 hours to settlement.
+- cost = No ask + fee, No ask = 1 - Yes bid, fee = 0.07 x No ask x (1 - No ask) per contract.
+- payoff = 1 if the market settled No (BTC below the level), else 0. Held to settlement.
+
+PRIMARY OUTCOME
+Mean of (payoff - cost) per contract over all settled rows of the confirmatory window, with its event-bootstrap 95%
+interval.
+
+SECONDARY OUTCOMES
+- Breach rate (share of rows that paid) next to the mean cost.
+- Richness: cost - (1 - implied), implied = the Deribit smile's probability of settling above the level (as in H5).
+- cover_bps: the cost, in basis points of a long position's size, of holding (S - K) / S contracts per unit of
+  position, i.e. enough to be paid the whole loss down to K if it is breached.
+- The Deribit put spread around the same level at the nearest expiry (within 14 hours), ask of the upper put minus bid
+  of the lower, per unit of payout, next to Kalshi's cost on the same rows. It is a ramp at another expiry, so it is
+  context, not a like-for-like price.
+
+PARAMETER GRID (1 configuration)
+The moneyness band, the 2-hour minimum and the fee are fixed above. Nothing else is run.
+
+PASS CRITERIA (confirmatory window, at least 20 events)
+Mean (payoff - cost) < 0 with the interval excluding 0: the protection is overpriced, and selling it, not buying it, is
+the side with the premium.
+
+KILL IF
+The interval includes 0 (not distinguishable from fairly priced) or lies above 0 (cheap protection: then the
+capped-loss position is worth costing properly against options).
+
+KNOWN RISKS AND BIASES
+- A premium for sellers is paid for rare large losses; six weeks can show a premium only because no crash happened.
+- About 40 events; rows within an event are one outcome. Snapshots cluster in the hours the laptop is awake.
+- Buying at the ask is assumed fillable at the quoted size; sizes are not checked.
+- Different settlement index than the perp being protected (Kalshi: BRTI; the perp: Kraken's mark).
+- Kalshi's fee rate is from its general schedule. Whether this venue may be used at all is not addressed.
