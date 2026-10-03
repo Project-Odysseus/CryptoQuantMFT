@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.portfolio.allocation import Allocator, allocate_history, sleeve_scales
+from src.portfolio.allocation import Allocator, allocate_history, bar_number, refit_rows, sleeve_scales
 from src.portfolio.netting import net_history, net_targets
 
 DAYS = pd.date_range("2024-01-01", periods=200, freq="D", tz="UTC")
@@ -59,9 +59,11 @@ def test_allocate_history_inverse_vol_refits_on_schedule_from_past_returns_only(
     assert scaled.iloc[0].tolist() == [0.5, 0.5]  # no history yet: budgets alone
     later = scaled.iloc[90:]
     assert (later["calm"] > 0.7).all() and (later.sum(axis=1).round(12) == 1.0).all()
-    for start in range(0, len(DAYS), 30):
-        block = scaled.iloc[start : start + 30]
-        assert (block.nunique() == 1).all()  # held between refits
+    starts = refit_rows(DAYS, 30)
+    assert starts == [0, 17, 47, 77, 107, 137, 167, 197] and all(bar_number(DAYS[row], 86400) % 30 == 0 for row in starts[1:])  # 2024-01-18 is day 19740
+    for start, end in zip(starts, starts[1:] + [len(DAYS)]):
+        assert (scaled.iloc[start:end].nunique() == 1).all()  # held between refits
+    assert not scaled.iloc[starts[3] - 1].equals(scaled.iloc[starts[3]])  # and changed at one
 
     for cut in (45, 100, 150):
         changed = returns.copy()
@@ -111,7 +113,7 @@ def test_the_runtime_allocator_matches_allocate_history_bar_by_bar_and_survives_
         allocator = Allocator(budgets, method, lookback=40, refit_every=15)
         rows = []
         for stamp, row in returns.iterrows():
-            rows.append(allocator.step(row.to_dict(), weights=weights.loc[stamp].to_dict()))
+            rows.append(allocator.step(row.to_dict(), weights=weights.loc[stamp].to_dict(), bar=bar_number(stamp, 86400)))
             allocator = Allocator.from_dict(json.loads(json.dumps(allocator.to_dict())))
         scales = pd.DataFrame(rows, index=DAYS)[["calm", "wild"]]
         np.testing.assert_allclose((scales * weights).to_numpy(), expected.to_numpy(), rtol=1e-9)
@@ -212,9 +214,43 @@ def test_a_basket_is_one_unit_measured_by_its_own_return(method: str) -> None:
 
     allocator = Allocator({"trend": 1.0, "b": 1.0}, method, lookback=120, refit_every=30, groups=groups)
     for position, stamp in enumerate(index):
-        row = allocator.step(returns.loc[stamp].to_dict() if position else None, weights=weights.loc[stamp].to_dict())
+        row = allocator.step(returns.loc[stamp].to_dict() if position else None, weights=weights.loc[stamp].to_dict(), bar=bar_number(stamp, 14400))
         assert row["trend"] == pytest.approx(scales["trend"].iloc[position], rel=1e-9) and row["b"] == pytest.approx(scales["b__x"].iloc[position], rel=1e-9)
         if position % 97 == 0:
             allocator = Allocator.from_dict(json.loads(json.dumps(allocator.to_dict())))
     with pytest.raises(ValueError, match="takes no groups"):
         allocate_history(weights, budgets, "inverse_vol", instrument_returns=returns, groups=groups)
+
+
+@pytest.mark.parametrize("method", ["inverse_vol", "risk_parity", "hrp"])
+def test_runs_that_start_on_different_days_agree_once_each_has_a_lookback_of_history(method: str) -> None:
+    """The refit schedule follows the calendar, so a runtime started later holds the same scales as a longer backtest."""
+    import json
+
+    returns = _returns(seed=11)
+    weights = pd.DataFrame({"calm": 1.0, "wild": np.where(np.arange(len(DAYS)) % 40 < 20, 1.0, -0.5)}, index=DAYS)
+    budgets = {"calm": 1.0, "wild": 1.0}
+    lookback, every = 40, 15
+    full = allocate_history(weights, budgets, method, instrument_returns=returns, lookback=lookback, refit_every=every) / weights
+    late = allocate_history(weights.iloc[37:], budgets, method, instrument_returns=returns.iloc[37:], lookback=lookback, refit_every=every) / weights.iloc[37:]
+    settled = refit_rows(DAYS, every)
+    first_shared = next(row for row in settled if row >= 37 + lookback + 1)  # the first refit with a full lookback behind the late start
+    pd.testing.assert_frame_equal(late.loc[DAYS[first_shared]:], full.loc[DAYS[first_shared]:])
+    assert not np.allclose(late.iloc[0], full.iloc[37])  # before that the late run only has its budgets
+
+    allocator = Allocator(budgets, method, lookback=lookback, refit_every=every)  # a runtime started at row 37, restarted halfway
+    for position in range(37, len(DAYS)):
+        stamp = DAYS[position]
+        row = allocator.step(returns.loc[stamp].to_dict(), weights=weights.loc[stamp].to_dict(), bar=bar_number(stamp, 86400))
+        if position >= first_shared:
+            assert row == pytest.approx(full.loc[stamp].to_dict(), rel=1e-9)
+        if position == 120:
+            allocator = Allocator.from_dict(json.loads(json.dumps(allocator.to_dict())))
+
+
+def test_an_allocator_checkpoint_from_before_the_calendar_schedule_still_loads() -> None:
+    old = {"budgets": {"a": 1.0, "b": 1.0}, "method": "inverse_vol", "lookback": 30, "refit_every": 10, "bars_seen": 57, "scales": {"a": 0.7, "b": 0.3},
+           "previous_weights": {}, "history": {"a": [0.01] * 30, "b": [0.03, -0.03] * 15}}
+    allocator = Allocator.from_dict(old)
+    assert allocator.step({"a": 0.01, "b": 0.02}, bar=1001) == {"a": 0.7, "b": 0.3}  # not a refit bar: the saved scales carry on
+    assert allocator.step({"a": 0.01, "b": 0.02}, bar=1010) != {"a": 0.7, "b": 0.3}  # refit at the next calendar bar

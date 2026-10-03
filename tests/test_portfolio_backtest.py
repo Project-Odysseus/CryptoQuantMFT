@@ -199,12 +199,13 @@ def test_the_runtime_path_bar_by_bar_matches_the_research_backtest(method: str) 
     """Portfolio plan step 2.7: the same bars through the runtime core give the research targets at every grid bar.
 
     The runtime path sees bars as they complete. Each sleeve steps when one of its own bars closes (a daily sleeve
-    once a day, on the day's last 4h bar), the allocator steps once per grid bar, and netting combines them. Every
-    sleeve state and the allocator go through a JSON checkpoint on every bar, as a restart would.
+    once a day, on the day's last 4h bar), the allocator steps once per grid bar from the first candle on (as a
+    runtime replays its history at a cold start), and netting combines them. Every sleeve state and the allocator
+    go through a JSON checkpoint on every bar, as a restart would.
     """
     import json
 
-    from src.portfolio.allocation import Allocator
+    from src.portfolio.allocation import Allocator, bar_number
     from src.portfolio.netting import net_targets
     from src.portfolio.sleeves import SleeveRunner, SleeveState
 
@@ -233,15 +234,15 @@ def test_the_runtime_path_bar_by_bar_matches_the_research_backtest(method: str) 
                 state, _ = sleeve["runner"].step(sleeve["state"], history, sleeve["runner"].signals(history)[-1])
                 sleeve["state"] = SleeveState.from_dict(json.loads(json.dumps(state.to_dict())))
                 sleeve["done"] += 1
-        if stamp < inputs.measure_start:
-            continue
         returns = {sleeve_id: (closes[s["spec"].instrument][stamp] / previous_close[s["spec"].instrument] - 1.0) if previous_close else float("nan")
                    for sleeve_id, s in sleeves.items()}
-        scales = allocator.step(returns, weights={sleeve_id: s["state"].weight for sleeve_id, s in sleeves.items()})
+        scales = allocator.step(returns, weights={sleeve_id: s["state"].weight for sleeve_id, s in sleeves.items()}, bar=bar_number(stamp, 14400))
         allocator = Allocator.from_dict(json.loads(json.dumps(allocator.to_dict())))
+        previous_close = {instrument: series[stamp] for instrument, series in closes.items()}
+        if stamp < inputs.measure_start:
+            continue
         net, _ = net_targets({sleeve_id: (s["spec"].instrument, s["state"].weight * scales[sleeve_id]) for sleeve_id, s in sleeves.items()})
         runtime[stamp] = net
-        previous_close = {instrument: series[stamp] for instrument, series in closes.items()}
 
     runtime_frame = pd.DataFrame.from_dict(runtime, orient="index").reindex(columns=research.columns)
     assert len(runtime_frame) == len(research)

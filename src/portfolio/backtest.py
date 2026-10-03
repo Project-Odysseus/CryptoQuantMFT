@@ -87,6 +87,9 @@ class PortfolioInputs:
     measure_start: pd.Timestamp
     sleeve_groups: dict[str, str] = field(default_factory=dict)  # sleeve id -> allocation unit (a basket's members share one)
     warmup_prices: pd.DataFrame | None = None  # the grid closes before `measure_start`: they warm the risk model up
+    # Each sleeve's weights before `measure_start`. With `warmup_prices` they give the allocation its history, so its
+    # scales at the first measured bar are the ones a runtime that has replayed the same candles would hold.
+    warmup_sleeve_weights: pd.DataFrame | None = None
 
     @property
     def bars_per_day(self) -> float:
@@ -189,6 +192,7 @@ def prepare_inputs(config: PortfolioConfig, *, bar_loader: BarLoader | None = No
         measure_start=grid[first],
         sleeve_groups=config.allocation_groups(),
         warmup_prices=prices.iloc[:first],
+        warmup_sleeve_weights=pd.DataFrame(weights).iloc[:first],
     )
 
 
@@ -239,14 +243,20 @@ def run_book(
         if method == "fixed" and sum(budgets.values()) > 1.0:
             total = sum(budgets.values())
             budgets = {sleeve_id: budget / total for sleeve_id, budget in budgets.items()}
-        instrument_returns = pd.DataFrame({sleeve_id: inputs.prices[inputs.sleeve_instrument[sleeve_id]].pct_change() for sleeve_id in budgets})
+        # Allocate over the warmup too, then keep the measured part: the scales depend on the returns before each
+        # refit, and the runtime has replayed those bars by the time it trades
+        warm = inputs.warmup_prices is not None and inputs.warmup_sleeve_weights is not None and len(inputs.warmup_prices) > 0
+        prices = pd.concat([inputs.warmup_prices, inputs.prices]) if warm else inputs.prices
+        own = pd.concat([inputs.warmup_sleeve_weights, inputs.sleeve_weights]) if warm else inputs.sleeve_weights
+        instrument_returns = pd.DataFrame({sleeve_id: prices[inputs.sleeve_instrument[sleeve_id]].pct_change(fill_method=None) for sleeve_id in budgets})
         allocated = allocate_history(
-            inputs.sleeve_weights[list(budgets)], budgets, method,
+            own[list(budgets)], budgets, method,
             instrument_returns=instrument_returns,
             lookback=max(2, round(config.allocation_lookback_days * per_day)),
             refit_every=max(1, round(config.allocation_refit_days * per_day)),
             groups=groups if grouped else None,  # risk_parity and hrp: a basket's return is the sum of its members'
-        )
+            bar_seconds=BAR_INTERVALS[inputs.grid_interval],
+        ).loc[inputs.sleeve_weights.index]
     allocated = allocated * config.scale
     targets = net_history(allocated, inputs.sleeve_instrument).reindex(columns=inputs.prices.columns, fill_value=0.0)
 

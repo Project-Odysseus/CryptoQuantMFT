@@ -41,12 +41,19 @@ is measured by what it actually earns and loses, not by its coins' volatility.
 `inverse_vol` can't be used with baskets: it sizes by one instrument's volatility.
 
 Volatilities and covariances come from past data only and are refreshed every
-`refit_every` bars, so budgets don't churn every bar.
+`refit_every` bars, so budgets don't churn every bar. The refreshes follow the
+calendar, not a count from wherever a run happened to start: a bar is a refit
+bar when its number since 1970-01-01 (its open time divided by the bar length)
+is divisible by `refit_every`. A research backtest and a runtime that started
+on different days therefore refit on the same bars, from the same lookback of
+returns, and give the same scales once each has a lookback of history behind
+it. The first bar of any run sets scales too, from whatever history exists.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -54,6 +61,24 @@ import pandas as pd
 ALLOCATION_METHODS = ("fixed", "equal", "inverse_vol", "risk_parity", "hrp")
 COVARIANCE_METHODS = ("risk_parity", "hrp")
 MIN_ACTIVE_BARS = 10
+
+
+def bar_number(stamp: datetime | pd.Timestamp, bar_seconds: float) -> int:
+    """Whole bars of `bar_seconds` between 1970-01-01 UTC and a bar's open `stamp`: the calendar the refits follow."""
+    return int(pd.Timestamp(stamp).timestamp() // bar_seconds)
+
+
+def refit_rows(index: pd.DatetimeIndex, refit_every: int, *, bar_seconds: float | None = None) -> list[int]:
+    """The rows of `index` at which scales are refreshed: the first row and every calendar refit bar after it.
+
+    `bar_seconds` defaults to the index's usual spacing.
+    """
+    if not len(index):
+        return []
+    if bar_seconds is None:
+        spacing = pd.Series(index).diff().median()
+        bar_seconds = spacing.total_seconds() if pd.notna(spacing) and spacing > pd.Timedelta(0) else 86400.0
+    return [0] + [row for row in range(1, len(index)) if bar_number(index[row], bar_seconds) % max(1, refit_every) == 0]
 
 
 def sleeve_covariance(block: np.ndarray) -> np.ndarray | None:
@@ -198,6 +223,7 @@ def allocate_history(
     lookback: int = 90,
     refit_every: int = 30,
     groups: Mapping[str, str] | None = None,
+    bar_seconds: float | None = None,
 ) -> pd.DataFrame:
     """Scale each sleeve's weight history (columns = sleeve ids) by its allocation over time.
 
@@ -209,11 +235,15 @@ def allocate_history(
     `instrument_returns` has one column per sleeve with the returns of that
     sleeve's instrument on the same index; `inverse_vol`, `risk_parity` and
     `hrp` need it. Scales are set from returns before each refit bar and held
-    until the next refit. For the covariance methods, a sleeve's return at a
-    bar is its weight from the previous bar times its instrument's return.
+    until the next refit (`refit_rows`: the calendar schedule; `bar_seconds`
+    defaults to the index's spacing). For the covariance methods, a sleeve's
+    return at a bar is its weight from the previous bar times its instrument's
+    return.
     """
     sleeves = [sleeve for sleeve in sleeve_weights.columns if sleeve in budgets]
     scales = pd.DataFrame(index=sleeve_weights.index, columns=sleeves, dtype=float)
+    starts = refit_rows(sleeve_weights.index, refit_every, bar_seconds=bar_seconds)
+    spans = list(zip(starts, starts[1:] + [len(scales)]))
     if method in COVARIANCE_METHODS:
         if instrument_returns is None:
             raise ValueError(f"{method} allocation needs instrument_returns")
@@ -225,9 +255,9 @@ def allocate_history(
         # a unit's return: the sum of its members' (NaN only when none of them has one, e.g. the first bar)
         unit_returns = np.column_stack([earned[[sleeve for sleeve in sleeves if unit_of[sleeve] == unit]].sum(axis=1, min_count=1).to_numpy(dtype=float)
                                         for unit in ordered])
-        for start in range(0, len(scales), refit_every):
+        for start, end in spans:
             values = covariance_scales(ordered, method, unit_returns[max(0, start - lookback) : start], min_periods=max(10, lookback // 3))
-            scales.iloc[start : start + refit_every] = [values[unit_of[sleeve]] for sleeve in sleeves]
+            scales.iloc[start:end] = [values[unit_of[sleeve]] for sleeve in sleeves]
         return sleeve_weights[sleeves] * scales
     if groups and any(groups.get(sleeve, sleeve) != sleeve for sleeve in sleeves):
         raise ValueError(f"{method} allocation takes no groups: scale baskets with sleeve_scales on their unit budgets")
@@ -236,10 +266,10 @@ def allocate_history(
         if instrument_returns is None:
             raise ValueError("inverse_vol allocation needs instrument_returns")
         volatility = instrument_returns[sleeves].rolling(lookback, min_periods=max(10, lookback // 3)).std().shift(1)
-    for start in range(0, len(scales), refit_every):
+    for start, end in spans:
         row_vol = volatility.iloc[start].to_dict() if volatility is not None else None
         values = sleeve_scales({sleeve: budgets[sleeve] for sleeve in sleeves}, method, volatility=row_vol)
-        scales.iloc[start : start + refit_every] = [values[sleeve] for sleeve in sleeves]
+        scales.iloc[start:end] = [values[sleeve] for sleeve in sleeves]
     return sleeve_weights[sleeves] * scales
 
 
@@ -247,12 +277,13 @@ class Allocator:
     """`allocate_history` one bar at a time, for the runtime: the same scales on the same schedule.
 
     The runtime sees one grid bar at a time, not a whole history. Call `step`
-    once per grid bar with each sleeve's instrument return over that bar (and,
-    for `risk_parity` and `hrp`, each sleeve's current own weight: the return
-    it earned over the bar is the weight passed on the previous step times the
-    instrument return). The scales are refreshed every `refit_every` bars
-    (counting from the first bar) from the returns *before* the current bar,
-    exactly as `allocate_history` does. The state round-trips through
+    once per grid bar with the bar's calendar number (`bar_number`) and each
+    sleeve's instrument return over that bar (and, for `risk_parity` and
+    `hrp`, each sleeve's current own weight: the return it earned over the bar
+    is the weight passed on the previous step times the instrument return).
+    The scales are refreshed on the first step and on every calendar refit bar
+    from the returns *before* the current bar, exactly as `allocate_history`
+    does. The state round-trips through
     `to_dict` / `from_dict` for checkpoints.
     """
 
@@ -273,7 +304,7 @@ class Allocator:
         self.lookback = lookback
         self.refit_every = max(1, refit_every)
         self.min_periods = max(10, lookback // 3)
-        self.bars_seen = 0
+        self.fitted = False
         self.scales: dict[str, float] = {}
         self.history: dict[str, list[float]] = {sleeve: [] for sleeve in self.budgets}  # instrument returns, or sleeve returns for the covariance methods
         self.previous_weights: dict[str, float] = {}
@@ -286,18 +317,20 @@ class Allocator:
             out[sleeve] = float(np.std(finite, ddof=1)) if len(finite) >= self.min_periods else float("nan")
         return out
 
-    def step(self, instrument_returns: Mapping[str, float] | None = None, weights: Mapping[str, float] | None = None) -> dict[str, float]:
+    def step(self, instrument_returns: Mapping[str, float] | None = None, weights: Mapping[str, float] | None = None, *, bar: int) -> dict[str, float]:
         """The scales for this bar.
 
         Args:
+            bar: The bar's calendar number (`bar_number(stamp, bar_seconds)`); it decides whether this is a refit bar.
             instrument_returns: Sleeve id to its instrument's return over the bar that just closed.
             weights: Sleeve id to the sleeve's own (unallocated) weight now, held over the next bar. Needed for
                 `risk_parity` and `hrp`; ignored otherwise.
         """
         covariance = self.method in COVARIANCE_METHODS
-        if self.bars_seen % self.refit_every == 0:
+        if not self.fitted or bar % self.refit_every == 0:
+            self.fitted = True
             if covariance:
-                block = np.column_stack([self.history[sleeve] for sleeve in self.budgets]) if self.bars_seen else np.empty((0, len(self.budgets)))
+                block = np.column_stack([self.history[sleeve] for sleeve in self.budgets]) if any(self.history.values()) else np.empty((0, len(self.budgets)))
                 self.scales = covariance_scales(self.budgets, self.method, block, min_periods=self.min_periods)
             else:
                 volatility = self._volatility() if self.method == "inverse_vol" else None
@@ -318,14 +351,13 @@ class Allocator:
             del self.history[unit][: -self.lookback]
         if covariance:
             self.previous_weights = {sleeve: float((weights or {}).get(sleeve, 0.0)) for sleeve in self.groups}
-        self.bars_seen += 1
         return dict(self.scales)
 
     def to_dict(self) -> dict[str, object]:
         """JSON-ready state (NaN returns become None)."""
         return {
             "budgets": self.budgets, "method": self.method, "lookback": self.lookback, "refit_every": self.refit_every,
-            "bars_seen": self.bars_seen, "scales": self.scales, "previous_weights": self.previous_weights, "groups": self.groups,
+            "fitted": self.fitted, "scales": self.scales, "previous_weights": self.previous_weights, "groups": self.groups,
             "history": {sleeve: [value if np.isfinite(value) else None for value in values] for sleeve, values in self.history.items()},
         }
 
@@ -334,7 +366,8 @@ class Allocator:
         """Rebuild from `to_dict` output."""
         allocator = cls(payload["budgets"], payload["method"], lookback=payload["lookback"], refit_every=payload["refit_every"],  # type: ignore[arg-type]
                         groups=payload.get("groups"))  # type: ignore[arg-type]
-        allocator.bars_seen = int(payload["bars_seen"])  # type: ignore[arg-type]
+        # older checkpoints counted bars instead: with scales present, carry on and refit at the next calendar bar
+        allocator.fitted = bool(payload.get("fitted", bool(payload.get("scales"))))
         allocator.scales = dict(payload["scales"])  # type: ignore[arg-type]
         allocator.history = {sleeve: [float("nan") if value is None else float(value) for value in values] for sleeve, values in dict(payload["history"]).items()}  # type: ignore[union-attr]
         allocator.previous_weights = {sleeve: float(value) for sleeve, value in dict(payload.get("previous_weights") or {}).items()}  # type: ignore[union-attr]

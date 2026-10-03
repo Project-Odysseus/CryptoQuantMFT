@@ -372,6 +372,8 @@ def test_strategies_that_become_one_bet_and_a_broken_exposure_limit_alert_once(t
     asyncio.run(runtime.run(iterations=3))
     quiet = [alert["event_type"] for alert in notifier.alerts]
     assert "strategy_correlation" not in quiet and "effective_bets" not in quiet and "exposure_limit" not in quiet
+    assert len(engine.unit_returns.rows) > 100  # the cold start replayed the candle history, so the window starts full
+    engine.unit_returns.rows.clear()
     for step in range(40):  # both strategies now earn the same returns: one bet
         engine.unit_returns.add({"btc_ma_1d": 0.01 * (-1) ** step, "eth_ma_4h": 0.0101 * (-1) ** step})
     breach = {"rule": "max_vega_per_point", "underlying": "BTC", "value": 0.02, "limit": 0.01}

@@ -130,8 +130,10 @@ def test_a_paper_portfolio_trades_and_the_book_always_matches_the_exchange(tmp_p
     assert sum(attribution.values()) == engine.book.equity() - engine.book.initial_equity
 
 
-def test_the_engine_targets_match_the_research_backtest() -> None:
-    config = _config()
+@pytest.mark.parametrize("method", ["equal", "inverse_vol", "risk_parity", "hrp"])
+def test_the_engine_targets_match_the_research_backtest(method: str) -> None:
+    """Under every allocation that adapts: the engine replays its candle history at a cold start, in the backtest's order, and refits on the same calendar bars."""
+    config = _config(allocation=method)
     engine = _engine(config)
     targets = {}
     for index in range(FIRST, LAST):
@@ -494,6 +496,7 @@ def test_a_crash_after_the_exchange_filled_an_order_books_it_once_and_sends_noth
     clean, clean_logger, restarted, logger = _run_with_a_crash(tmp_path, arm)
     assert restarted.book.to_dict() == clean.book.to_dict()
     assert _fills_of(logger) == _fills_of(clean_logger) and len(_fills_of(logger)) >= nth
+    assert {trade["source"] for trade in logger.list_trades()} == {"portfolio_paper"}  # tagged with the mode, never as live
     assert restarted.adapters["kraken_futures"].positions() == clean.adapters["kraken_futures"].positions()
 
 

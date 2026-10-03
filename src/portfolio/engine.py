@@ -41,7 +41,7 @@ import numpy as np
 from src.execution.adapters import ExecutionAdapter, SandboxExecutionAdapter
 from src.execution.cross_margin import SandboxCrossMarginPerpAdapter
 from src.execution.perps import assumed_perp_contract
-from src.portfolio.allocation import Allocator
+from src.portfolio.allocation import Allocator, bar_number
 from src.portfolio.book import BookPosition, PortfolioBook
 from src.portfolio.book_risk import build_risk_model, exposure_summary
 from src.portfolio.config import PortfolioConfig
@@ -269,6 +269,11 @@ class PortfolioEngine:
         self._flush_tax(now)  # funding booked while marking
         self._check_equity_drift(now)
 
+        # Each sleeve's new bars wait in a queue until their grid bar comes up. A bar stamped t of length L closes at
+        # t + L, which is the close of the grid bar stamped t + L - grid. Sleeves and the allocator then advance
+        # together, one grid bar at a time, so a catch-up over many bars (a cold start, a restart after downtime)
+        # replays them in the order the research backtest does, and both arrive at the same scales.
+        queues: dict[str, dict[str, Any]] = {}
         for sleeve_id, spec in self.sleeves.items():
             if spec.basket is not None:
                 continue  # set by its basket (`_step_baskets`)
@@ -277,18 +282,36 @@ class PortfolioEngine:
             fresh = [index for index, bar in enumerate(series) if last is None or bar.timestamp > last]
             if not fresh:
                 continue
-            runner = self.runners[sleeve_id]
             try:
-                signals = runner.signals(series)  # causal: element i only uses bars up to i, so one pass serves every new bar
-                for index in fresh:
-                    self.states[sleeve_id], decision = runner.step(self.states[sleeve_id], _Prefix(series, index + 1), signals[index])
-                    report.sleeve_decisions[sleeve_id] = decision
-                    if decision.action not in ("hold", "flat") or sleeve_id not in self.last_decisions:
-                        self.last_decisions[sleeve_id] = {"action": decision.action, "reason": decision.reason, "bar": series[index].timestamp.isoformat()}
-                self.sleeve_error_counts.pop(sleeve_id, None)
+                signals = self.runners[sleeve_id].signals(series)  # causal: element i only uses bars up to i, so one pass serves every new bar
             except Exception as exc:  # noqa: BLE001 - one broken sleeve must not stop the book
                 self._sleeve_failed(sleeve_id, exc, report, now)
-            self.last_sleeve_bar[sleeve_id] = series[fresh[-1]].timestamp
+                self.last_sleeve_bar[sleeve_id] = series[fresh[-1]].timestamp
+                continue
+            queues[sleeve_id] = {"series": series, "signals": signals, "fresh": fresh, "next": 0,
+                                 "lands": timedelta(seconds=BAR_INTERVALS[spec.interval]) - self.grid_step}
+
+        def step_sleeves(until: datetime) -> None:
+            """Step every sleeve over its queued bars that decide at or before the grid bar stamped `until`."""
+            for sleeve_id, queue in list(queues.items()):
+                series, fresh, runner = queue["series"], queue["fresh"], self.runners[sleeve_id]
+                stepped = False
+                try:
+                    while queue["next"] < len(fresh) and series[fresh[queue["next"]]].timestamp + queue["lands"] <= until:
+                        index = fresh[queue["next"]]
+                        self.states[sleeve_id], decision = runner.step(self.states[sleeve_id], _Prefix(series, index + 1), queue["signals"][index])
+                        report.sleeve_decisions[sleeve_id] = decision
+                        if decision.action not in ("hold", "flat") or sleeve_id not in self.last_decisions:
+                            self.last_decisions[sleeve_id] = {"action": decision.action, "reason": decision.reason, "bar": series[index].timestamp.isoformat()}
+                        self.last_sleeve_bar[sleeve_id] = series[index].timestamp
+                        queue["next"] += 1
+                        stepped = True
+                    if stepped:
+                        self.sleeve_error_counts.pop(sleeve_id, None)
+                except Exception as exc:  # noqa: BLE001 - one broken sleeve must not stop the book
+                    self._sleeve_failed(sleeve_id, exc, report, now)
+                    self.last_sleeve_bar[sleeve_id] = series[fresh[-1]].timestamp
+                    del queues[sleeve_id]
 
         self._step_baskets(bars, report, now)
 
@@ -296,6 +319,7 @@ class PortfolioEngine:
         stale = sorted(set(stale) | {instrument for instrument, series in grid.items() if series[-1].timestamp < latest})
         new_grid_bars = sorted({bar.timestamp for series in grid.values() for bar in series if self.last_grid_bar is None or bar.timestamp > self.last_grid_bar})
         if not new_grid_bars:
+            step_sleeves(latest)  # a sleeve bar that arrived after its grid bar was decided on: it counts from the next decision
             if self.open_plan and not self.pending_orders:  # a decision cut short by a crash: send what was left of it
                 self._event("WARNING", "portfolio_plan_resumed", f"resuming {len(self.open_plan)} order(s) of the decision interrupted by a restart",
                             {"orders": [entry["order_id"] for entry in self.open_plan]}, now)
@@ -310,12 +334,13 @@ class PortfolioEngine:
         closes = {instrument: {bar.timestamp: float(bar.close) for bar in series} for instrument, series in grid.items()}
         scales: dict[str, float] = {}
         for stamp in new_grid_bars:
+            step_sleeves(stamp)
             returns = {}
             for sleeve_id, spec in self.sleeves.items():
                 close, previous = closes[spec.instrument].get(stamp), self.last_grid_close.get(spec.instrument)
                 returns[sleeve_id] = close / previous - 1.0 if close is not None and previous else float("nan")
-            # the sleeves' own weights for the covariance methods; after a multi-bar catch-up they are the latest ones
-            unit_scales = self.allocator.step(returns, weights={sleeve_id: float(self.states[sleeve_id].weight) for sleeve_id in self.sleeves})
+            own_weights = {sleeve_id: float(self.states[sleeve_id].weight) for sleeve_id in self.sleeves}  # as of this grid bar
+            unit_scales = self.allocator.step(returns, weights=own_weights, bar=bar_number(stamp, self.grid_step.total_seconds()))
             scales = {sleeve_id: unit_scales.get(self.groups.get(sleeve_id, sleeve_id), 0.0) for sleeve_id in self.sleeves}
             self.risk_model.step({spec.instrument: returns[sleeve_id] for sleeve_id, spec in self.sleeves.items()})
             if self.held_weights:  # what each strategy earned over the bar, from the weights it held into it
@@ -325,6 +350,7 @@ class PortfolioEngine:
                     held = self.held_weights.get(sleeve_id, 0.0)
                     earned[unit] = earned.get(unit, 0.0) + (held * value if held and np.isfinite(value) else 0.0)
                 self.unit_returns.add(earned)
+            self.held_weights = own_weights
             for instrument in instruments:
                 if stamp in closes[instrument]:
                     self.last_grid_close[instrument] = closes[instrument][stamp]
@@ -333,7 +359,6 @@ class PortfolioEngine:
                         {"orders": [entry["order_id"] for entry in self.open_plan]}, now)
             self.open_plan = []
         self.last_grid_bar = new_grid_bars[-1]
-        self.held_weights = {sleeve_id: float(self.states[sleeve_id].weight) for sleeve_id in self.sleeves}
         report.decided = True
         self._decide_and_trade(report, scales=scales, prices=prices, stale=stale, now=now)
         report.mismatches = self.reconcile()
@@ -742,7 +767,8 @@ class PortfolioEngine:
             return
         self._tax_fill(instrument, meta["side"], filled_size, fill_price, fee, float(realized), now, meta["order_id"])
         if self.trade_logger is not None:
-            self.trade_logger.log_trade(timestamp=now, source="portfolio", exchange=spec.venue, pair=spec.symbol, side=meta["side"], price=fill_price,
+            # the mode is part of the source, so a paper soak's fills can never be read as real ones
+            self.trade_logger.log_trade(timestamp=now, source=f"portfolio_{self.mode}", exchange=spec.venue, pair=spec.symbol, side=meta["side"], price=fill_price,
                                         size=filled_size, fee=fee, strategy_id=strategy_id)
             self._event("INFO", "portfolio_fill", f"{meta['side']} {filled_size} {instrument} @ {fill_price} ({meta['reason']})", fill, now)
         if self.notifier is not None:
@@ -1063,7 +1089,7 @@ class PortfolioEngine:
         exposure = exposure_summary(weights, config=self.config, estimate=self.risk_model.estimate(), units=self.groups,
                                     sleeve_weights={sleeve_id: (row["instrument"], row["allocated_weight"]) for sleeve_id, row in sleeves.items()})
         return {
-            "portfolio": self.config.name, "cycle": self.cycle, "equity": equity, "initial_equity": float(self.book.initial_equity),
+            "portfolio": self.config.name, "mode": self.mode, "cycle": self.cycle, "equity": equity, "initial_equity": float(self.book.initial_equity),
             "peak_equity": peak, "drawdown": max(0.0, 1.0 - equity / peak) if peak > 0 else 0.0,
             "day_start_equity": float(self.book.day_start_equity), "gross": gross, "net": sum(weights.values()),
             "limits": {"max_gross_exposure": risk.max_gross_exposure, "max_net_exposure": risk.max_net_exposure,
