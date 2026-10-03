@@ -42,8 +42,8 @@ direction is in `aspirations.md`.
   SIGKILL right after Kraken accepted its first order (buy 0.0001 BTC at 84,619) and restarted. 17 of 18 checks passed:
   one order on Kraken, nothing sent twice, the book equal to the account, the 20% stop resting, the position closed at
   84,618, cost 0.0084 USD. The failed check found a bug, fixed (`todo_important.md`)
-- [ ] Run `python scripts/maintenance/backfill_drill_buy_20261003.py --write` once: the drill's buy is missing from the trade
-  log and the tax ledger (its fee, 0.0042 USD)
+- [x] The drill's buy was missing from the trade log and the tax ledger (its fee, 0.0042 USD): added 2026-10-03 with
+  `scripts/maintenance/backfill_drill_buy_20261003.py --write`
 - [x] Paper and live runs of one config no longer share a name in `portfolio_snapshots` (2026-10-03): a live book is
   stored as `<name>-live`, and the dashboard, tearsheet and performance review show the two apart
 - [x] A dead-man's switch and a daily summary (2026-09-27, `src/utils/heartbeat.py`; runbook). To switch it on:
