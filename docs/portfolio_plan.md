@@ -294,6 +294,8 @@ Python and need no network, so they are good hotspot work.
     hierarchical risk parity on the covariance of the sleeves' own returns, each sleeve's volatility measured while
     it is positioned. Compared on the example and live books the same day: no in-sample gain over `equal`
     (research log), so `equal` stays the default.
+  - Refits follow the calendar (2026-10-03): a bar is a refit bar when its number since 1970 is divisible by the
+    refit length, so research and a runtime started on another day refit on the same bars.
 - Tests: budgets sum as documented; `inverse_vol` gives a low-vol sleeve a bigger weight; no look-ahead.
 
 **1.4 Research script and study**
@@ -530,7 +532,9 @@ ledger written).
 - One venue failing must not stop the others. Mark its instruments stale, hold them, and alert.
 - Restart safety: checkpoint after every cycle with atomic writes. On start, reconcile with the adapters before
   trading. Use client order ids with the sleeve id and cycle number so a retried submit is recognisable.
-- Idempotency: planning the same cycle twice must not double-order. Store the last processed bar per instrument.
+- Idempotency: planning the same cycle twice must not double-order. Store the last processed bar per instrument, and
+  write every order into the checkpoint before sending it (done 2026-10-03, after the restart drill showed a kill
+  between the exchange's fill and the checkpoint left the book and the exchange apart for good).
 - Every refusal has a reason code (`below_min_size`, `stale_instrument`, `venue_cap`, `drawdown_halt`, ...).
   Nothing is silently sized to zero.
 - Config errors surface at startup, not at the first trade.

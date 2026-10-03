@@ -67,6 +67,25 @@ Dropped: Kraken/Firi counterparty monitoring (all trading is on Kraken).
   like any other, with a `late_fill` alert. The soak test also found that its own fake exchange reused order ids;
   fixed in the test.
 
+## Found by the restart drill (2026-10-03)
+
+- [x] **A kill between the exchange's fill and the engine's checkpoint left the book and the exchange apart for
+  good.** `scripts/drills/restart_drill.py` kills the paper runtime with SIGKILL inside a decision. Before the fix, 12
+  of 19 scenarios failed: the paper exchange had saved its fill, the engine's checkpoint was from before the
+  decision, so the restart planned from a stale book, sent the same orders again, saw the mismatch and allowed only
+  reductions for the rest of the run. The live path had the same window: an order was recorded as pending only at
+  the end of its cycle, so a crash right after `sendorder` would have re-planned and re-sent it. Fixed: every order
+  is written to the checkpoint before it is sent, together with the unsent rest of the decision; a restart asks the
+  exchange about it (Kraken by client order id, the paper exchange by order id), books the fill once, and sends the
+  rest of the plan unless a new bar has closed. All scenarios now pass on the example, BTC live and multi-strategy
+  configs, and a fake-Kraken test covers the live window. Not yet seen against Kraken itself.
+- [x] **Portfolio fills were logged with the same source in every mode** (`portfolio`), so a paper soak's fills
+  would have sat next to live ones in `trades`. They now carry the mode (`portfolio_paper`, `portfolio_live`). The
+  tax ledger was never affected (paper doesn't write it).
+- [ ] **Residual window, accepted for now:** a crash between the tax-ledger write and the fill's event-log write
+  (microseconds apart) would record that fill's tax rows twice after the restart. The fill event is what marks a
+  fill as already logged.
+
 ## Done: the guarded live path (2026-09-18 to 2026-09-25)
 
 1. The `live_dry_run` path is defined and wired through the orchestrator, with exchange-shaped sandbox routing and

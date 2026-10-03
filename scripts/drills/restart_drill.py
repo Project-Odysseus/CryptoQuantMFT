@@ -204,7 +204,7 @@ def outcome(state_dir: Path) -> dict[str, Any]:
             if float(position["size"]) != 0.0:
                 exchange[f"{venue}:{symbol}"] = float(position["size"])
     with closing(sqlite3.connect(state_dir / "drill.db")) as connection:
-        fills = connection.execute("SELECT timestamp, pair, side, size, price FROM trades WHERE source = 'portfolio' ORDER BY id").fetchall()
+        fills = connection.execute("SELECT timestamp, pair, side, size, price FROM trades WHERE source LIKE 'portfolio%' ORDER BY id").fetchall()
         mismatches = connection.execute("SELECT COUNT(*) FROM operational_events WHERE event_type = 'portfolio_reconciliation_mismatch'").fetchone()[0]
     cash = sum(float(amount) for amount in engine["book"]["cash"].values())
     return {"book": book, "exchange": exchange, "fills": [tuple(row) for row in fills], "mismatches": int(mismatches), "cash": cash,

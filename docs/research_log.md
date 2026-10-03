@@ -22,8 +22,8 @@ independent bets**: the five trend sleeves correlate 0.34-0.76 with each other a
 | Allocation (limits on), IS / HO | Sharpe | CAGR | Vol | Max DD | Costs %/yr | Avg beta to BTC |
 | --- | --- | --- | --- | --- | --- | --- |
 | equal | 0.92 / 1.69 | 24% / 44% | 27% / 23% | 23% / 15% | 2.7 / 2.8 | 0.42 / 0.44 |
-| risk_parity | 0.58 / 2.82 | 11% / 64% | 22% / 18% | 16% / 11% | 5.3 / 5.5 | 0.29 / 0.30 |
-| hrp | -0.26 / 3.73 | -7% / 90% | 20% / 18% | 25% / 7% | 7.9 / 8.4 | 0.14 / 0.18 |
+| risk_parity | 0.61 / 2.94 | 12% / 67% | 22% / 18% | 15% / 11% | 5.4 / 5.6 | 0.29 / 0.29 |
+| hrp | -0.05 / 3.76 | -3% / 89% | 19% / 17% | 24% / 7% | 8.3 / 8.6 | 0.13 / 0.16 |
 
 | Limits (allocation equal), IS / HO | Sharpe | Vol | Max DD | Max beta to BTC | Max vol at crash correlations |
 | --- | --- | --- | --- | --- | --- |
@@ -34,9 +34,9 @@ independent bets**: the five trend sleeves correlate 0.34-0.76 with each other a
 | All (the config) | 0.92 / 1.69 | 27% / 23% | 23% / 15% | 1.00 / 1.01 | 43% / 43% |
 
 - **Keep `equal`.** `risk_parity` and `hrp` (which can now treat a basket as one unit, by its own return) move
-  capital from trend to the calm, uncorrelated basket. Chosen in-sample that loses (0.58 and -0.26 against 0.92): the
-  basket made nothing in-sample on Kraken prices and costs 5-8% a year at these weights. Their holdout Sharpes (2.8,
-  3.7) are the basket's lucky 15 months again (2026-09-29 entry), not evidence for the allocation.
+  capital from trend to the calm, uncorrelated basket. Chosen in-sample that loses (0.61 and -0.05 against 0.92): the
+  basket made nothing in-sample on Kraken prices and costs 5-8% a year at these weights. Their holdout Sharpes (2.9,
+  3.8) are the basket's lucky 15 months again (2026-09-29 entry), not evidence for the allocation.
 - **The limits are insurance, at a small price.** In-sample the volatility cap cuts volatility from 32% to 27% and
   the worst drawdown from 26% to 23% for 0.03 of Sharpe; the book's largest volatility at crash correlations falls
   from 63% to 43%. The beta cap trims the few weeks the book amounted to 1.2x BTC. The caps hold on the targets;
@@ -50,9 +50,14 @@ independent bets**: the five trend sleeves correlate 0.34-0.76 with each other a
 change the funding decision on the basket, which still waits for Kraken's real alt spreads (TODO section 2). More
 uncorrelated sleeves, not a cleverer allocation, are what would raise the 2.9 bets.
 
-Found on the way: the engine's `inverse_vol`, `risk_parity` and `hrp` scales differ from the research backtest's after
-a cold start, because each counts its refit schedule from its own first bar (`code-optimize.md`). `equal` and
-`fixed`, which every config uses, are unaffected.
+Found on the way, and fixed the same day: the engine's `inverse_vol`, `risk_parity` and `hrp` scales differed from the
+research backtest's after a cold start (by up to 3-6% of equity on the test books), because each counted its refit
+schedule from its own first bar and the engine replayed its history with the sleeves' latest weights. Refits now follow
+the calendar (a bar whose number since 1970 is divisible by the refit length), research allocates over the warmup
+history too, and the engine steps sleeves and allocator together bar by bar; the engine parity test now covers every
+method. The risk-parity and HRP rows above are from after the fix (before: 0.58 / 2.82 and -0.26 / 3.73). The
+2026-09-28 table moves by a few hundredths too (example book: inverse_vol 1.46 / 1.00, risk_parity 1.44 / 1.16, hrp
+1.39 / 1.37); its conclusion, keep `equal`, stands. `equal` and `fixed` were never affected.
 
 ---
 

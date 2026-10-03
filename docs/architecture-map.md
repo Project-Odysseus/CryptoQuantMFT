@@ -191,7 +191,12 @@ Plan and status: `docs/portfolio_plan.md`.
 - `src/portfolio/book.py`: positions, cash per venue, FX, funding and per-sleeve attribution, in `Decimal`.
 - `src/portfolio/engine.py`: `PortfolioEngine.run_cycle`, which runs bars -> sleeves -> targets -> orders -> one
   adapter per venue (`SandboxCrossMarginPerpAdapter` in `src/execution/cross_margin.py` for paper perps) -> book,
-  then reconciliation, logging, Telegram and a checkpoint.
+  then reconciliation, logging, Telegram and a checkpoint. Sleeves and the allocator advance together, one grid bar
+  at a time, also when catching up over many bars, and the allocator refits on calendar bars
+  (`allocation.bar_number`), so the runtime's scales equal the research backtest's. Each order is written to the
+  checkpoint before it is sent (`pending_orders`, with the unsent rest of the decision in `open_plan`), so a restart
+  after a crash settles it from the exchange instead of sending it again (`_execute`, `_settle_pending`;
+  `scripts/drills/restart_drill.py` and `network_drill.py` exercise this with real kills).
 - `src/portfolio/backtest.py` plus `scripts/research/portfolio_backtest.py`: the same core over history.
 - `src/portfolio/feed.py`: completed exchange candles per (instrument, interval) over REST, loaded concurrently in
   threads, with each instrument failing on its own. `MockCandleFeed` supplies synthetic candles for smoke runs.

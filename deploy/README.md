@@ -60,6 +60,12 @@ Then **stop the Mac's collectors**, so the two machines don't record the same th
 ```bash
 launchctl bootout gui/$(id -u)/com.cryptoquant.collectors && rm ~/Library/LaunchAgents/com.cryptoquant.collectors.plist
 ```
+If the paper soak runs on the Mac (`deploy/launchd/com.cryptoquant.paper.plist`), stop it the same way and copy its state
+across before starting `cryptoquant-paper` here, so the soak continues instead of starting over:
+```bash
+launchctl bootout gui/$(id -u)/com.cryptoquant.paper && rm ~/Library/LaunchAgents/com.cryptoquant.paper.plist
+rsync -a ~/Odysseus/CryptoQuantMFT/data/portfolio/btc-live-paper/ <user>@<desktop-ip>:~/CryptoQuantMFT/data/portfolio/btc-live-paper/
+```
 
 ## 4. Daily use
 

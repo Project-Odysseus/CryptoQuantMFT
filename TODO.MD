@@ -27,13 +27,22 @@ direction is in `aspirations.md`.
 
 - [ ] An always-on machine (section 3). For a local test, `caffeinate -i` stops the Mac from sleeping
 - [ ] A paper soak of `config/portfolio.btc_live.toml` on real candles: at least a few days before live, 2-4 weeks
-  before scaling up (portfolio plan phase 5). Watch memory, candle gaps, restarts and alert volume
+  before scaling up (portfolio plan phase 5). Watch memory, candle gaps, restarts and alert volume.
+  **Started 2026-10-03** on the Mac as a LaunchAgent (`deploy/launchd/com.cryptoquant.paper.plist`, state in
+  `data/portfolio/btc-live-paper/`, output in `logs/paper/`); tick this once it has run clean for the days above
 - [x] A fault-injection soak test (2026-09-27, `tests/test_fault_injection_soak.py`): the real live adapter and engine
   for ~1,700 cycles against a Kraken Futures that times out, returns 503s and rate limits, rejects, loses responses
   and fills late. It found a real bug (a fill reaching `/fills` after its order was written off was never booked),
   now fixed
-- [ ] A crash and restart drill, in paper and then live at one lot: `kill -9` mid-cycle, turn the network off for a
-  few minutes, restart with the same state dir. No duplicate orders, and the book matches Kraken afterwards
+- [x] A crash and restart drill in paper (2026-10-03): `scripts/drills/restart_drill.py` (kill -9 at six points inside a
+  decision and at random, on three configs) and `scripts/drills/network_drill.py` (the network cut around a kill -9, on
+  real candles). The first run found a real fault, now fixed: a kill between the exchange's fill and the checkpoint left
+  the book and the exchange apart for good (`todo_important.md`)
+- [ ] The same drill live at one lot: `kill -9` the live book right after an order goes out, restart with the same
+  state dir. No duplicate orders, and the book matches Kraken afterwards (the fake-Kraken test passes; Kraken itself is untested)
+- [ ] Paper and live runs of one config share its name in `portfolio_snapshots`, so the dashboard, the tearsheet and the
+  performance review would mix the paper soak with the live book. Give live its own name (or filter on the snapshot's
+  `mode`) before the live start
 - [x] A dead-man's switch and a daily summary (2026-09-27, `src/utils/heartbeat.py`; runbook). To switch it on:
   create a healthchecks.io check and set `HEALTHCHECK_URL` in `.env`
 - [x] Retries with backoff on Kraken's temporary errors (timeouts, 429/5xx, `EService:Unavailable`, rate limits),

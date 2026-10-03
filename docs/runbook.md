@@ -266,6 +266,10 @@ python main.py --portfolio config/portfolio.example.toml --tearsheet      # char
 - **Execution:** `paper` and `live_dry_run` both trade against sandbox accounts shaped like the venues: one
   cross-margin account per perp venue, with fees, slippage, funding and liquidation. For `--runtime live`, see
   "Live portfolio trading" below.
+- **Paper soak on the Mac:** `deploy/launchd/com.cryptoquant.paper.plist` runs the BTC book in paper as a LaunchAgent
+  (restarted if it dies, no idle sleep while it runs), with its state in `data/portfolio/btc-live-paper/` and its
+  output in `logs/paper/`. Install and remove commands are in the file. Fills in the trade log carry the mode in
+  their source (`portfolio_paper`, `portfolio_live_dry_run`, `portfolio_live`).
 - **State:** `data/portfolio/<name>/engine.json` (book, sleeves, allocator) and `paper_<venue>.json` (the sandbox
   account). Delete the folder to start fresh. `--use-mock-connector` uses synthetic candles in a fresh temp folder, so
   it never touches the real paper state.
@@ -550,6 +554,31 @@ python main.py \
 ```
 
 4. Verify the restored state and recent report output before continuing.
+
+## Crash and network drills (portfolio)
+
+Two scripts practise what a real outage does. Both are paper only, use a state folder and database of their own, and
+send nothing to Telegram. Run them after any change to `src/portfolio/engine.py`, the adapters or the runtime.
+
+```bash
+python scripts/drills/restart_drill.py config/portfolio.example.toml     # kill -9 inside decisions, on replayed candles (~2 min)
+python scripts/drills/network_drill.py config/portfolio.btc_live.toml    # network loss around a kill -9, on real candles (~2 min)
+```
+
+- **Restart drill:** kills the runtime with SIGKILL at six points inside a decision (an order recorded but not sent,
+  sent but not booked, booked but not checkpointed, a half-written checkpoint, ...) and at random times, restarts
+  it, and compares the end state with a run that was never interrupted: same fills, same positions and cash, the
+  book equal to the paper exchange, no mismatch logged.
+- **Network drill:** runs the real command through a local proxy and switches the proxy off, so only that process
+  loses its network. It checks that the runtime keeps cycling on its last candles, alerts once, sends no orders,
+  stops itself when restarted without any candles, and resumes cleanly when the network is back.
+- **Why a crash inside a decision is safe:** the engine writes each order into its checkpoint *before* sending it
+  (`pending_orders`), and the rest of the decision's orders next to it (`open_plan`). After a restart it asks the
+  exchange what became of the recorded order (Kraken by client order id, the paper exchange by order id), books the
+  fill once, and sends the rest of the plan (`portfolio_plan_resumed`), unless a new bar has closed in the
+  meantime, in which case the new decision replaces it (`portfolio_plan_dropped`). A fill the dead process had
+  already logged is booked but not logged again (`portfolio_fill_recovered`).
+- **Still to drill by hand, live at one lot:** the same kill -9 against Kraken itself (`TODO.MD`, section 1).
 
 ## Crash and reconnect recovery
 
