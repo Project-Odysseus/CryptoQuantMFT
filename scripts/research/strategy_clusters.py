@@ -26,6 +26,7 @@ import pandas as pd
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
 
+from src.portfolio.risk_model import effective_bets
 from src.research import load_bars
 from src.research.catalog import CATALOG, build_strategy
 from src.research.governance import write_manifest
@@ -39,12 +40,6 @@ def strategy_returns(name: str, bars: list) -> pd.Series:
     held = np.r_[0.0, signals[:-1]]  # decided at the previous close
     index = pd.DatetimeIndex([bar.timestamp for bar in bars])
     return pd.Series(held * bar_returns, index=index).resample("1D").sum()
-
-
-def effective_bets(correlation: pd.DataFrame) -> float:
-    """(sum of eigenvalues)^2 / sum of squares: 1 when all move together, N when all are independent."""
-    eigenvalues = np.clip(np.linalg.eigvalsh(correlation.to_numpy()), 0.0, None)
-    return float(eigenvalues.sum() ** 2 / (eigenvalues**2).sum())
 
 
 def main() -> None:
