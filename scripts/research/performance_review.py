@@ -54,7 +54,9 @@ def main() -> None:
     criteria = {config.name: config.review for config in configs if config.review is not None}
     with pd.option_context("display.width", 200, "display.max_columns", 20, "display.float_format", "{:.4f}".format):
         for name in names:
-            tables = review([snap for snap in snapshots if str(snap.get("portfolio")) == name], benchmark=args.benchmark, criteria=criteria.get(name))
+            # a live book is stored as "<config name>-live" and is held to its config's criteria
+            book_criteria = criteria.get(name) or criteria.get(name.removesuffix("-live"))
+            tables = review([snap for snap in snapshots if str(snap.get("portfolio")) == name], benchmark=args.benchmark, criteria=book_criteria)
             print(f"\n=== {name}: {tables['window']}")
             for title in ("summary", "versus", "instruments", "sleeves", "kill criteria"):
                 if title in tables:

@@ -1056,6 +1056,15 @@ class PortfolioEngine:
         self._save()
         return report
 
+    @property
+    def snapshot_name(self) -> str:
+        """The name this book's snapshots are stored under: the config's, with "-live" added for a live book.
+
+        A config is paper-run before it goes live, and both runs keep writing snapshots. Under one name the
+        dashboard, the tearsheet and the kill criteria would read simulated and real equity as one history.
+        """
+        return live_book_name(self.config.name) if self.mode == "live" else self.config.name
+
     def snapshot(self, report: CycleReport | None = None) -> dict[str, Any]:
         """What the book holds and why, for the dashboard: instruments, sleeves, risk usage and the last decision."""
         equity = float(self.book.equity())
@@ -1089,7 +1098,7 @@ class PortfolioEngine:
         exposure = exposure_summary(weights, config=self.config, estimate=self.risk_model.estimate(), units=self.groups,
                                     sleeve_weights={sleeve_id: (row["instrument"], row["allocated_weight"]) for sleeve_id, row in sleeves.items()})
         return {
-            "portfolio": self.config.name, "mode": self.mode, "cycle": self.cycle, "equity": equity, "initial_equity": float(self.book.initial_equity),
+            "portfolio": self.snapshot_name, "mode": self.mode, "cycle": self.cycle, "equity": equity, "initial_equity": float(self.book.initial_equity),
             "peak_equity": peak, "drawdown": max(0.0, 1.0 - equity / peak) if peak > 0 else 0.0,
             "day_start_equity": float(self.book.day_start_equity), "gross": gross, "net": sum(weights.values()),
             "limits": {"max_gross_exposure": risk.max_gross_exposure, "max_net_exposure": risk.max_net_exposure,
@@ -1259,6 +1268,11 @@ class PortfolioEngine:
         self._event("WARNING", "portfolio_peak_reset", f"equity peak reset from {old:,.2f} to {float(self.book.peak_equity):,.2f}", {"old_peak": old}, now)
         self._save()
         return old
+
+
+def live_book_name(config_name: str) -> str:
+    """The snapshot name of a config's live book (its paper and dry-run books use the config's own name)."""
+    return f"{config_name}-live"
 
 
 def vars_of(item: Any) -> dict[str, Any]:

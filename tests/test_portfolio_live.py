@@ -681,3 +681,23 @@ def test_a_crash_right_after_kraken_took_an_order_is_settled_from_fills_and_neve
     restarted._flush_tax(_now(index + 3))
     fees = [event for event in logger.list_tax_events(transaction_types=["TRADING_FEE"]) if not event["metadata"].get("kind")]
     assert len(fees) == len(fake.sent_orders())  # one fee record per order: the recovered fill is in the ledger once
+
+
+def test_a_live_book_stores_its_snapshots_under_its_own_name(tmp_path, capsys) -> None:
+    """The paper soak and the live book of one config must not read as one history."""
+    import main
+    from config import settings
+
+    fake = FakeKraken()
+    logger = TradeLogger(database_path=settings.database_path)
+    live = _live_engine(fake, tmp_path, logger=None)
+    report = _cycle(live, fake, FIRST)
+    snap = live.snapshot(report)
+    assert snap["portfolio"] == "engine-test-live" and snap["mode"] == "live" and live.snapshot_name == "engine-test-live"
+    paper = dict(snap, portfolio="trend-core", mode="paper", equity=10_000.0)
+    logger.log_portfolio_snapshot(timestamp=_now(FIRST), snapshot=paper)
+    logger.log_portfolio_snapshot(timestamp=_now(FIRST), snapshot=dict(snap, portfolio="trend-core-live", equity=123.0))
+    assert main.print_portfolio_dashboard("config/portfolio.example.toml") == 0
+    out = capsys.readouterr().out
+    assert "Portfolio 'trend-core' (PAPER)" in out and "Portfolio 'trend-core-live' (LIVE)" in out and "Equity 123.00" in out
+

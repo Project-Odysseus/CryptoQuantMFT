@@ -578,7 +578,17 @@ python scripts/drills/network_drill.py config/portfolio.btc_live.toml    # netwo
   fill once, and sends the rest of the plan (`portfolio_plan_resumed`), unless a new bar has closed in the
   meantime, in which case the new decision replaces it (`portfolio_plan_dropped`). A fill the dead process had
   already logged is booked but not logged again (`portfolio_fill_recovered`).
-- **Still to drill by hand, live at one lot:** the same kill -9 against Kraken itself (`TODO.MD`, section 1).
+- **The same drill against Kraken itself, at one lot (REAL ORDERS):**
+  `python scripts/drills/live_restart_drill.py config/portfolio.btc_live.toml --confirm ENABLE_LIVE_TRADING`.
+  It checks read-only that the account is flat, starts the live book through `main.py` (every live gate applies) in a
+  state folder of its own (`data/portfolio/<name>-drill`), kills the process the moment Kraken accepts its first
+  order, restarts it, and checks that one order exists on Kraken, the fill is booked once, the book equals the
+  account and the protective stop is resting. It then closes the position through the engine, so the account ends
+  flat and the trade log and tax ledger hold both fills. Between the kill and the restart the position has no stop.
+  If the book wants no position at that bar, it sends nothing and says so. Not yet run (`TODO.MD`, section 1).
+- **Paper and live books of one config are stored apart:** a live book's snapshots go under `<name>-live`, so
+  `--dashboard`, `--tearsheet` and `performance_review.py` show the paper soak and the live book as two books (the
+  live one is held to the config's `[review]` kill criteria).
 
 ## Crash and reconnect recovery
 

@@ -1983,15 +1983,32 @@ def print_portfolio_dashboard(config_path: str) -> int:
     except PortfolioConfigError as exc:
         print(f"Portfolio config is not valid.\n{exc}")
         return 1
+    from src.portfolio.engine import live_book_name
+
     trade_logger = TradeLogger(database_path=settings.database_path)
-    snapshots = trade_logger.list_portfolio_snapshots(portfolio=name, limit=1)
-    if not snapshots:
+    # A config's paper book and its live book are stored under different names, so neither is read as the other
+    latest = [snapshots[0] for book in (name, live_book_name(name)) if (snapshots := trade_logger.list_portfolio_snapshots(portfolio=book, limit=1))]
+    if not latest:
         print(f"No snapshots for portfolio '{name}' yet: run it with --portfolio {config_path} --runtime paper.")
         return 0
-    snap = snapshots[0]
+    for position, snap in enumerate(latest):
+        if position:
+            print()
+        _print_portfolio_snapshot(snap)
+    alerts = [event for event in trade_logger.list_events(limit=200, event_types=["portfolio_alert", "portfolio_alert_cleared"]) if event["source"] == "portfolio"][:5]
+    if alerts:
+        print("Recent alerts:")
+        for event in alerts:
+            print(f"  {event['timestamp'][:16]} {event['message']}")
+    return 0
+
+
+def _print_portfolio_snapshot(snap: dict[str, Any]) -> None:
+    """One book's latest snapshot, as the dashboard shows it."""
+    name = snap["portfolio"]
     limits = snap["limits"]
     change = snap["equity"] / snap["initial_equity"] - 1.0 if snap["initial_equity"] else 0.0
-    print(f"Portfolio '{name}' at {snap['timestamp'][:16]} UTC (cycle {snap['cycle']})")
+    print(f"Portfolio '{name}' ({str(snap.get('mode') or 'paper').upper()}) at {snap['timestamp'][:16]} UTC (cycle {snap['cycle']})")
     print(f"Equity {snap['equity']:,.2f} ({change:+.1%}), peak {snap['peak_equity']:,.2f}, drawdown {snap['drawdown']:.1%} (flatten at {limits['max_drawdown']:.0%})")
     print(f"Exposure: gross {snap['gross']:.2f}x of {limits['max_gross_exposure']:g}x, net {snap['net']:+.2f}x of {limits['max_net_exposure']:g}x")
     if snap.get("exposure"):  # snapshots written before the risk model existed have none
@@ -2019,12 +2036,6 @@ def print_portfolio_dashboard(config_path: str) -> int:
     print(f"Residual P&L (netting, band, rounding, fees, funding): {snap['residual_pnl']:+,.2f}")
     if snap["risk_actions"]:
         print("Risk limits acting at the last decision: " + "; ".join(f"{a['rule']} {a['instrument']} {a['before']:+.1%} -> {a['after']:+.1%}" for a in snap["risk_actions"]))
-    alerts = [event for event in trade_logger.list_events(limit=200, event_types=["portfolio_alert", "portfolio_alert_cleared"]) if event["source"] == "portfolio"][:5]
-    if alerts:
-        print("Recent alerts:")
-        for event in alerts:
-            print(f"  {event['timestamp'][:16]} {event['message']}")
-    return 0
 
 
 def write_portfolio_tearsheet(config_path: str, out_path: str | None = None) -> int:
@@ -2037,16 +2048,22 @@ def write_portfolio_tearsheet(config_path: str, out_path: str | None = None) -> 
     except PortfolioConfigError as exc:
         print(f"Portfolio config is not valid.\n{exc}")
         return 1
-    snapshots = TradeLogger(database_path=settings.database_path).list_portfolio_snapshots(portfolio=name)
-    try:
-        page = tearsheet_html(f"{name}: running book", notes=[f"From {len(snapshots)} runtime snapshots of {config_path}."], **snapshot_inputs(snapshots))
-    except ValueError as exc:
-        print(f"Not enough history for a tearsheet of '{name}' yet ({exc}): it needs snapshots from at least three days.")
-        return 0
-    target = Path(out_path or f"plots/tearsheet_{name}.html")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(page, encoding="utf-8")
-    print(f"Wrote {target}")
+    from src.portfolio.engine import live_book_name
+
+    logger = TradeLogger(database_path=settings.database_path)
+    for book in (name, live_book_name(name)):  # the paper book and the live book each get their own page
+        snapshots = logger.list_portfolio_snapshots(portfolio=book)
+        if not snapshots and book != name:
+            continue
+        try:
+            page = tearsheet_html(f"{book}: running book", notes=[f"From {len(snapshots)} runtime snapshots of {config_path}."], **snapshot_inputs(snapshots))
+        except ValueError as exc:
+            print(f"Not enough history for a tearsheet of '{book}' yet ({exc}): it needs snapshots from at least three days.")
+            continue
+        target = Path(out_path or f"plots/tearsheet_{book}.html") if book == name else Path(f"plots/tearsheet_{book}.html")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(page, encoding="utf-8")
+        print(f"Wrote {target}")
     return 0
 
 

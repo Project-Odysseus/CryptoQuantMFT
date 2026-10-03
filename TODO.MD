@@ -38,11 +38,12 @@ direction is in `aspirations.md`.
   decision and at random, on three configs) and `scripts/drills/network_drill.py` (the network cut around a kill -9, on
   real candles). The first run found a real fault, now fixed: a kill between the exchange's fill and the checkpoint left
   the book and the exchange apart for good (`todo_important.md`)
-- [ ] The same drill live at one lot: `kill -9` the live book right after an order goes out, restart with the same
-  state dir. No duplicate orders, and the book matches Kraken afterwards (the fake-Kraken test passes; Kraken itself is untested)
-- [ ] Paper and live runs of one config share its name in `portfolio_snapshots`, so the dashboard, the tearsheet and the
-  performance review would mix the paper soak with the live book. Give live its own name (or filter on the snapshot's
-  `mode`) before the live start
+- [ ] The same drill live at one lot: `python scripts/drills/live_restart_drill.py config/portfolio.btc_live.toml --confirm
+  ENABLE_LIVE_TRADING` (real orders; runbook, "Crash and network drills"). It kills the live book right after an order
+  goes out, restarts it, checks for a duplicate order and that the book matches Kraken, then closes the position. The
+  script is written and its read-only checks pass (2026-10-03: account flat, 19.12 USD); it has not been run
+- [x] Paper and live runs of one config no longer share a name in `portfolio_snapshots` (2026-10-03): a live book is
+  stored as `<name>-live`, and the dashboard, tearsheet and performance review show the two apart
 - [x] A dead-man's switch and a daily summary (2026-09-27, `src/utils/heartbeat.py`; runbook). To switch it on:
   create a healthchecks.io check and set `HEALTHCHECK_URL` in `.env`
 - [x] Retries with backoff on Kraken's temporary errors (timeouts, 429/5xx, `EService:Unavailable`, rate limits),
