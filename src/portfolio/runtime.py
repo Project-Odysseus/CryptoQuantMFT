@@ -301,4 +301,5 @@ class PortfolioRuntime:
 
     def _event(self, level: str, event_type: str, message: str, metadata: dict[str, Any], now: datetime | None = None) -> None:
         if self.trade_logger is not None:
-            self.trade_logger.log_event(timestamp=now or self.feed.now(), level=level, event_type=event_type, message=message, source="portfolio", metadata=metadata)
+            self.trade_logger.log_event(timestamp=now or self.feed.now(), level=level, event_type=event_type, message=message, source="portfolio",
+                                        metadata={"portfolio": self.engine.snapshot_name, **metadata})

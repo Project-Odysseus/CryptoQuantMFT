@@ -573,3 +573,36 @@ def test_another_books_fill_with_the_same_order_id_does_not_hide_a_recovered_fil
     assert len(logger.list_trades()) == others_fills + len(report.fills)  # the recovered fill reached the trade log
     assert logger.list_events(event_types=["portfolio_fill_recovered"]) == []
 
+
+
+def test_a_running_book_is_compared_with_the_backtest_bar_by_bar() -> None:
+    """The paper-versus-backtest check: the same bars through the engine and through `run_book` hold the same positions."""
+    from src.portfolio import paper_check
+
+    config = _config()
+    engine = _engine(config)
+    snapshots = []
+    for index in range(FIRST, FIRST + 150):
+        report = engine.run_cycle(bars_until(index), now=_now(index))
+        snapshots.append({"timestamp": _now(index).isoformat(), **engine.snapshot(report)})
+    snapshots.append({"timestamp": (_now(FIRST + 150) + timedelta(minutes=30)).isoformat(), **engine.snapshot(None)})  # an hourly snapshot: not a decision
+
+    def loader(instrument: InstrumentSpec, interval: str) -> list[OHLCVBar]:
+        return bars_until(FIRST + 149)[(instrument.id, interval)]
+
+    frame = paper_check.decision_frame(snapshots, "4h")
+    inputs = paper_check.start_at(prepare_inputs(config, bar_loader=loader), frame.index[0])
+    assert inputs.prices.index[0] == frame.index[0] and len(inputs.warmup_prices) == FIRST  # the backtest starts where the book did; the rest is warmup
+    book = run_book(config, inputs, lots=True)
+    assert len(frame) == 150 and frame.index[0] == START + timedelta(hours=4 * FIRST)  # stamped with the bar decided on, one row per decision
+    result = paper_check.compare(snapshots, book, "4h")
+    summary = result["summary"]
+    assert summary["bars"] == 150 and summary["max_abs_position_gap"] < 0.03  # a lot or the band, never a different decision, from the first bar on
+    assert abs(summary["return_gap"]) < 0.01 and set(result["returns"].columns) == {"paper", "backtest", "gap"}
+    assert paper_check.verdict(summary, tolerance=0.03).startswith("Positions agree")
+    assert paper_check.one_lot_weight(config, {BTC: 50_000.0, ETH: 2_500.0}, 10_000.0) == pytest.approx(0.0005)  # 0.0001 BTC at 50,000 over 10,000
+
+    wrong = [dict(snap, instruments={name: dict(row, weight=(row["weight"] or 0.0) + 0.3) for name, row in snap["instruments"].items()}) for snap in snapshots]
+    assert paper_check.verdict(paper_check.compare(wrong, book, "4h")["summary"], tolerance=0.03).startswith("Positions DIFFER")
+    assert paper_check.compare([], book, "4h")["summary"] == {"bars": 0}
+    assert "One bar so far" in paper_check.verdict(paper_check.compare(snapshots[:1], book, "4h")["summary"], tolerance=0.03)

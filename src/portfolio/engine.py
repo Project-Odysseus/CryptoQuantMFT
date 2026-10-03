@@ -1166,7 +1166,9 @@ class PortfolioEngine:
 
     def _event(self, level: str, event_type: str, message: str, metadata: Mapping[str, Any], now: datetime) -> None:
         if self.trade_logger is not None:
-            self.trade_logger.log_event(timestamp=now, level=level, event_type=event_type, message=message, source="portfolio", metadata=dict(metadata))
+            # every event names its book: several books (paper, live) write to one database
+            self.trade_logger.log_event(timestamp=now, level=level, event_type=event_type, message=message, source="portfolio",
+                                        metadata={"portfolio": self.snapshot_name, **dict(metadata)})
 
     def _log_cycle(self, report: CycleReport) -> None:
         decision = {
