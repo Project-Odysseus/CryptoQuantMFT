@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -56,6 +56,7 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         slippage_bps: float | Mapping[str, float] = 0.0,
         exchange_name: str = "kraken_futures",
         state_path: str | Path | None = None,
+        quote_source: Callable[[str], tuple[float, float] | None] | None = None,
     ) -> None:
         """Open an account holding `starting_collateral` for `contracts` (keyed by their runtime symbol).
 
@@ -69,6 +70,11 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
             state_path: JSON file saved after every change and restored at
                 startup, so a restarted paper run keeps its wallet and positions.
                 `starting_collateral` applies only when the file doesn't exist.
+            quote_source: symbol -> the real (best bid, best ask) right now, or
+                None when unknown. Only resting post-only orders use it: the
+                marks this account gets are bar closes, which don't move
+                between decisions, so without real quotes a resting order
+                could never be reached.
         """
         super().__init__()
         self.contracts: dict[str, PerpContract] = {contract.symbol: contract for contract in contracts}
@@ -95,11 +101,16 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         self._last_market_update: datetime | None = None
         self._liquidation_count = 0
         self.funding_paid_total = 0.0
+        self.funding_paid_by_symbol: dict[str, float] = {}  # running totals, in the state file: a caller can book exactly what it has missed
         self.realized_pnl_total = 0.0
         self.fees_paid_total = 0.0
         self.state_path = Path(state_path) if state_path is not None else None
+        self._quote_source = quote_source
         self._recent_fills: dict[str, dict[str, Any]] = {}  # order id -> its fill, kept in the state file
         self._tracked: set[str] = set()  # order ids a restarted engine is asking about
+        self._resting: dict[str, dict[str, Any]] = {}  # post-only orders waiting at their limit price, kept in the state file
+        self._cancelled: list[str] = []  # ids of resting orders that were cancelled (kept, so a restart isn't told "never received")
+        self._ended: list[str] = []  # resting orders that filled or were cancelled since `settle_orders` last ran
         self.restored_from_state = self._load_state()
 
     # --- account views -------------------------------------------------------------------------------------------
@@ -212,9 +223,22 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         timestamp: datetime,
         symbol: str | None = None,
         reduce_only: bool = False,
+        post_only: bool = False,
     ) -> ExecutionReport:
-        """Fill the order now if it passes the contract, reduce-only and account-wide margin checks, else reject it."""
+        """Fill the order now if it passes the contract, reduce-only and account-wide margin checks, else reject it.
+
+        With `post_only` the order is not filled: it rests at the touch (the real best bid for a buy, best ask for
+        a sell, from `quote_source`) and returns SUBMITTED. `on_market_update` fills it at that limit, at the maker
+        fee, once the market has moved through it; `cancel_order` withdraws it; `settle_orders` reports either
+        outcome. This account has no order book and looks once per cycle, so the rule is deliberately pessimistic:
+        a buy fills only when the best bid is later seen *below* its limit, which means every order at that price
+        was taken, ours included. A dip that came back between two looks is missed, and a fill always marks at a
+        small loss at once, as real maker fills tend to. Without a quote source the touch is taken to be the
+        symbol's slippage away from the price, and the order fills when a mark reaches it.
+        """
         side = side.lower()
+        if order_id in self._resting:
+            return ExecutionReport(order_id=order_id, status="SUBMITTED", message="already resting under this order id")
         known = self._recent_fills.get(order_id)
         if known is not None:  # an order id is filled once: a repeat (e.g. after a restart) gets the first outcome back
             return ExecutionReport(order_id=order_id, status="FILLED", fill_price=known["fill_price"], filled_size=known["filled_size"], fee=known["fee"],
@@ -239,8 +263,16 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
             return self._reject(order_id, f"reduce_only: {side} {rounded} would grow or flip the {symbol} position of {current}")
 
         slip = self._per_symbol(self._slippage, symbol) / 10_000.0
-        fill_price = price * (1.0 + slip) if side == "buy" else price * (1.0 - slip)
-        fee = rounded * fill_price * contract.taker_fee_rate
+        if post_only:  # a passive order: a buy waits at the best bid, a sell at the best ask
+            touch = self.touch(symbol)
+            if touch is not None:
+                fill_price = touch[0] if side == "buy" else touch[1]
+            else:  # no real quote: assume the touch is the symbol's slippage away from the price
+                fill_price = price * (1.0 - slip) if side == "buy" else price * (1.0 + slip)
+            fee = rounded * fill_price * contract.maker_fee_rate
+        else:
+            fill_price = price * (1.0 + slip) if side == "buy" else price * (1.0 - slip)
+            fee = rounded * fill_price * contract.taker_fee_rate
         if grows:
             marks = {**self._marks, symbol: fill_price}
             others = sum(initial_margin(size_, self._mark(other, marks) or 0.0, self.leverage_cap(other)) for other, size_ in self.positions().items() if other != symbol)
@@ -250,16 +282,66 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
                 return self._reject(order_id, f"insufficient margin: all positions need {required:.2f} {self._base_currency} after this order, "
                                               f"equity after the fee is {available:.2f}")
 
-        order = ExecutionOrder(order_id=order_id, side=side, size=rounded, symbol=symbol, price=price, timestamp=timestamp, status="FILLED",
-                               fill_price=fill_price, filled_size=rounded, fee=fee, exchange=self.exchange_name, message=f"filled in {self.exchange_name} cross-margin sandbox")
+        if post_only:
+            self._resting[order_id] = {"symbol": symbol, "side": side, "size": rounded, "limit_price": fill_price, "reduce_only": bool(reduce_only), "placed_at": timestamp.isoformat()}
+            self._marks.setdefault(symbol, price)
+            self.save_state()
+            return ExecutionReport(order_id=order_id, status="SUBMITTED", message=f"resting at {fill_price:g} in {self.exchange_name} cross-margin sandbox (post-only)")
+        return self._fill(order_id=order_id, symbol=symbol, side=side, size=rounded, price=price, fill_price=fill_price, fee=fee, timestamp=timestamp)
+
+    def _fill(self, *, order_id: str, symbol: str, side: str, size: float, price: float, fill_price: float, fee: float, timestamp: datetime, liquidity: str = "taker") -> ExecutionReport:
+        order = ExecutionOrder(order_id=order_id, side=side, size=size, symbol=symbol, price=price, timestamp=timestamp, status="FILLED",
+                               fill_price=fill_price, filled_size=size, fee=fee, exchange=self.exchange_name, message=f"filled in {self.exchange_name} cross-margin sandbox")
         self._orders[order_id] = order
-        self._recent_fills[order_id] = {"symbol": symbol, "side": side, "filled_size": rounded, "fill_price": fill_price, "fee": fee}
+        self._recent_fills[order_id] = {"symbol": symbol, "side": side, "filled_size": size, "fill_price": fill_price, "fee": fee, "liquidity": liquidity}
         for stale in list(self._recent_fills)[:-RECENT_FILLS_KEPT]:
             del self._recent_fills[stale]
         self._marks.setdefault(symbol, price)
         self._settle_fill(order)
         self.save_state()
-        return ExecutionReport(order_id=order_id, status="FILLED", fill_price=fill_price, filled_size=rounded, fee=fee, message=order.message)
+        return ExecutionReport(order_id=order_id, status="FILLED", fill_price=fill_price, filled_size=size, fee=fee, message=order.message)
+
+    def resting_orders(self) -> dict[str, dict[str, Any]]:
+        """Post-only orders waiting at their limit price, by order id."""
+        return {order_id: dict(order) for order_id, order in self._resting.items()}
+
+    def touch(self, symbol: str) -> tuple[float, float] | None:
+        """The real best bid and ask of `symbol` right now, or None without a quote source or when it has no answer."""
+        if self._quote_source is None:
+            return None
+        try:
+            quote = self._quote_source(symbol)
+        except Exception:  # noqa: BLE001 - a failed quote means "unknown", never a crashed cycle
+            return None
+        return (float(quote[0]), float(quote[1])) if quote and 0.0 < float(quote[0]) < float(quote[1]) else None
+
+    def reference_price(self, symbol: str) -> float | None:
+        """The real mid price now, when a quote source knows it (the price a market order sent now should be judged against)."""
+        touch = self.touch(symbol)
+        return (touch[0] + touch[1]) / 2.0 if touch is not None else None
+
+    def _reached(self, order: Mapping[str, Any]) -> bool:
+        touch = self.touch(order["symbol"])
+        if touch is not None:  # the market went through our price: the bid is below our buy, or the ask above our sell
+            return touch[0] < order["limit_price"] if order["side"] == "buy" else touch[1] > order["limit_price"]
+        mark = self._marks.get(order["symbol"])
+        return mark is not None and (mark <= order["limit_price"] if order["side"] == "buy" else mark >= order["limit_price"])
+
+    def _fill_resting(self, timestamp: datetime) -> None:
+        """Fill every resting order the market has moved through (see `submit_order`); drop one that may no longer trade."""
+        for order_id, order in list(self._resting.items()):
+            if not self._reached(order):
+                continue
+            del self._resting[order_id]
+            self._ended.append(order_id)
+            current = self.position_size(order["symbol"])
+            after = current + order["size"] if order["side"] == "buy" else current - order["size"]
+            if order["reduce_only"] and abs(after) > abs(current) + _EPSILON:  # the position changed while it waited
+                self._cancelled.append(order_id)
+                continue
+            contract = self.contracts[order["symbol"]]
+            self._fill(order_id=order_id, symbol=order["symbol"], side=order["side"], size=order["size"], price=order["limit_price"], fill_price=order["limit_price"],
+                       fee=order["size"] * order["limit_price"] * contract.maker_fee_rate, timestamp=timestamp, liquidity="maker")
 
     def track_order(self, *, order_id: str, symbol: str, side: str, size: float, price: float, timestamp: datetime) -> None:
         """Ask about an order after a restart: `settle_orders` then says whether this account ever filled it.
@@ -271,15 +353,24 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         self._tracked.add(order_id)
 
     def settle_orders(self) -> list[dict[str, Any]]:
-        """The outcome of every tracked order, once: its fill if it was filled here, else `never_received`."""
+        """The outcome, once, of every order asked about after a restart and of every resting order that has ended.
+
+        A fill if it was filled here; CANCELED if it rested and was cancelled; `never_received` if this account has
+        never seen it. An order still resting is not reported: it has no outcome yet.
+        """
         settled: list[dict[str, Any]] = []
-        for order_id in sorted(self._tracked):
+        for order_id in sorted(set(self._tracked) | set(self._ended)):
             fill = self._recent_fills.get(order_id)
+            if order_id in self._resting:
+                continue
             if fill is not None:
                 settled.append({"order_id": order_id, "status": "FILLED", **fill})
+            elif order_id in self._cancelled:
+                settled.append({"order_id": order_id, "status": "CANCELED"})
             else:
                 settled.append({"order_id": order_id, "status": "CANCELED", "never_received": True})
-        self._tracked.clear()
+        self._tracked = {order_id for order_id in self._tracked if order_id in self._resting}
+        self._ended.clear()
         return settled
 
     def _settle_fill(self, order: ExecutionOrder) -> None:
@@ -307,7 +398,13 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
             self._position_entry_price.pop(key, None)
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
-        """Orders fill instantly here, so there is never anything to cancel."""
+        """Withdraw a resting post-only order. Every other order filled instantly, so there is nothing to cancel."""
+        if order_id in self._resting:
+            del self._resting[order_id]
+            self._cancelled = (self._cancelled + [order_id])[-RECENT_FILLS_KEPT:]
+            self._ended.append(order_id)
+            self.save_state()
+            return ExecutionReport(order_id=order_id, status="CANCELED", message="resting order cancelled")
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")
@@ -334,6 +431,7 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
             if symbol in self.contracts and price and price > 0:
                 self._marks[symbol] = float(price)
         self._last_market_update = timestamp
+        self._fill_resting(timestamp)
         if previous is not None:
             days = (timestamp - previous).total_seconds() / 86400.0
             for symbol, size in self.positions().items():
@@ -343,6 +441,7 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
                     payment = size * mark * rate / 100.0 * days
                     self._balances[self._base_currency] = self.wallet_balance() - payment
                     self.funding_paid_total += payment
+                    self.funding_paid_by_symbol[symbol] = self.funding_paid_by_symbol.get(symbol, 0.0) + payment
                     events.append({"type": "funding", "symbol": symbol, "payment": payment, "size": size, "mark_price": mark, "elapsed_days": days})
         if self.positions():
             maintenance = self.maintenance_requirement()
@@ -386,10 +485,13 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
             "marks": self._marks,
             "last_market_update": self._last_market_update.isoformat() if self._last_market_update else None,
             "funding_paid_total": self.funding_paid_total,
+            "funding_paid_by_symbol": self.funding_paid_by_symbol,
             "realized_pnl_total": self.realized_pnl_total,
             "fees_paid_total": self.fees_paid_total,
             "liquidation_count": self._liquidation_count,
             "recent_fills": self._recent_fills,
+            "resting_orders": self._resting,
+            "cancelled_orders": self._cancelled,
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
@@ -420,9 +522,12 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         if payload.get("last_market_update"):
             self._last_market_update = datetime.fromisoformat(payload["last_market_update"])
         self.funding_paid_total = float(payload.get("funding_paid_total", 0.0))
+        self.funding_paid_by_symbol = {symbol: float(paid) for symbol, paid in dict(payload.get("funding_paid_by_symbol", {})).items()}
         self.realized_pnl_total = float(payload.get("realized_pnl_total", 0.0))
         self.fees_paid_total = float(payload.get("fees_paid_total", 0.0))
         self._liquidation_count = int(payload.get("liquidation_count", 0))
         self._recent_fills = {order_id: dict(fill) for order_id, fill in dict(payload.get("recent_fills", {})).items()}
+        self._resting = {order_id: dict(order) for order_id, order in dict(payload.get("resting_orders", {})).items()}
+        self._cancelled = [str(order_id) for order_id in payload.get("cancelled_orders", [])]
         self._remote_balances = dict(self._balances)
         return True

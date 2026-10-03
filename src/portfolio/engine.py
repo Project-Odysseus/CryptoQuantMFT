@@ -29,7 +29,7 @@ import inspect
 import json
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -88,6 +88,7 @@ def build_paper_adapters(
     *,
     state_dir: str | Path | None = None,
     funding_pct_per_day: float = 0.01,
+    quote_source: Callable[[str], tuple[float, float] | None] | None = None,
 ) -> dict[str, ExecutionAdapter]:
     """Sandbox adapters for paper trading a config, funded with the book's cash per venue.
 
@@ -113,6 +114,7 @@ def build_paper_adapters(
                 contracts=contracts, starting_collateral=cash, max_leverage=max(spec.max_leverage for spec in specs),
                 funding_pct_per_day=funding_pct_per_day, slippage_bps={spec.symbol: spec.slippage_bps for spec in specs}, exchange_name=venue,
                 state_path=Path(state_dir) / f"paper_{venue}.json" if state_dir else None,
+                quote_source=quote_source if venue == "kraken_futures" else None,  # real bid and ask for resting maker orders
             )
         elif all(spec.kind == "spot" for spec in specs):
             if len({spec.taker_fee_pct for spec in specs}) > 1:
@@ -123,6 +125,10 @@ def build_paper_adapters(
         else:
             raise ValueError(f"venue {venue} mixes spot and perp instruments; give them separate venue names")
     return adapters
+
+
+URGENT_RULES = {"max_drawdown_halt", "daily_loss_halt"}  # decisions that close the book go straight to market
+MAKER_SUFFIX, TAKER_SUFFIX = "-mk", "-tk"  # order-id endings of a resting maker order and of the market order that finishes it
 
 
 def _accepts(function: Any, name: str) -> bool:
@@ -225,6 +231,7 @@ class PortfolioEngine:
         # "received" terms (negative = paid): realized per Kraken, estimated by the book, unrealized at the start, trued up
         self.account_log_last_id: dict[str, int] = {}
         self.funding_actual: dict[str, float] = {}
+        self.paper_funding_seen: dict[str, dict[str, float]] = {}  # venue -> symbol -> the paper exchange's funding total already in the book
         self.funding_estimated: dict[str, float] = {}
         self.funding_baseline: dict[str, float] = {}
         self.funding_trued_up: dict[str, float] = {}
@@ -242,8 +249,9 @@ class PortfolioEngine:
             spec = self.config.instruments[meta["instrument"]]
             track = getattr(self.adapters[spec.venue], "track_order", None)
             if callable(track):
+                maker = {"post_only": True} if meta.get("style") == "maker" and _accepts(track, "post_only") else {}
                 track(order_id=order_id, symbol=spec.symbol, side=meta["side"], size=float(meta["units"]), price=float(meta["price"]),
-                      timestamp=datetime.fromisoformat(meta["submitted_at"]))
+                      timestamp=datetime.fromisoformat(meta["submitted_at"]), **maker)
 
     # --- the cycle -----------------------------------------------------------------------------------------------
 
@@ -264,6 +272,7 @@ class PortfolioEngine:
         report.adapter_events = self._mark_adapters(prices, now)
         self._start_account_log(now)  # before any trade, so the book's own first fills are reconciled
         self.book.mark(prices, fx=fx, now=now)
+        self._work_makers(report, now)
         self._settle_option_expiries(prices, now)
         self._book_live_funding(now)
         self._flush_tax(now)  # funding booked while marking
@@ -320,7 +329,9 @@ class PortfolioEngine:
         new_grid_bars = sorted({bar.timestamp for series in grid.values() for bar in series if self.last_grid_bar is None or bar.timestamp > self.last_grid_bar})
         if not new_grid_bars:
             step_sleeves(latest)  # a sleeve bar that arrived after its grid bar was decided on: it counts from the next decision
-            if self.open_plan and not self.pending_orders:  # a decision cut short by a crash: send what was left of it
+            # A decision cut short by a crash: send what was left of it, once every order sent before the crash is accounted
+            # for. A maker order resting on the exchange is accounted for (it is still pending by design), so it doesn't hold the rest back.
+            if self.open_plan and all(meta.get("style") == "maker" for meta in self.pending_orders.values()):
                 self._event("WARNING", "portfolio_plan_resumed", f"resuming {len(self.open_plan)} order(s) of the decision interrupted by a restart",
                             {"orders": [entry["order_id"] for entry in self.open_plan]}, now)
                 self._run_plan(report, now)
@@ -412,15 +423,23 @@ class PortfolioEngine:
         for venue, adapter in self.adapters.items():
             symbols = {spec.symbol: instrument for instrument, spec in self.config.instruments.items() if spec.venue == venue}
             if isinstance(adapter, SandboxCrossMarginPerpAdapter):
+                # Funding is booked from the paper exchange's running totals, not from its one-off events: it charges
+                # the wallet and saves its state before this process checkpoints, so after a crash in between the
+                # event is gone but the total still says what the book has not booked yet.
+                seen = self.paper_funding_seen.setdefault(venue, dict(adapter.funding_paid_by_symbol))
                 for event in adapter.on_market_update(prices={symbol: prices[instrument] for symbol, instrument in symbols.items() if instrument in prices}, timestamp=now):
                     event = {**event, "venue": venue}
                     if event["type"] == "funding":
                         event["instrument"] = symbols[event["symbol"]]
-                        self.book.book_funding(event["instrument"], event["payment"])
-                        self._tax_derivative(event["instrument"], "FUNDING_FEE", -float(event["payment"]), now, {"kind": "funding"})
                     elif event["type"] == "liquidation":
                         self._book_liquidation(event, symbols, now)
                     events.append(event)
+                for symbol, total in adapter.funding_paid_by_symbol.items():
+                    owed = total - seen.get(symbol, 0.0)
+                    if owed and symbol in symbols:
+                        self.book.book_funding(symbols[symbol], owed)
+                        self._tax_derivative(symbols[symbol], "FUNDING_FEE", -float(owed), now, {"kind": "funding"})
+                    seen[symbol] = total
             elif getattr(adapter, "live", False):
                 for event in adapter.on_market_update(prices={symbol: prices[instrument] for symbol, instrument in symbols.items() if instrument in prices}, timestamp=now):
                     event = {**event, "venue": venue, "instrument": symbols.get(event.get("symbol"), event.get("symbol"))}
@@ -536,7 +555,8 @@ class PortfolioEngine:
             else:
                 orders.append(order)
         report.orders, report.skipped = orders, plan.skipped
-        self.open_plan = [self._plan_entry(order, number=number, attribution=attribution.get(order.instrument, {})) for number, order in enumerate(orders)]
+        urgent = any(action.rule in URGENT_RULES for action in report.risk_actions)  # a halt is closing the book: don't wait for a passive fill
+        self.open_plan = [self._plan_entry(order, number=number, attribution=attribution.get(order.instrument, {}), urgent=urgent) for number, order in enumerate(orders)]
         self._run_plan(report, now)
         self._settle_pending(report, now)
         report.cooldowns = dict(self._cooldowns(now))
@@ -704,11 +724,84 @@ class PortfolioEngine:
             self._event("WARNING", "portfolio_rejection_cooldown", f"{instrument}: {streak} rejected orders in a row; only reductions until {until:%Y-%m-%d %H:%M} UTC",
                         {"instrument": instrument, "streak": streak, "until": until.isoformat()}, now)
 
-    def _plan_entry(self, order: PlannedOrder, *, number: int, attribution: Mapping[str, float]) -> dict[str, Any]:
-        """One planned order as plain values (it is written to the checkpoint), with the id it will be sent under."""
+    def _plan_entry(self, order: PlannedOrder, *, number: int, attribution: Mapping[str, float], urgent: bool = True) -> dict[str, Any]:
+        """One planned order as plain values (it is written to the checkpoint), with the id it will be sent under.
+
+        Under the "maker_first" policy an order that isn't `urgent` is first sent as a resting post-only order
+        (style "maker", id ending "-mk") if its venue's adapter can rest one; see `_work_makers`.
+        """
         spec = self.config.instruments[order.instrument]
-        return {"order_id": f"pf-{self.cycle}-{number}-{spec.venue}-{spec.symbol}", "instrument": order.instrument, "side": order.side, "units": str(order.units),
-                "price": order.price, "reason": order.reason, "reduce_only": order.reduce_only, "sleeves": dict(attribution)}
+        entry = {"order_id": f"pf-{self.cycle}-{number}-{spec.venue}-{spec.symbol}", "instrument": order.instrument, "side": order.side, "units": str(order.units),
+                 "price": order.price, "reason": order.reason, "reduce_only": order.reduce_only, "sleeves": dict(attribution)}
+        if self.config.execution_policy == "maker_first" and not urgent and _accepts(self.adapters[spec.venue].submit_order, "post_only"):
+            entry.update({"order_id": f"{entry['order_id']}{MAKER_SUFFIX}", "style": "maker"})
+        return entry
+
+    def _taker_fallback(self, meta: Mapping[str, Any], *, units: Any, price: float) -> dict[str, Any]:
+        """The market order that finishes what a maker order didn't fill (id ending "-tk", so it is a different order to the exchange)."""
+        return {"order_id": f"{str(meta['order_id']).removesuffix(MAKER_SUFFIX)}{TAKER_SUFFIX}", "instrument": meta["instrument"], "side": meta["side"], "units": str(units),
+                "price": float(price), "reason": meta["reason"], "reduce_only": meta["reduce_only"], "sleeves": dict(meta.get("sleeves", {})), "fallback": True}
+
+    def _work_makers(self, report: CycleReport, now: datetime) -> None:
+        """Look after resting maker orders: book what filled, cancel the ones that waited too long, send the rest to market.
+
+        Runs every cycle once the new prices are in. A maker order ends in one of three ways: it fills (booked, done);
+        it waits `maker_timeout_seconds` and is cancelled; or the exchange ends it. In the last two cases whatever
+        was not filled goes out as a market order under a new id, written to the checkpoint first like any order.
+        A crash anywhere in between is safe: the resting order is in `pending_orders`, so the restart asks the
+        exchange what became of it before doing anything else.
+        """
+        if any(meta.get("style") == "maker" for meta in self.pending_orders.values()):
+            self._settle_pending(report, now)  # a paper exchange fills resting orders when it gets this cycle's prices
+            asked = False
+            for order_id, meta in list(self.pending_orders.items()):
+                if meta.get("style") != "maker" or meta.get("cancel_requested"):
+                    continue
+                if (now - datetime.fromisoformat(meta["submitted_at"])).total_seconds() < self.config.maker_timeout_seconds:
+                    continue
+                try:
+                    self.adapters[self.config.instruments[meta["instrument"]].venue].cancel_order(order_id=order_id)
+                except Exception as exc:  # noqa: BLE001 - it stays resting; the next cycle tries again
+                    self._event("WARNING", "portfolio_cancel_failed", f"could not cancel the resting {meta['side']} {meta['units']} {meta['instrument']}: {exc}", {"order_id": order_id}, now)
+                    continue
+                meta["cancel_requested"] = now.isoformat()
+                asked = True
+            if asked:
+                self._save()
+                self._settle_pending(report, now)
+        fallbacks = [entry for entry in self.open_plan if entry.get("fallback")]
+        for entry in fallbacks:
+            self.open_plan.remove(entry)
+            # Priced at the market now, not when the maker order was placed: the move in between is the cost of having waited
+            spec = self.config.instruments[entry["instrument"]]
+            reference = getattr(self.adapters[spec.venue], "reference_price", None)
+            entry["price"] = float((reference(spec.symbol) if callable(reference) else None) or self.book.marks.get(entry["instrument"], entry["price"]))
+            self._execute(entry, report=report, now=now)
+        if fallbacks:
+            self._settle_pending(report, now)
+
+    def _maker_ended(self, meta: Mapping[str, Any], item: Mapping[str, Any], adapter: Any, now: datetime) -> None:
+        """A maker order is over (filled, cancelled, or ended by the exchange): record how it went and queue the remainder."""
+        instrument = meta["instrument"]
+        spec = self.config.instruments[instrument]
+        filled = float(meta.get("filled", 0.0))
+        remainder = self._on_lot_grid(instrument, max(0.0, float(meta["units"]) - filled))
+        waited = (now - datetime.fromisoformat(meta["submitted_at"])).total_seconds()
+        if item.get("status") == "CANCELED" and not meta.get("cancel_requested"):
+            try:  # the exchange says it is gone though we never cancelled it: make sure nothing is left resting before taking
+                adapter.cancel_order(order_id=meta["order_id"])
+            except Exception:  # noqa: BLE001 - nothing to cancel is the expected case
+                pass
+        # What is left may be less than the exchange trades (it rounds an order down to its own lot): then the order is done
+        contract = (getattr(adapter, "contracts", None) or {}).get(spec.symbol)
+        too_small = float(remainder) < max(float(spec.min_order_size), float(spec.lot_step), float(getattr(contract, "min_size", 0.0) or 0.0), 1e-12)
+        outcome = "filled" if too_small else "partly_filled" if filled > 0 else "unfilled"
+        self._event("INFO", "portfolio_maker_result", f"maker {meta['side']} {meta['units']} {instrument}: {outcome.replace('_', ' ')} after {waited:.0f} s"
+                    + ("" if too_small or meta.get("no_fallback") else f"; sending {remainder} to market"),
+                    {"order_id": meta["order_id"], "instrument": instrument, "outcome": outcome, "filled": filled, "remainder": float(remainder), "waited_seconds": waited}, now)
+        if too_small or meta.get("no_fallback"):
+            return
+        self.open_plan.insert(0, self._taker_fallback(meta, units=remainder, price=float(self.book.marks.get(instrument, meta["price"]))))
 
     def _run_plan(self, report: CycleReport, now: datetime) -> None:
         """Send the orders in `open_plan`, in order. Each leaves the plan as it is sent."""
@@ -731,11 +824,20 @@ class PortfolioEngine:
         self.pending_orders[order_id] = meta
         self._save()
         extra = {"reduce_only": meta["reduce_only"]} if _accepts(adapter.submit_order, "reduce_only") else {}
+        maker = meta.get("style") == "maker"
+        if maker:
+            extra["post_only"] = True
         result = adapter.submit_order(order_id=order_id, side=meta["side"], size=float(meta["units"]), price=meta["price"], timestamp=now, symbol=spec.symbol, **extra)
-        if result.status == "SUBMITTED":  # a live exchange: the fill arrives later (settle_orders)
-            self._event("INFO", "portfolio_order_submitted", f"{meta['side']} {meta['units']} {meta['instrument']} sent ({meta['reason']})", meta, now)
+        if result.status == "SUBMITTED":  # a live exchange, or a resting maker order: the fill arrives later (settle_orders)
+            self._event("INFO", "portfolio_order_submitted", f"{meta['side']} {meta['units']} {meta['instrument']} {'resting as a maker order' if maker else 'sent'} ({meta['reason']})", meta, now)
             return
         self.pending_orders.pop(order_id, None)
+        if maker and (result.status != "FILLED" or not result.filled_size):
+            # The exchange would not rest it (it would have traded at once, or it failed a check): send it to market instead
+            self._event("INFO", "portfolio_maker_result", f"maker {meta['side']} {meta['units']} {meta['instrument']}: not accepted ({result.message}); sending it to market",
+                        {"order_id": order_id, "instrument": meta["instrument"], "outcome": "not_accepted", "filled": 0.0, "remainder": float(meta["units"]), "waited_seconds": 0.0}, now)
+            self._execute(self._taker_fallback(meta, units=meta["units"], price=meta["price"]), report=report, now=now)
+            return
         if result.status != "FILLED" or not result.filled_size:
             rejection = {"order_id": order_id, "instrument": meta["instrument"], "side": meta["side"], "units": meta["units"], "reason": meta["reason"], "message": result.message}
             report.rejected.append(rejection)
@@ -769,6 +871,8 @@ class PortfolioEngine:
         realized = self.book.apply_fill(instrument, meta["side"], self._on_lot_grid(instrument, filled_size), fill_price, fee)
         fill = {"order_id": meta["order_id"], "instrument": instrument, "side": meta["side"], "units": filled_size, "price": fill_price,
                 "fee": fee, "reason": meta["reason"], "reduce_only": meta["reduce_only"], "strategy_id": strategy_id, "sleeves": drivers}
+        if meta.get("style") == "maker":
+            fill["liquidity"] = "maker"  # it rested and was hit: no spread paid, the maker fee
         report.fills.append(fill)
         if meta.get("recovered") and self._fill_logged(meta["order_id"]):
             # Found on the exchange after a restart, and the dead process had already logged it: the book needed it, the logs don't
@@ -810,9 +914,11 @@ class PortfolioEngine:
                     # A paper exchange knows for certain the order never arrived (the process died before sending it):
                     # put it back at the front of the plan. A live exchange can't say that, so its orders are never resent.
                     self.pending_orders.pop(item["order_id"], None)
-                    self.open_plan.insert(0, {key: value for key, value in meta.items() if key not in ("submitted_at", "recovered")})
+                    self.open_plan.insert(0, {key: value for key, value in meta.items() if key not in ("submitted_at", "recovered", "filled", "cancel_requested", "no_fallback")})
                     continue
                 if item.get("filled_size"):
+                    if not late:
+                        meta["filled"] = float(meta.get("filled", 0.0)) + float(item["filled_size"])
                     self._book_fill(meta, filled_size=float(item["filled_size"]), fill_price=float(item["fill_price"]), fee=float(item["fee"]), report=report, now=now)
                 if late:
                     message = f"late fill: {meta['side']} {item['filled_size']} {meta['instrument']} at {float(item['fill_price']):,.2f} appeared after the order was written off"
@@ -822,8 +928,12 @@ class PortfolioEngine:
                     continue
                 if item.get("status") in {"FILLED", "CANCELED"}:
                     self.pending_orders.pop(item["order_id"], None)
+                    maker = meta.get("style") == "maker"
+                    if maker:
+                        self._maker_ended(meta, item, adapter, now)
                     if item["status"] == "CANCELED" and not item.get("filled_size"):
-                        self._event("WARNING", "portfolio_order_unfilled", f"{meta['side']} {meta['units']} {meta['instrument']} ended without a fill", meta, now)
+                        if not maker:  # a maker order ending unfilled is the normal timeout, reported by `_maker_ended`
+                            self._event("WARNING", "portfolio_order_unfilled", f"{meta['side']} {meta['units']} {meta['instrument']} ended without a fill", meta, now)
                         self.written_off_orders[item["order_id"]] = {**meta, "written_off_at": now.isoformat()}
 
     def _trade_alert(self, meta: Mapping[str, Any], fill: Mapping[str, Any], report: CycleReport, now: datetime) -> TradeAlert:
@@ -1042,6 +1152,14 @@ class PortfolioEngine:
         """Close every position on every venue with reduce-only orders at the latest marks (the kill switch path)."""
         self.cycle += 1
         report = CycleReport(timestamp=now, decided=True, equity=0.0)
+        for order_id, meta in self.pending_orders.items():
+            if meta.get("style") == "maker":  # withdraw resting orders; what they didn't fill must not be sent after a flatten
+                meta.update({"no_fallback": True, "cancel_requested": now.isoformat()})
+                try:
+                    self.adapters[self.config.instruments[meta["instrument"]].venue].cancel_order(order_id=order_id)
+                except Exception as exc:  # noqa: BLE001 - still try to close the positions
+                    self._event("ERROR", "portfolio_cancel_failed", f"could not cancel the resting order {order_id}: {exc}", {"order_id": order_id}, now)
+        self._settle_pending(report, now)
         for adapter in self.adapters.values():
             cancel_all = getattr(adapter, "cancel_all_orders", None)
             if getattr(adapter, "live", False) and callable(cancel_all):
@@ -1116,6 +1234,7 @@ class PortfolioEngine:
                        "exposure": risk.exposure, "max_average_correlation": risk.max_average_correlation, "min_effective_bets": risk.min_effective_bets},
             "exposure": exposure, "strategy_correlation": self.unit_returns.summary(), "exposure_breaches": self.exposure_breaches(equity),
             "instruments": instruments, "sleeves": sleeves, "residual_pnl": float(attribution.get("residual", 0)),
+            "execution": self.config.execution_policy, "pending_orders": len(self.pending_orders),  # orders sent and not yet settled (resting maker orders)
             "risk_actions": [vars_of(action) for action in (report.risk_actions if report is not None else [])],
             "fills": len(report.fills) if report is not None else 0,
         }
@@ -1213,6 +1332,7 @@ class PortfolioEngine:
             "pending_tax": self.pending_tax,
             "pending_orders": self.pending_orders,
             "open_plan": self.open_plan,
+            "paper_funding_seen": self.paper_funding_seen,
             "written_off_orders": self.written_off_orders,
             "unreconciled": self.unreconciled,
             "funding_booked_until": self.funding_booked_until,
@@ -1253,6 +1373,7 @@ class PortfolioEngine:
         self.pending_tax = list(payload.get("pending_tax", []))
         self.pending_orders = dict(payload.get("pending_orders", {}))
         self.open_plan = list(payload.get("open_plan", []))
+        self.paper_funding_seen = {venue: {symbol: float(paid) for symbol, paid in totals.items()} for venue, totals in dict(payload.get("paper_funding_seen", {})).items()}
         self.written_off_orders = dict(payload.get("written_off_orders", {}))
         self.unreconciled = dict(payload.get("unreconciled", {}))
         self.funding_booked_until = dict(payload.get("funding_booked_until", {}))

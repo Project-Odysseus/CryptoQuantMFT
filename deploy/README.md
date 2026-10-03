@@ -67,6 +67,11 @@ launchctl bootout gui/$(id -u)/com.cryptoquant.paper && rm ~/Library/LaunchAgent
 rsync -a ~/Odysseus/CryptoQuantMFT/data/portfolio/btc-live-paper/ <user>@<desktop-ip>:~/CryptoQuantMFT/data/portfolio/btc-live-paper/
 ```
 
+The Mac also has a LaunchAgent for the read-only web dashboard (`deploy/launchd/com.cryptoquant.dashboard.plist`,
+http://127.0.0.1:8787; install and remove commands are at the top of the file). On the server, run it by hand when
+wanted (`python -m src.dashboard.server`) and reach it through an SSH tunnel: `ssh -L 8787:127.0.0.1:8787 <user>@<desktop-ip>`.
+The collectors now include Kraken spreads and depth (`cryptoquant-spreads.service`, about 7 MB of network a day).
+
 ## 4. Daily use
 
 ```bash

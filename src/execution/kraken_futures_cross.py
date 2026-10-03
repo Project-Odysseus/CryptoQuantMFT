@@ -5,10 +5,14 @@ portfolio holds several perps that share one margin account, so this
 adapter keeps positions per contract and reads margin for the whole
 account. It follows the same rules as the single-contract adapter:
 
-- Every order is an immediate-or-cancel market order (`orderType=mkt`,
-  capped by Kraken at 1% price protection). Closing and reducing orders are
-  sent `reduceOnly=true`, so a stale local view can never turn a close into
-  a new position.
+- An order is an immediate-or-cancel market order (`orderType=mkt`,
+  capped by Kraken at 1% price protection) unless it is sent `post_only`:
+  then it is a post-only limit order (`orderType=post`) at the touch (a buy
+  at the best bid, a sell at the best ask), which rests until it is filled
+  or cancelled and which Kraken refuses if it would trade at once. The
+  portfolio engine cancels it after a timeout and sends the rest to market.
+  Closing and reducing orders are sent `reduceOnly=true`, so a stale local
+  view can never turn a close into a new position.
 - **Client order ids are deterministic:** `<prefix>-<order id>`, where the
   prefix is fixed per portfolio book and the order id comes from the
   portfolio engine's checkpointed cycle counter. After a crash between
@@ -106,6 +110,7 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
         self._submitted_monotonic: dict[str, float] = {}
         self.min_unfilled_age_seconds = MIN_UNFILLED_AGE_SECONDS
         self._written_off: dict[str, float] = {}  # order id -> when it was written off (monotonic), still watched for late fills
+        self._post_only: set[str] = set()  # ids sent as resting maker orders: their fills pay the maker fee
         self.margin_equity: float | None = None
         self.available_margin: float | None = None
         self.total_unrealized: float = 0.0
@@ -168,8 +173,14 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
         timestamp: datetime,
         symbol: str | None = None,
         reduce_only: bool = False,
+        post_only: bool = False,
     ) -> ExecutionReport:
-        """Send an IOC market order after local checks. Returns SUBMITTED (settle it with `settle_orders`) or REJECTED."""
+        """Send an IOC market order after local checks. Returns SUBMITTED (settle it with `settle_orders`) or REJECTED.
+
+        With `post_only` it is sent as a post-only limit order at the touch instead, and rests on Kraken until it is
+        filled or cancelled (`cancel_order`). REJECTED then also covers "no quote" and Kraken's refusal of a
+        post-only order that would have traded at once; the caller decides whether to send it to market.
+        """
         side = side.lower()
         if symbol not in self.contracts:
             return self._reject(order_id, f"this account trades {sorted(self.contracts)}, not {symbol}")
@@ -196,6 +207,22 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
         order = ExecutionOrder(order_id=order_id, side=side, size=rounded, symbol=symbol, price=price, timestamp=timestamp, status="SUBMITTED", exchange=self.exchange_name)
         params = {"orderType": "mkt", "symbol": contract.venue_symbol, "side": side, "size": self._format_size(symbol, rounded),
                   "cliOrdId": cli_ord_id, "reduceOnly": "true" if reduce_only else None}
+        if post_only:
+            try:
+                touch = self.touch(symbol)
+            except Exception as exc:  # noqa: BLE001 - no quote, no passive order
+                touch = None
+                reason = f"{type(exc).__name__}: {exc}"
+            else:
+                reason = "Kraken shows no bid and ask"
+            if touch is None:
+                self._submitted_monotonic.pop(order_id, None)
+                return self._reject(order_id, f"post-only needs the best bid and ask of {symbol}: {reason}")
+            # A passive price on the tick grid: a buy never above the bid, a sell never below the ask
+            limit = self._format_price(symbol, touch[0] if side == "buy" else touch[1], side="sell" if side == "buy" else "buy")
+            params.update({"orderType": "post", "limitPrice": limit})
+            order.price = float(limit)
+            self._post_only.add(order_id)
         try:
             payload = self._client.call("POST", "sendorder", params)
         except Exception as exc:  # noqa: BLE001 - the request may have reached Kraken: settle by client id, don't guess
@@ -205,6 +232,7 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
         send_status = payload.get("sendStatus") or {}
         status = str(send_status.get("status", ""))
         if status not in _ACCEPTED_SEND_STATUSES:
+            self._post_only.discard(order_id)
             return self._reject(order_id, f"Kraken Futures rejected the order: {status or 'no status'}")
         order.remote_order_id = send_status.get("order_id")
         order.remote_status = status
@@ -212,8 +240,19 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
         self._orders[order_id] = order
         return ExecutionReport(order_id=order_id, status="SUBMITTED", message=order.message)
 
-    def track_order(self, *, order_id: str, symbol: str, side: str, size: float, price: float, timestamp: datetime) -> None:
+    def touch(self, symbol: str) -> tuple[float, float] | None:
+        """The best bid and ask of `symbol` on Kraken right now, or None when either is missing."""
+        venue_symbol = self.contracts[symbol].venue_symbol
+        for ticker in self._client.call("GET", "tickers").get("tickers", []):
+            if ticker.get("symbol") == venue_symbol:
+                bid, ask = float(ticker.get("bid") or 0.0), float(ticker.get("ask") or 0.0)
+                return (bid, ask) if 0.0 < bid < ask else None
+        return None
+
+    def track_order(self, *, order_id: str, symbol: str, side: str, size: float, price: float, timestamp: datetime, post_only: bool = False) -> None:
         """Re-register an order sent before a restart, so `settle_orders` looks for its fills."""
+        if post_only:
+            self._post_only.add(order_id)
         if order_id not in self._orders:
             self._orders[order_id] = ExecutionOrder(order_id=order_id, side=side, size=size, symbol=symbol, price=price, timestamp=timestamp,
                                                     status="SUBMITTED", exchange=self.exchange_name, message="re-registered after a restart")
@@ -253,11 +292,12 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
                 new = total - previously
                 price = (value_total - value_before) / new
                 contract = self.contracts[str(order.symbol)]
-                item.update({"filled_size": new, "fill_price": price, "fee": new * price * contract.taker_fee_rate, "fee_estimated": True,
+                fee_rate = contract.maker_fee_rate if order.order_id in self._post_only else contract.taker_fee_rate
+                item.update({"filled_size": new, "fill_price": price, "fee": new * price * fee_rate, "fee_estimated": True,
                              "liquidation": any(str(fill.get("fillType", "")).lower().endswith("liquidation") for fill in own)})
                 self._filled_so_far[order.order_id] = total
                 order.filled_size, order.fill_price = total, value_total / total
-                order.fee = total * order.fill_price * contract.taker_fee_rate
+                order.fee = total * order.fill_price * fee_rate
                 if not late:  # a late fill is usually in Kraken's position already, adopted by the last account sync
                     signed = new if order.side == "buy" else -new
                     self._positions[str(order.symbol)] = self._positions.get(str(order.symbol), 0.0) + signed
@@ -288,7 +328,10 @@ class KrakenFuturesCrossMarginAdapter(ExecutionAdapter):
         return settled
 
     def cancel_order(self, *, order_id: str) -> ExecutionReport:
-        """Cancel a resting order (IOC orders rarely rest, but a lost response can leave one)."""
+        """Cancel a resting order: a post-only order that waited too long, or an IOC order a lost response left behind.
+
+        What became of it (cancelled, or filled first) is read by the next `settle_orders`.
+        """
         order = self._orders.get(order_id)
         if order is None:
             return ExecutionReport(order_id=order_id, status="NOT_FOUND", message="order not found")

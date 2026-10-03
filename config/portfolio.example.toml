@@ -108,3 +108,10 @@ params = { short_window = 8, long_window = 96 }
 long_only = true
 sizing = "vol_target"
 sizing_params = { target_annual_vol = 0.5 }
+
+# How orders are sent. "taker" (the default): every order is a market order. "maker_first": each order first rests at
+# the touch as a post-only limit order (no spread, the lower maker fee); after maker_timeout_seconds what is left is
+# cancelled and sent as a market order. Halts and the kill switch always use market orders. See docs/runbook.md.
+# [execution]
+# policy = "maker_first"
+# maker_timeout_seconds = 300

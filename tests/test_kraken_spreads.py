@@ -61,3 +61,22 @@ def test_samples_are_appended_and_summarised_against_the_assumed_slippage(tmp_pa
     btc = table.loc["PF_XBTUSD"]
     assert np.isnan(btc["cost_at_1000_usd"]) and btc["measured_bps"] == pytest.approx(btc["half_spread_median"]) and btc["ratio"] < 0.1  # no depth sample: the spread alone
     assert ks.cost_table({"PF_XBTUSD": 5.0}, root=tmp_path / "none").empty
+
+
+def test_touch_quotes_answer_per_runtime_symbol_from_one_cached_request() -> None:
+    calls = []
+    clock = [0.0]
+
+    def fetch(url: str):
+        calls.append(url)
+        if len(calls) == 3:
+            raise TimeoutError("down")
+        return TICKERS
+
+    quotes = ks.TouchQuotes(max_age=15.0, fetch=fetch, clock=lambda: clock[0])
+    assert quotes("BTC/USD") == (84_742.0, 84_743.0) and quotes("QNT/USD") == (99.73, 100.0) and quotes("NOPE/USD") is None
+    assert len(calls) == 1  # one request answers for every coin
+    clock[0] = 20.0
+    assert quotes("BTC/USD") == (84_742.0, 84_743.0) and len(calls) == 2  # older than max_age: asked again
+    clock[0] = 40.0
+    assert quotes("BTC/USD") is None and len(calls) == 3  # Kraken unreachable: "unknown", not an exception and not a stale price

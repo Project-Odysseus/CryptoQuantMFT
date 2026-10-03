@@ -266,7 +266,7 @@
     if (!fills.length) return html`<div class="empty">No fills yet. A book trades only when a strategy's signal changes or a position drifts outside its band.</div>`;
     return html`<div class="scroll"><table><thead><tr><th>Time</th><th>Coin</th><th>Side</th><th>Units</th><th>Price</th><th>Value</th><th>Fee</th><th class="text">Why</th><th class="text">Strategies</th></tr></thead>
       <tbody>${fills.map((fill, index) => html`<tr key=${index}><td>${clock(fill.time)}</td><td>${coin(fill.instrument)}</td><td>${fill.side}</td><td>${price(fill.units)}</td><td>${price(fill.price)}</td>
-        <td>${money((fill.units || 0) * (fill.price || 0))}</td><td>${finite(fill.fee) ? `$${fill.fee.toFixed(4)}` : "–"}</td><td class="text">${fill.reason || ""}</td><td class="text muted">${(fill.strategies || []).join(", ")}</td></tr>`)}</tbody></table></div>`;
+        <td>${money((fill.units || 0) * (fill.price || 0))}</td><td>${finite(fill.fee) ? `$${fill.fee.toFixed(4)}` : "–"}</td><td class="text">${fill.reason || ""}${fill.liquidity === "maker" ? html`<span class="tag">maker</span>` : null}</td><td class="text muted">${(fill.strategies || []).join(", ")}</td></tr>`)}</tbody></table></div>`;
   }
 
   function Alerts({ alerts }) {
@@ -348,7 +348,7 @@
         <${Tile} label="Gross exposure" value=${times(snapshot.gross)} note=${`net ${times(snapshot.net)}`} />
         <${Tile} label="Bitcoin beta" value=${times(exposure.beta_exposure)} note="a 1% BTC move ≈ this × 1%" />
         <${Tile} label="Volatility" value=${pct(exposure.volatility, 0)} note=${`stressed ${pct(exposure.stressed_volatility, 0)} a year`} />
-        <${Tile} label="Positions" value=${String(held)} note=${`${fills.length} fills so far`} />
+        <${Tile} label="Positions" value=${String(held)} note=${snapshot.pending_orders ? `${snapshot.pending_orders} order${snapshot.pending_orders > 1 ? "s" : ""} resting on the exchange` : `${fills.length} fills so far`} />
         <${Tile} label="Independent bets" value=${finite(exposure.effective_bets) ? exposure.effective_bets.toFixed(1) : "–"} note="higher = more diversified" />
       </div>
       <div class="grid">
@@ -369,7 +369,7 @@
         <${Card} title="Positions" sub=${`as of ${clock(snapshot.timestamp)}`} span=${correlation && correlation.matrix ? "c8" : ""}><${Positions} snapshot=${snapshot} /><//>
         ${correlation && correlation.matrix ? html`<${Card} title="How alike the strategies are" sub=${`return correlation, last ${correlation.bars} bars; average ${correlation.average_correlation.toFixed(2)}`} span="c4">
           <${Heatmap} names=${correlation.names} matrix=${correlation.matrix} /><//>` : null}
-        <${Card} title="Fills" sub="newest first" span="c8"><${Fills} fills=${fills} /><//>
+        <${Card} title="Fills" sub=${snapshot.execution === "maker_first" ? "newest first; orders rest at the touch first (maker), then go to market" : "newest first"} span="c8"><${Fills} fills=${fills} /><//>
         <${Card} title="Alerts" span="c4"><${Alerts} alerts=${alerts} /><//>
       </div>
     </div>`;

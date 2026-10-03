@@ -135,7 +135,7 @@ class DashboardData:
             owner = meta.get("portfolio")
             if owner == name or (owner is None and stamp in decision_times):
                 out.append({"time": stamp, "instrument": meta.get("instrument"), "side": meta.get("side"), "units": meta.get("units"), "price": meta.get("price"), "fee": meta.get("fee"),
-                            "reason": meta.get("reason"), "strategies": sorted({unit_of(key) for key in (meta.get("sleeves") or {})}), "message": message})
+                            "reason": meta.get("reason"), "liquidity": meta.get("liquidity") or "taker", "strategies": sorted({unit_of(key) for key in (meta.get("sleeves") or {})}), "message": message})
                 if len(out) >= limit:
                     break
         return clean(out)

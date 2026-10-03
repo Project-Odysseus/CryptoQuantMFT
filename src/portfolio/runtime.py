@@ -154,7 +154,7 @@ class PortfolioRuntime:
         self.reports.append(report)
         del self.reports[:-200]
         self._watch(report, result.failed, stale)
-        self._snapshot(report, result.now, force=report.decided)
+        self._snapshot(report, result.now, force=report.decided or bool(report.fills))  # also after a fill between decisions (a maker order, a stop)
         self._daily_summary(report, result.now)
         await self._ping("alive")
         return report

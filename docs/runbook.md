@@ -555,6 +555,83 @@ python main.py \
 
 4. Verify the restored state and recent report output before continuing.
 
+## The web dashboard (read-only)
+
+```bash
+python -m src.dashboard.server            # http://127.0.0.1:8787, this machine only
+```
+
+On this Mac it runs as a LaunchAgent (`deploy/launchd/com.cryptoquant.dashboard.plist`), so the page is always there.
+Pick a book at the top (paper and live books of one config are separate books). It shows equity against Bitcoin,
+drawdown, exposure, each risk measure against its limit, the strategies (what each asks for, its profit and share of
+risk), positions, how alike the strategies are, fills, alerts, whether each background job is still writing, and
+Kraken's measured costs next to the assumed slippage. It refreshes every minute.
+
+- It reads the database (opened read-only) and the state folders. Every route is a GET; it cannot place or cancel an
+  order, and stopping it does not affect the books.
+- A book shows "stopped" when it has stored no snapshot for 2.5 hours (a running book stores one at least hourly).
+- No login. It listens on 127.0.0.1; `--host 0.0.0.0` opens it to the local network, so only on a network you trust.
+- React and htm are in `src/dashboard/static/vendor/`; the page loads nothing from the internet and has no build step.
+
+## Maker-first execution (`[execution]`)
+
+```toml
+[execution]
+policy = "maker_first"          # default "taker": every order is a market order
+maker_timeout_seconds = 300     # 10 to 3600
+```
+
+With `maker_first`, a decision's orders are first sent as post-only limit orders at the touch (a buy at the best bid,
+a sell at the best ask). An order that fills this way pays no spread and the maker fee (0.02% against 0.05%). Each
+cycle the engine books what filled; an order still resting after the timeout is cancelled and what is left is sent
+as a market order under a new id (`...-mk` becomes `...-tk`). Kraken refuses a post-only order that would trade at
+once; it then goes to market immediately. The timeout is checked once per cycle, so with `--runtime-interval 300`
+it is effectively a multiple of 5 minutes.
+
+- **Always market orders:** a drawdown or daily-loss halt, the kill switch (`flatten` first withdraws resting orders
+  and never sends their remainder), and protective stops.
+- **What it costs:** an order that isn't reached is filled later, at the price the market has moved to. Maker fills
+  are also the ones where the price came to you. Whether the saving beats that drift is an empirical question: every
+  maker order writes a `portfolio_maker_result` event (filled, partly_filled, unfilled, not_accepted, with the
+  seconds waited), and fills carry `liquidity: maker`.
+- **In paper mode** resting orders are placed at Kraken's real best bid and ask (one public request, only while an
+  order rests) and fill only when the bid is later seen below a resting buy (the ask above a resting sell): the whole
+  price level was taken. That is pessimistic, and it looks once per cycle, so real fill rates should be higher. The
+  backtest still assumes market orders; `scripts/research/paper_vs_backtest.py` shows the difference in return.
+- **Live:** tested against the fake exchange only. Before relying on it with real money, run one live decision at
+  one lot and check the resting order on Kraken (`TODO.MD`, section 1). The crash drill passes with it
+  (`restart_drill.py` on a config with `[execution] policy = "maker_first"`).
+- `config/portfolio.multi_paper.toml` uses it (paper); `config/portfolio.btc_live.toml` does not.
+
+## Kraken's real trading costs against the assumed slippage
+
+`scripts/collectors/kraken_spreads.py <config>` records every Kraken perp's best bid and ask every 10 minutes and, for
+the config's coins, the order-book cost of a market order of 100, 1,000 and 5,000 USD every 2 hours (public data,
+about 7 MB of network a day, files under `data/market_data/kraken_spreads/`). It runs with the other collectors
+(`scripts/collectors/run_collectors.sh`, `deploy/systemd/cryptoquant-spreads.service`).
+
+```bash
+python scripts/research/kraken_costs.py config/portfolio.multi_paper.toml [--size 1000]
+```
+
+prints, per coin, the median and 90th-percentile half-spread, the depth cost at that size and the config's
+`slippage_bps`. A ratio above 1 means the backtest and the paper exchange charge less than the market does. Spreads
+widen in fast markets: wait for at least three days of samples, including a volatile one, before changing a config.
+
+## Is the running book doing what the backtest says? (`paper_vs_backtest.py`)
+
+```bash
+python scripts/research/paper_vs_backtest.py config/portfolio.multi_paper.toml          # the paper book
+python scripts/research/paper_vs_backtest.py config/portfolio.btc_live.toml --live      # the live book
+```
+
+It replays the backtest (whole lots, the config's costs) from the book's first decision, with the book's capital, on
+the candles the runtime trades on, and compares bar by bar: the position after each decision and the return since
+the first bar. Positions that differ by more than a lot or the rebalance band mean a decision differed (look at the
+bars and events of that time). Positions that agree with returns drifting apart mean costs, slippage or funding
+differ from the backtest's assumptions; for a live book that gap is the real cost model. It reads this year's
+candles (the frozen holdout) as a reference only, and logs that look in the trial ledger.
+
 ## Crash and network drills (portfolio)
 
 Two scripts practise what a real outage does. Both are paper only, use a state folder and database of their own, and
@@ -586,6 +663,10 @@ python scripts/drills/network_drill.py config/portfolio.btc_live.toml    # netwo
   account and the protective stop is resting. It then closes the position through the engine, so the account ends
   flat and the trade log and tax ledger hold both fills. Between the kill and the restart the position has no stop.
   If the book wants no position at that bar, it sends nothing and says so. Not yet run (`TODO.MD`, section 1).
+- **Paper funding survives a crash too:** the paper exchange keeps a running funding total per coin in its state
+  file, and the engine books the difference from what its checkpoint has seen, so a kill between the two can't
+  lose a payment. The restart drill resumes at the moment of the crash (its clock is stored per fetch), which
+  matters once orders are worked between decisions (maker-first).
 - **Paper and live books of one config are stored apart:** a live book's snapshots go under `<name>-live`, so
   `--dashboard`, `--tearsheet` and `performance_review.py` show the paper soak and the live book as two books (the
   live one is held to the config's `[review]` kill criteria).

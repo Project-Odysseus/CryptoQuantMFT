@@ -150,7 +150,52 @@ def test_an_order_id_is_filled_once_and_a_restarted_account_can_say_what_became_
     restored.track_order(order_id="pf-7-0", symbol=BTC, side="buy", size=0.01, price=50_000.0, timestamp=T0)
     restored.track_order(order_id="pf-7-1", symbol=ETH, side="buy", size=0.1, price=2_500.0, timestamp=T0)  # recorded by the engine, never sent
     filled, lost = restored.settle_orders()
-    assert filled == {"order_id": "pf-7-0", "status": "FILLED", "symbol": BTC, "side": "buy", "filled_size": first.filled_size, "fill_price": first.fill_price, "fee": first.fee}
+    assert filled == {"order_id": "pf-7-0", "status": "FILLED", "symbol": BTC, "side": "buy", "filled_size": first.filled_size, "fill_price": first.fill_price, "fee": first.fee,
+                      "liquidity": "taker"}
     assert lost == {"order_id": "pf-7-1", "status": "CANCELED", "never_received": True}
     assert restored.settle_orders() == []  # each answer is given once
     assert _order(restored, "pf-7-0", BTC, "buy", 0.01, 50_000.0).message == "already filled under this order id" and restored.position_size(BTC) == pytest.approx(0.01)
+
+
+def test_a_post_only_order_rests_and_fills_at_its_limit_only_when_the_price_comes_to_it(tmp_path) -> None:
+    path = tmp_path / "cross.json"
+    account = _account(state_path=path, slippage_bps=10.0)
+    account.on_market_update(prices={BTC: 50_000.0, ETH: 2_500.0}, timestamp=T0)
+    buy = _order(account, "pf-1-0-mk", BTC, "buy", 0.01, 50_000.0, post_only=True)
+    sell = _order(account, "pf-1-1-mk", ETH, "sell", 0.1, 2_500.0, post_only=True)
+    assert buy.status == "SUBMITTED" and sell.status == "SUBMITTED" and account.positions() == {}  # nothing traded yet
+    resting = account.resting_orders()
+    assert resting["pf-1-0-mk"]["limit_price"] == pytest.approx(49_950.0) and resting["pf-1-1-mk"]["limit_price"] == pytest.approx(2_502.5)  # a buy waits below, a sell above
+    assert _order(account, "pf-1-0-mk", BTC, "buy", 0.01, 50_000.0, post_only=True).message.startswith("already resting") and len(account.resting_orders()) == 2
+    assert account.settle_orders() == []  # no outcome yet
+
+    account.on_market_update(prices={BTC: 49_960.0, ETH: 2_501.0}, timestamp=T0 + timedelta(minutes=1))  # towards both, reaching neither
+    assert account.positions() == {} and account.settle_orders() == []
+    account.on_market_update(prices={BTC: 49_940.0, ETH: 2_501.0}, timestamp=T0 + timedelta(minutes=2))  # through the buy
+    [filled] = account.settle_orders()
+    assert filled["order_id"] == "pf-1-0-mk" and filled["status"] == "FILLED" and filled["liquidity"] == "maker"
+    assert filled["fill_price"] == pytest.approx(49_950.0) and filled["fee"] == pytest.approx(0.01 * 49_950.0 * 0.0002)  # at its limit, at the maker fee
+    assert account.position_size(BTC) == pytest.approx(0.01) and account.settle_orders() == []  # reported once
+
+    restored = _account(state_path=path, slippage_bps=10.0)  # a restart keeps the order that is still resting
+    assert list(restored.resting_orders()) == ["pf-1-1-mk"]
+    restored.track_order(order_id="pf-1-1-mk", symbol=ETH, side="sell", size=0.1, price=2_500.0, timestamp=T0)
+    assert restored.settle_orders() == []  # still resting: not "never received"
+    assert restored.cancel_order(order_id="pf-1-1-mk").status == "CANCELED" and restored.resting_orders() == {}
+    assert restored.settle_orders() == [{"order_id": "pf-1-1-mk", "status": "CANCELED"}]
+    restored.on_market_update(prices={BTC: 49_940.0, ETH: 2_600.0}, timestamp=T0 + timedelta(minutes=3))
+    assert restored.position_size(ETH) == 0.0  # a cancelled order never fills
+    again = _account(state_path=path, slippage_bps=10.0)
+    again.track_order(order_id="pf-1-1-mk", symbol=ETH, side="sell", size=0.1, price=2_500.0, timestamp=T0)
+    assert again.settle_orders() == [{"order_id": "pf-1-1-mk", "status": "CANCELED"}]  # remembered as cancelled across a restart
+
+
+def test_a_resting_order_is_checked_like_any_other_and_a_stale_reduce_only_one_is_dropped() -> None:
+    account = _account(slippage_bps=0.0)
+    assert _order(account, "big", BTC, "buy", 1.0, 50_000.0, post_only=True).status == "REJECTED"  # 50,000 of exposure on 1,000 at 2x
+    assert _order(account, "none", BTC, "sell", 0.01, 50_000.0, post_only=True, reduce_only=True).status == "REJECTED"  # nothing to reduce
+    _order(account, "open", BTC, "buy", 0.02, 50_000.0)
+    assert _order(account, "trim", BTC, "sell", 0.02, 50_500.0, post_only=True, reduce_only=True).status == "SUBMITTED"
+    _order(account, "close", BTC, "sell", 0.02, 50_000.0)  # the position is closed another way while the order waits
+    account.on_market_update(prices={BTC: 50_600.0}, timestamp=T0 + timedelta(minutes=1))
+    assert account.position_size(BTC) == 0.0 and account.settle_orders() == [{"order_id": "trim", "status": "CANCELED"}]  # it would have opened a short

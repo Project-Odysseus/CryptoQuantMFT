@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import json
 import os
 import random
@@ -53,11 +54,20 @@ POINTS = ("order_recorded", "order_sent", "fill_logged", "before_checkpoint", "t
 # --- the child: one runtime process -----------------------------------------------------------------------------------
 
 class ReplayFeed:
-    """Synthetic candles replayed one grid bar per fetch, resuming at the engine's last decided bar after a restart."""
+    """Synthetic candles replayed one grid bar per fetch. After a restart it resumes at the moment of the crash.
 
-    def __init__(self, mock: Any, resume_from: Any | None) -> None:
+    The clock of every fetch is written to `clock_path` first, so a restarted process sees the same candles and the
+    same time as the cycle that was killed: time never runs backwards across a restart, as it can't in reality.
+    (An engine that works on orders between decisions, like resting maker orders with a timeout, depends on that.)
+    Without a stored clock it resumes at the engine's last decided bar.
+    """
+
+    def __init__(self, mock: Any, resume_from: Any | None, clock_path: Path | None = None) -> None:
         self.mock = mock
-        if resume_from is not None:
+        self.clock_path = clock_path
+        if clock_path is not None and clock_path.exists():
+            self.mock.clock = int(clock_path.read_text())
+        elif resume_from is not None:
             # the first poll after a restart sees no new bar, like a real restart within the same bar
             self.mock.clock = int((resume_from - mock.start).total_seconds() // mock.grid_seconds)
 
@@ -67,6 +77,8 @@ class ReplayFeed:
     async def fetch(self, keys: Any, now: Any = None) -> Any:
         from src.portfolio.feed import FeedResult
 
+        if self.clock_path is not None:
+            self.clock_path.write_text(str(self.mock.clock))
         result = FeedResult(now=self.mock.now(), bars={key: self.mock._bars(*key) for key in keys})
         self.mock.clock += 1
         return result
@@ -104,7 +116,7 @@ def arm(engine: Any, point: str, count: int) -> None:
                     hit()
                 return result
 
-            adapter.submit_order = submit
+            adapter.submit_order = functools.wraps(original)(submit)  # the engine reads the signature to see what the adapter supports
     elif point == "fill_logged":
         original_fill = engine._book_fill
 
@@ -158,7 +170,7 @@ def child(args: argparse.Namespace) -> int:
     mock = MockCandleFeed(config.instruments, grid_interval=engine.grid_interval, history_days=HISTORY_DAYS, total_days=HISTORY_DAYS + args.bars // per_day + 2)
     if config.baskets:
         engine.basket_source = mock.basket_panel
-    feed = ReplayFeed(mock, engine.last_grid_bar)
+    feed = ReplayFeed(mock, engine.last_grid_bar, state_dir / "replay_clock")
     runtime = PortfolioRuntime(engine, feed, interval_seconds=0, trade_logger=logger)
     if args.crash:
         point, count = args.crash.split(":")

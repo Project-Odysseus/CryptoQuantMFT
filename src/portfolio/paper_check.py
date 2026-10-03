@@ -31,20 +31,29 @@ from src.runtime.config import BAR_INTERVALS
 
 
 def decision_frame(snapshots: Sequence[Mapping[str, Any]], grid_interval: str) -> pd.DataFrame:
-    """The book's snapshots taken at decisions, one row per grid bar: `equity` and `w:<instrument>` (weight held after trading).
+    """One row per grid bar the book decided on: `equity` at the decision and `w:<instrument>`, the weight held after trading.
 
-    A decision made at time t is for the grid bar that had just closed, stamped (as bars are) at its open.
+    A decision made at time t is for the grid bar that had just closed, stamped (as bars are) at its open. With
+    maker-first execution the orders of a decision may still be resting when its snapshot is taken, so the weights
+    come from the first snapshot at or after the decision, before the next bar, that has no order pending.
     """
     step = pd.Timedelta(seconds=BAR_INTERVALS[grid_interval])
     rows: dict[pd.Timestamp, dict[str, float]] = {}
+    settled: set[pd.Timestamp] = set()
     for snap in sorted(snapshots, key=lambda item: pd.Timestamp(item["timestamp"])):
         instruments = snap.get("instruments") or {}
-        if not any(row.get("target") is not None for row in instruments.values()):
-            continue  # an hourly snapshot between decisions
         stamp = pd.Timestamp(snap["timestamp"])
         stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
         bar = stamp.floor(step) - step
-        rows[bar] = {"equity": float(snap["equity"]), **{f"w:{name}": float(row.get("weight") or 0.0) for name, row in instruments.items()}}
+        decision = any(row.get("target") is not None for row in instruments.values())
+        if not decision and (bar not in rows or bar in settled):
+            continue  # an hourly snapshot: only wanted while a decision's orders were still pending
+        weights = {f"w:{name}": float(row.get("weight") or 0.0) for name, row in instruments.items()}
+        rows[bar] = {"equity": float(snap["equity"]), **weights} if decision else {**rows[bar], **weights}
+        if not snap.get("pending_orders"):
+            settled.add(bar)
+        elif decision:
+            settled.discard(bar)
     return pd.DataFrame.from_dict(rows, orient="index").sort_index()
 
 

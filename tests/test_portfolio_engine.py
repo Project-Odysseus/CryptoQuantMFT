@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 import numpy as np
@@ -56,8 +57,9 @@ def bars_until(grid_index: int) -> dict[tuple[str, str], list[OHLCVBar]]:
     }
 
 
-def _config(**portfolio: Any):
+def _config(execution: dict[str, Any] | None = None, **portfolio: Any):
     return parse_portfolio_config({
+        **({"execution": execution} if execution else {}),
         "portfolio": {"name": "engine-test", "allocation": "equal", "initial_equity": 10_000, "rebalance_band": 0.02,
                       "allocation_lookback_days": 20, "allocation_refit_days": 5, **portfolio},
         "risk": {"max_drawdown": 0.9, "max_gross_exposure": 3.0, "max_net_exposure": 3.0, "max_instrument_weight": 2.0, "daily_loss_limit": 0.5},
@@ -606,3 +608,193 @@ def test_a_running_book_is_compared_with_the_backtest_bar_by_bar() -> None:
     assert paper_check.verdict(paper_check.compare(wrong, book, "4h")["summary"], tolerance=0.03).startswith("Positions DIFFER")
     assert paper_check.compare([], book, "4h")["summary"] == {"bars": 0}
     assert "One bar so far" in paper_check.verdict(paper_check.compare(snapshots[:1], book, "4h")["summary"], tolerance=0.03)
+
+
+# --- maker-first execution -------------------------------------------------------------------------------------------
+
+
+class Quotes:
+    """A hand-set best bid and ask per symbol, standing in for Kraken's ticker."""
+
+    def __init__(self) -> None:
+        self.touch: dict[str, tuple[float, float]] = {}
+
+    def __call__(self, symbol: str) -> tuple[float, float] | None:
+        return self.touch.get(symbol)
+
+    def around(self, bars: dict, *, shift: float = 0.0) -> None:
+        """A one-basis-point half-spread around each instrument's last 4h close, moved by `shift` (0.001 = up 10 bps)."""
+        for (instrument, interval), series in bars.items():
+            if interval == "4h":
+                mid = series[-1].close * (1.0 + shift)
+                self.touch[instrument.split(":", 1)[1]] = (mid * 0.9999, mid * 1.0001)
+
+
+def _maker_engine(tmp_path, quotes: Quotes, *, logger=None, timeout: float = 120.0) -> PortfolioEngine:
+    config = _config(execution={"policy": "maker_first", "maker_timeout_seconds": timeout})
+    book = PortfolioBook.from_config(config)
+    return PortfolioEngine(config, adapters=build_paper_adapters(config, book, state_dir=tmp_path, quote_source=quotes), book=book, trade_logger=logger,
+                           state_path=tmp_path / "engine.json")
+
+
+def _first_decision_with_orders(engine: PortfolioEngine, quotes: Quotes):
+    """Cycle bar by bar (letting every resting order time out) until a decision sends orders; returns (index, report)."""
+    for index in range(FIRST, LAST):
+        bars = bars_until(index)
+        quotes.around(bars)
+        report = engine.run_cycle(bars, now=_now(index))
+        if report.orders:
+            return index, report
+        engine.run_cycle(bars, now=_now(index) + timedelta(minutes=5))
+    raise AssertionError("no decision sent an order")
+
+
+def test_maker_first_orders_rest_at_the_touch_and_fill_there_when_the_market_comes_to_them(tmp_path) -> None:
+    logger = TradeLogger(tmp_path / "trades.db")
+    quotes = Quotes()
+    engine = _maker_engine(tmp_path, quotes, logger=logger)
+    index, report = _first_decision_with_orders(engine, quotes)
+    adapter = engine.adapters["kraken_futures"]
+    assert report.fills == [] and len(engine.pending_orders) == len(report.orders) > 0  # sent, resting, nothing traded yet
+    assert all(order_id.endswith("-mk") and meta["style"] == "maker" for order_id, meta in engine.pending_orders.items())
+    assert engine.snapshot(report)["pending_orders"] == len(report.orders) and engine.snapshot(report)["execution"] == "maker_first"
+    resting = adapter.resting_orders()
+    for order_id, meta in engine.pending_orders.items():
+        bid, ask = quotes.touch[meta["instrument"].split(":", 1)[1]]
+        assert resting[order_id]["limit_price"] == (bid if meta["side"] == "buy" else ask)  # a buy joins the bid, a sell the ask
+
+    bars = bars_until(index)
+    quiet = engine.run_cycle(bars, now=_now(index) + timedelta(seconds=30))  # the market hasn't moved: still resting
+    assert quiet.fills == [] and len(engine.pending_orders) == len(report.orders)
+    for order in resting.values():  # the market trades through every resting price
+        quotes.touch[order["symbol"]] = (order["limit_price"] * 0.9990, order["limit_price"] * 0.9992) if order["side"] == "buy" else (order["limit_price"] * 1.0008, order["limit_price"] * 1.0010)
+    hit = engine.run_cycle(bars, now=_now(index) + timedelta(seconds=60))
+    assert len(hit.fills) == len(report.orders) and engine.pending_orders == {} and engine.open_plan == [] and adapter.resting_orders() == {}
+    for fill in hit.fills:
+        assert fill["liquidity"] == "maker" and fill["price"] == resting[fill["order_id"]]["limit_price"]
+        assert fill["fee"] == pytest.approx(fill["units"] * fill["price"] * 0.0002)  # the maker fee, not the taker's 0.05%
+    assert engine.reconcile() == {} and not hit.rejected
+    results = logger.list_events(event_types=["portfolio_maker_result"])
+    assert len(results) == len(report.orders) and {event["metadata"]["outcome"] for event in results} == {"filled"}
+    assert len(logger.list_trades()) == len(report.orders)
+    assert engine.run_cycle(bars, now=_now(index) + timedelta(seconds=120)).fills == []  # nothing left to send
+
+
+def test_a_maker_order_that_is_not_reached_is_cancelled_and_the_rest_goes_to_market(tmp_path) -> None:
+    logger = TradeLogger(tmp_path / "trades.db")
+    quotes = Quotes()
+    engine = _maker_engine(tmp_path, quotes, logger=logger, timeout=120.0)
+    index, report = _first_decision_with_orders(engine, quotes)
+    adapter = engine.adapters["kraken_futures"]
+    planned = {meta["instrument"]: (meta["side"], float(meta["units"])) for meta in engine.pending_orders.values()}
+    bars = bars_until(index)
+    quotes.around(bars, shift=0.001 if all(side == "buy" for side, _units in planned.values()) else 0.0)  # the market runs away from the resting buys
+    assert engine.run_cycle(bars, now=_now(index) + timedelta(seconds=60)).fills == [] and len(engine.pending_orders) == len(planned)  # not yet timed out
+    late = engine.run_cycle(bars, now=_now(index) + timedelta(seconds=120))
+    assert adapter.resting_orders() == {} and engine.pending_orders == {} and engine.open_plan == []
+    assert {fill["instrument"]: (fill["side"], fill["units"]) for fill in late.fills} == planned  # the whole order, now as a market order
+    for fill in late.fills:
+        symbol = fill["instrument"].split(":", 1)[1]
+        mid = sum(quotes.touch[symbol]) / 2.0
+        assert fill["order_id"].endswith("-tk") and "liquidity" not in fill
+        assert fill["price"] == pytest.approx(mid * (1.0002 if fill["side"] == "buy" else 0.9998))  # at the market now (after the move), plus the usual slippage
+        assert fill["fee"] == pytest.approx(fill["units"] * fill["price"] * 0.0005)
+    assert engine.reconcile() == {}
+    assert {event["metadata"]["outcome"] for event in logger.list_events(event_types=["portfolio_maker_result"])} == {"unfilled"}
+    assert logger.list_events(event_types=["portfolio_order_unfilled"]) == []  # a timeout is not a warning
+
+
+def test_a_restart_with_maker_orders_resting_picks_them_up_and_books_each_fill_once(tmp_path) -> None:
+    logger = TradeLogger(tmp_path / "trades.db")
+    quotes = Quotes()
+    index, report = _first_decision_with_orders(_maker_engine(tmp_path, quotes, logger=logger), quotes)
+    trades_before = len(logger.list_trades())
+
+    engine = _maker_engine(tmp_path, quotes, logger=logger)  # the process died with the orders resting
+    adapter = engine.adapters["kraken_futures"]
+    assert engine.restored and len(engine.pending_orders) == len(report.orders) == len(adapter.resting_orders())
+    bars = bars_until(index)
+    assert engine.run_cycle(bars, now=_now(index) + timedelta(seconds=30)).fills == [] and len(adapter.resting_orders()) == len(report.orders)  # not resent, not dropped
+    first = next(iter(adapter.resting_orders().values()))
+    quotes.touch[first["symbol"]] = (first["limit_price"] * 0.999, first["limit_price"] * 0.9992) if first["side"] == "buy" else (first["limit_price"] * 1.0008, first["limit_price"] * 1.001)
+    hit = engine.run_cycle(bars, now=_now(index) + timedelta(seconds=60))
+    assert [fill["liquidity"] for fill in hit.fills] == ["maker"]
+
+    engine = _maker_engine(tmp_path, quotes, logger=logger)  # and again, after that fill was booked and saved
+    done = engine.run_cycle(bars, now=_now(index) + timedelta(seconds=180))  # whatever still rested has now timed out
+    assert engine.pending_orders == {} and engine.open_plan == [] and engine.adapters["kraken_futures"].resting_orders() == {} and engine.reconcile() == {}
+    assert len(logger.list_trades()) == trades_before + len(report.orders) == trades_before + len(hit.fills) + len(done.fills)  # every order traded once
+
+
+def test_flatten_withdraws_resting_orders_and_never_sends_their_remainder(tmp_path) -> None:
+    quotes = Quotes()
+    engine = _maker_engine(tmp_path, quotes)
+    index, report = _first_decision_with_orders(engine, quotes)
+    held = dict(engine.book.units())
+    flat = engine.flatten(now=_now(index) + timedelta(seconds=10), reason="test")
+    assert engine.adapters["kraken_futures"].resting_orders() == {} and engine.pending_orders == {} and engine.open_plan == []
+    assert all(units == 0 for units in engine.book.units().values()) and len(flat.fills) == sum(1 for units in held.values() if units)
+    after = engine.run_cycle(bars_until(index), now=_now(index) + timedelta(seconds=300))
+    assert after.fills == [] and all(units == 0 for units in engine.book.units().values())  # no late market order for what the maker orders didn't fill
+
+
+def test_a_halt_goes_straight_to_market_and_taker_books_are_untouched(tmp_path) -> None:
+    from src.portfolio.orders import PlannedOrder
+
+    quotes = Quotes()
+    maker, taker = _maker_engine(tmp_path, quotes), _engine(_config())
+    order = PlannedOrder(instrument=BTC, side="buy", units=Decimal("0.01"), price=50_000.0, reason="open", reduce_only=False, target_weight=0.1)
+    assert maker._plan_entry(order, number=0, attribution={}, urgent=False)["order_id"].endswith("-mk")
+    assert "style" not in maker._plan_entry(order, number=0, attribution={}, urgent=True)  # a drawdown or daily-loss halt
+    assert "style" not in maker._plan_entry(order, number=0, attribution={})  # and anything not planned by a normal decision (flatten)
+    assert "style" not in taker._plan_entry(order, number=0, attribution={}, urgent=False)  # the default policy never rests an order
+    with pytest.raises(Exception, match="maker_timeout_seconds"):
+        _config(execution={"policy": "maker_first", "maker_timeout_seconds": 5})
+    with pytest.raises(Exception, match="policy must be one of"):
+        _config(execution={"policy": "limit"})
+
+
+def test_paper_funding_charged_just_before_a_crash_is_booked_after_the_restart(tmp_path) -> None:
+    """The paper exchange saves a funding charge before the engine checkpoints; a kill in between must not lose it from the book."""
+    config = _config()
+
+    def funding_in_book(engine: PortfolioEngine) -> float:
+        return sum(float(position["funding"]) for position in engine.to_dict()["book"]["positions"].values())
+
+    engine = _engine(config, tmp_path, state=True)
+    index = FIRST
+    while not engine.book.units() or not any(engine.book.units().values()):
+        engine.run_cycle(bars_until(index), now=_now(index))
+        index += 1
+    engine.run_cycle(bars_until(index), now=_now(index))
+    adapter = engine.adapters["kraken_futures"]
+    assert adapter.funding_paid_total != 0.0 and funding_in_book(engine) == pytest.approx(adapter.funding_paid_total)
+
+    # the next cycle gets as far as the exchange charging funding, and the process dies before its checkpoint
+    adapter.on_market_update(prices=adapter.marks(), timestamp=_now(index) + timedelta(hours=2))
+    charged = adapter.funding_paid_total
+    assert charged != pytest.approx(funding_in_book(engine))
+
+    restarted = _engine(config, tmp_path, state=True)
+    assert restarted.restored and funding_in_book(restarted) != pytest.approx(charged)  # the checkpoint doesn't have it
+    restarted.run_cycle(bars_until(index), now=_now(index) + timedelta(hours=2))
+    assert funding_in_book(restarted) == pytest.approx(restarted.adapters["kraken_futures"].funding_paid_total) == pytest.approx(charged)
+    assert float(restarted.book.equity()) == pytest.approx(restarted.adapters["kraken_futures"].equity())  # book and exchange agree again
+
+
+def test_the_backtest_comparison_reads_positions_once_a_decisions_maker_orders_have_settled() -> None:
+    from src.portfolio import paper_check
+
+    def snap(minutes: int, weight: float, *, decision: bool, pending: int, equity: float = 10_000.0) -> dict:
+        return {"timestamp": (START + timedelta(hours=4, minutes=minutes)).isoformat(), "equity": equity, "pending_orders": pending,
+                "instruments": {BTC: {"weight": weight, "target": 0.4 if decision else None}}}
+
+    frame = paper_check.decision_frame([
+        snap(1, 0.0, decision=True, pending=1),                        # the decision: its order is resting, nothing held yet
+        snap(6, 0.4, decision=False, pending=0, equity=9_999.0),       # stored when the fill arrived
+        snap(60, 0.41, decision=False, pending=0, equity=10_050.0),    # an hourly snapshot later in the bar: not used
+    ], "4h")
+    assert len(frame) == 1 and frame.index[0] == START
+    assert frame.iloc[0][f"w:{BTC}"] == 0.4 and frame.iloc[0]["equity"] == 10_000.0  # the settled position, the decision's equity
+    still = paper_check.decision_frame([snap(1, 0.0, decision=True, pending=1)], "4h")
+    assert still.iloc[0][f"w:{BTC}"] == 0.0  # nothing settled yet: what the decision snapshot shows

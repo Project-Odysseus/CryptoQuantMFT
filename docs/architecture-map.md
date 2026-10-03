@@ -68,6 +68,9 @@ flowchart TD
   - `load_market_data()` and `recording_gaps()` read them back for research. The recorder is not part of the
     trading runtime and shares nothing with it.
 
+- `src/data/kraken_spreads.py` (`scripts/collectors/kraken_spreads.py`, `scripts/research/kraken_costs.py`):
+  Kraken Futures' real spreads and book depth, recorded over time and compared with a config's assumed slippage;
+  `TouchQuotes` gives the paper exchange the real best bid and ask for resting maker orders.
 - `src/data/positioning.py`
   - Public funding, open-interest, long/short-ratio and implied-vol history from Binance, Bybit and Deribit for
     research, cached under `data/historical_cache/positioning/`.
@@ -186,6 +189,11 @@ Plan and status: `docs/portfolio_plan.md`.
   backtest bar by bar as the runtime steps it. The overlay in `risk.py` reads the estimate for its group, beta and
   volatility caps (`[risk.groups]`, `max_beta_exposure`, `max_portfolio_vol`) and enforces `[risk.exposure]`
   `max_delta` and `max_scenario_loss` on linear targets.
+- `src/portfolio/paper_check.py` plus `scripts/research/paper_vs_backtest.py`: a running book against the backtest
+  over the same days (positions per decision bar, return since the first one), started at the book's first bar.
+- `src/dashboard/`: the local read-only web dashboard. `data.py` turns the database and state folders into JSON
+  (books, one book's latest snapshot, its history, fills, alerts, job health, measured costs); `server.py` serves
+  it with aiohttp on 127.0.0.1 (GET only); `static/` is one React page without a build step.
 - `src/portfolio/tearsheet.py`: one static HTML page per book (matplotlib charts embedded), from a research
   backtest or from the runtime's snapshots (`main.py --portfolio PATH --tearsheet`). It shares its look with the
   research signal report through `src/utils/report.py`.
@@ -201,7 +209,11 @@ Plan and status: `docs/portfolio_plan.md`.
   (`allocation.bar_number`), so the runtime's scales equal the research backtest's. Each order is written to the
   checkpoint before it is sent (`pending_orders`, with the unsent rest of the decision in `open_plan`), so a restart
   after a crash settles it from the exchange instead of sending it again (`_execute`, `_settle_pending`;
-  `scripts/drills/restart_drill.py` and `network_drill.py` exercise this with real kills).
+  `scripts/drills/restart_drill.py` and `network_drill.py` exercise this with real kills). With
+  `[execution] policy = "maker_first"` an order first rests at the touch as a post-only order and stays in
+  `pending_orders`; `_work_makers` books its fills each cycle, cancels it after the timeout and sends the rest to
+  market (`_maker_ended`, `_taker_fallback`). Both adapters take `post_only`: the paper one fills a resting order
+  only once the real bid or ask has moved through it, the Kraken one sends `orderType=post`.
 - `src/portfolio/backtest.py` plus `scripts/research/portfolio_backtest.py`: the same core over history.
 - `src/portfolio/feed.py`: completed exchange candles per (instrument, interval) over REST, loaded concurrently in
   threads, with each instrument failing on its own. `MockCandleFeed` supplies synthetic candles for smoke runs.

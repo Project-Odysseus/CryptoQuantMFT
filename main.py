@@ -1700,7 +1700,12 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
         config, adapter = build_live_portfolio_adapter(config)
         adapters = {"kraken_futures": adapter}
     else:
-        adapters = build_paper_adapters(config, book, state_dir=state_dir)
+        quotes = None
+        if config.execution_policy == "maker_first" and not args.use_mock_connector:
+            from src.data.kraken_spreads import TouchQuotes
+
+            quotes = TouchQuotes()  # resting paper orders are placed at, and filled against, Kraken's real bid and ask
+        adapters = build_paper_adapters(config, book, state_dir=state_dir, quote_source=quotes)
     engine = PortfolioEngine(config, adapters=adapters, book=book, trade_logger=trade_logger, notifier=notifier, mode=args.runtime,
                              state_path=state_dir / "engine.json", record_tax=live)
     if live and (not engine.restored or args.portfolio_adopt_exchange):

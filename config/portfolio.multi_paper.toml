@@ -413,3 +413,9 @@ max_leverage = 2.0
 lot_step = 0.1
 min_order_size = 0.1
 slippage_bps = 30              # 24h volume 1,435,223 USD
+
+# Orders rest at the touch first and go to market after 10 minutes (two 5-minute cycles). Paper only here: the fill
+# rule is pessimistic (docs/runbook.md, "Maker-first execution"), and every order logs how it went.
+[execution]
+policy = "maker_first"
+maker_timeout_seconds = 600

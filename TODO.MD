@@ -91,7 +91,8 @@ direction is in `aspirations.md`.
 ## 2b. One engine for every strategy type (plan: `docs/engine_plan.md`)
 
 - [ ] E0-E1: the strategy interface, intents and event loop, with the current sleeves wrapped and parity with `run_book`
-- [ ] E2: execution policies with maker-first; E3: basket strategies (the cross-sectional book)
+- [ ] E2: execution policies with maker-first (maker-first itself is in the portfolio engine since 2026-10-04; the
+  policy interface of the unified engine is not); E3: basket strategies (the cross-sectional book)
 - [ ] E4-E6: options intents and exposure limits, intra-bar events, and retiring the single-strategy runtime
 
 ## 3. Run 24/7 (merges the old deployment, monitoring and security items)
@@ -141,7 +142,20 @@ direction is in `aspirations.md`.
 - [ ] H3 phase B scoping (BTC short vol, defined risk): bid/ask economics on ~3 months of recorded hourly chains, or
   Tardis history. Needs the owner's approval
 - [ ] CPI release dates into `research/data/` by hand (bls.gov blocks scripts), to complete H2's news split
-- [ ] Maker-first execution (post-only limits, then taker after a timeout): the lever most likely to make intraday edges tradable
+- [x] Maker-first execution (2026-10-04): `[execution] policy = "maker_first"` rests each order at the touch as a post-only
+  limit, books fills per cycle, and after `maker_timeout_seconds` cancels it and sends the rest to market. Paper
+  (real Kraken bid/ask, pessimistic fill rule) and Kraken (`orderType=post`), restart drill passing. On for the
+  multi-strategy paper book; every order logs a `portfolio_maker_result` event to measure fill rates.
+- [ ] Maker-first on Kraken with real money: one live decision at one lot, check the resting order, its fill or its
+  cancel-and-market fallback, before any live config uses it (needs the owner to run it)
+- [ ] After two weeks of the paper book: read the maker results (share filled, seconds waited, drift paid on
+  fallbacks) and the measured Kraken costs (`scripts/research/kraken_costs.py`), then set the basket's
+  `slippage_bps` from the measurements instead of the assumed tiers
+- [x] Web dashboard (2026-10-04, `src/dashboard/`): local read-only page per book (equity vs BTC, drawdown, exposure,
+  limits, strategies, positions, correlations, fills, alerts, job health, measured costs). LaunchAgent on the Mac
+- [x] Kraken spread and depth collector (2026-10-04, `src/data/kraken_spreads.py`) and `scripts/research/kraken_costs.py`:
+  measured cost per coin against each config's assumed slippage
+- [x] Paper against backtest (2026-10-04, `scripts/research/paper_vs_backtest.py`): positions per decision bar and return gap
 - [x] Book tearsheet (2026-10-03, `src/portfolio/tearsheet.py`): one static HTML page with equity vs BTC, the underwater curve, a
   monthly heatmap, rolling vol/Sharpe/beta, historical VaR/ES, exposure over time and strategy correlations. Written by
   `portfolio_backtest.py` for a backtest and by `main.py --portfolio PATH --tearsheet` for a running book

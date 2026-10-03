@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import gzip
 import json
+import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -61,6 +62,33 @@ def fetch_tickers(*, now: datetime | None = None, fetch: Fetch = http_json_gzip)
                      "ask_size": float(ticker.get("askSize") or 0.0), "mark": float(ticker.get("markPrice") or mid), "volume_quote_24h": float(ticker.get("volumeQuote") or 0.0),
                      "half_spread_bps": (float(ask) - float(bid)) / 2.0 / mid * 10_000.0})
     return pd.DataFrame(rows, columns=list(TICKER_COLUMNS))
+
+
+class TouchQuotes:
+    """The real best bid and ask per runtime symbol ("BTC/USD"), from one cached `tickers` request.
+
+    The paper exchange asks this when it holds a resting (post-only) order: at placement, for the price to rest at,
+    and each cycle after, to see whether the market has moved through it. One request answers for every coin, so
+    the answer is kept for `max_age` seconds. Any failure returns None ("unknown"), never an exception.
+    """
+
+    def __init__(self, *, max_age: float = 15.0, fetch: Fetch = http_json_gzip, clock: Callable[[], float] = time.monotonic) -> None:
+        self.max_age, self._fetch, self._clock = max_age, fetch, clock
+        self._at: float | None = None
+        self._quotes: dict[str, tuple[float, float]] = {}
+
+    def __call__(self, symbol: str) -> tuple[float, float] | None:
+        """(best bid, best ask) of the perp for `symbol`, or None when Kraken doesn't quote it or can't be reached."""
+        from src.data.kraken_futures import venue_symbol_for
+
+        if self._at is None or self._clock() - self._at > self.max_age:
+            try:
+                tickers = self._fetch(f"{API}/tickers").get("tickers", [])
+            except Exception:  # noqa: BLE001 - the caller treats None as "no quote"
+                return None
+            self._quotes = {str(item.get("symbol")): (float(item["bid"]), float(item["ask"])) for item in tickers if item.get("bid") and item.get("ask")}
+            self._at = self._clock()
+        return self._quotes.get(venue_symbol_for(symbol))
 
 
 def market_order_cost_bps(levels: Sequence[Sequence[float]], mid: float, size_usd: float) -> float:

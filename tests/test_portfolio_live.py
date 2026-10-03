@@ -48,6 +48,9 @@ class FakeKraken:
         self.hidden_fills: list[dict[str, Any]] = []
         self.realized = 0.0
         self.resting: list[dict[str, Any]] = []  # stop orders waiting for their trigger
+        self.posts: list[dict[str, Any]] = []  # post-only limit orders resting in the book
+        self.spread = 1.0  # best ask minus best bid, around `prices`
+        self.post_would_execute = False  # when set, Kraken refuses the next post-only order
         self.refuse_stops = False
         self.fee_rate = 0.0005  # what Kraken really charges (the adapter estimates the contract's taker rate)
         self.log: list[dict[str, Any]] = []  # the account log: two entries per fill, as Kraken writes them
@@ -72,10 +75,21 @@ class FakeKraken:
                                  "size": float(params["size"]), "stopPrice": float(params["stopPrice"]), "triggerSignal": params["triggerSignal"],
                                  "reduceOnly": params["reduceOnly"] == "true"})
             return {"result": "success", "sendStatus": {"status": "placed", "order_id": order_id}}
+        if endpoint == "tickers":
+            return {"result": "success", "tickers": [{"symbol": symbol, "bid": price - self.spread / 2, "ask": price + self.spread / 2} for symbol, price in self.prices.items()]}
+        if endpoint == "sendorder" and params.get("orderType") == "post":
+            if self.post_would_execute:
+                self.post_would_execute = False
+                return {"result": "success", "sendStatus": {"status": "postWouldExecute"}}
+            order_id = f"post-uuid-{len(self.requests)}"
+            self.posts.append({"order_id": order_id, "cliOrdId": params["cliOrdId"], "symbol": params["symbol"], "side": params["side"], "size": float(params["size"]),
+                               "limitPrice": float(params["limitPrice"]), "reduceOnly": params.get("reduceOnly") == "true"})
+            return {"result": "success", "sendStatus": {"status": "placed", "order_id": order_id}}
         if endpoint == "cancelorder":
-            before = len(self.resting)
+            before = len(self.resting) + len(self.posts)
             self.resting = [o for o in self.resting if o["order_id"] != params.get("order_id") and o["cliOrdId"] != params.get("cliOrdId")]
-            return {"result": "success", "cancelStatus": {"status": "cancelled" if len(self.resting) < before else "notFound"}}
+            self.posts = [o for o in self.posts if o["order_id"] != params.get("order_id") and o["cliOrdId"] != params.get("cliOrdId")]
+            return {"result": "success", "cancelStatus": {"status": "cancelled" if len(self.resting) + len(self.posts) < before else "notFound"}}
         if endpoint == "sendorder":
             size, entry = self.positions.get(params["symbol"], [0.0, 0.0])
             signed = float(params["size"]) * (1 if params["side"] == "buy" else -1)
@@ -91,7 +105,9 @@ class FakeKraken:
         if endpoint == "openorders":
             return {"result": "success", "openOrders": [{"order_id": o["order_id"], "cliOrdId": o["cliOrdId"], "symbol": o["symbol"], "side": o["side"],
                                                          "orderType": "stp", "stopPrice": o["stopPrice"], "unfilledSize": o["size"], "reduceOnly": o["reduceOnly"],
-                                                         "triggerSignal": o["triggerSignal"], "status": "untouched"} for o in self.resting]}
+                                                         "triggerSignal": o["triggerSignal"], "status": "untouched"} for o in self.resting]
+                    + [{"order_id": o["order_id"], "cliOrdId": o["cliOrdId"], "symbol": o["symbol"], "side": o["side"], "orderType": "lmt", "limitPrice": o["limitPrice"],
+                        "unfilledSize": o["size"], "reduceOnly": o["reduceOnly"], "status": "untouched"} for o in self.posts]}
         if endpoint == "openpositions":
             return {"result": "success", "openPositions": [{"symbol": symbol, "side": "long" if size > 0 else "short", "size": abs(size), "price": entry,
                                                             "unrealizedFunding": self.unrealized_funding.get(symbol, 0.0)} for symbol, (size, entry) in self.positions.items() if size]}
@@ -101,12 +117,22 @@ class FakeKraken:
             used = sum(abs(size) * self.prices[symbol] / 2.0 for symbol, (size, _entry) in self.positions.items())
             return {"result": "success", "accounts": {"flex": {"marginEquity": equity, "availableMargin": equity - used, "totalUnrealized": unrealized}}}
         if endpoint == "cancelallorders":
-            self.resting = []
+            self.resting, self.posts = [], []
             return {"result": "success", "cancelStatus": {"status": "cancelled"}}
         raise AssertionError(f"unexpected endpoint {endpoint}")
 
-    def _fill(self, symbol: str, signed: float, cli_ord_id: str) -> str:
-        price = self.prices[symbol]
+    def hit_posts(self, share: float = 1.0) -> int:
+        """Someone trades against every resting post-only order: `share` of each fills at its limit price (a maker fill)."""
+        for order in list(self.posts):
+            size = order["size"] if share >= 1.0 else round(order["size"] * share, 3)  # fills come in whole lots
+            self._fill(order["symbol"], size if order["side"] == "buy" else -size, order["cliOrdId"], price=order["limitPrice"], order_id=order["order_id"])
+            order["size"] -= size
+            if order["size"] <= 1e-12:
+                self.posts.remove(order)
+        return len(self.posts)
+
+    def _fill(self, symbol: str, signed: float, cli_ord_id: str, *, price: float | None = None, order_id: str | None = None) -> str:
+        price = self.prices[symbol] if price is None else price
         size, entry = self.positions.get(symbol, [0.0, 0.0])
         realized_pnl = 0.0
         if size and (size > 0) != (signed > 0):
@@ -127,8 +153,8 @@ class FakeKraken:
         fee = abs(signed) * price * self.fee_rate
         self.collateral -= fee
         number = len(self.fills) + len(self.hidden_fills) + 1
-        fill = {"cliOrdId": cli_ord_id, "order_id": f"uuid-{number}", "fill_id": f"fill-{number}", "symbol": symbol, "size": abs(signed), "price": price,
-                "side": "buy" if signed > 0 else "sell", "fillType": "taker", "realized_funding": realized_funding}
+        fill = {"cliOrdId": cli_ord_id, "order_id": order_id or f"uuid-{number}", "fill_id": f"fill-{number}", "symbol": symbol, "size": abs(signed), "price": price,
+                "side": "buy" if signed > 0 else "sell", "fillType": "maker" if order_id else "taker", "realized_funding": realized_funding}
         stamp = self.now.isoformat().replace("+00:00", "Z")
         base = {"date": stamp, "info": "futures trade", "contract": symbol.lower(), "execution": fill["fill_id"], "trade_price": price, "margin_account": "flex"}
         self.log.append({**base, "id": len(self.log) + 1, "asset": symbol.lower(), "old_balance": size, "new_balance": size + signed, "fee": None, "realized_funding": None})
@@ -701,3 +727,115 @@ def test_a_live_book_stores_its_snapshots_under_its_own_name(tmp_path, capsys) -
     out = capsys.readouterr().out
     assert "Portfolio 'trend-core' (PAPER)" in out and "Portfolio 'trend-core-live' (LIVE)" in out and "Equity 123.00" in out
 
+
+
+# --- maker-first on Kraken (post-only orders) --------------------------------------------------------------------------
+
+
+def test_a_post_only_order_rests_at_the_touch_fills_at_the_maker_fee_and_can_be_cancelled() -> None:
+    fake = FakeKraken()
+    fake.spread = 1.0  # bid 49,999.5 / ask 50,000.5
+    adapter = _adapter(fake)
+    adapter.client_id_prefix = "cqm-book1"
+    report = adapter.submit_order(order_id="pf-7-0-mk", side="buy", size=0.1, price=50_000.0, timestamp=T0, symbol="BTC/USD", post_only=True)
+    assert report.status == "SUBMITTED"
+    assert fake.sent_orders()[-1] == {"orderType": "post", "symbol": "PF_XBTUSD", "side": "buy", "size": "0.1000", "cliOrdId": "cqm-book1-pf-7-0-mk", "limitPrice": "49999.5"}
+    assert adapter.settle_orders() == [] and adapter.position_size("BTC/USD") == 0.0  # resting: no outcome, and never written off while it is open
+    for _ in range(LOST_ORDER_SETTLE_ATTEMPTS + 2):
+        assert adapter.settle_orders() == []
+
+    fake.hit_posts(0.5)
+    [part] = adapter.settle_orders()
+    assert part["status"] == "PARTIALLY_FILLED" and part["filled_size"] == pytest.approx(0.05) and part["fill_price"] == pytest.approx(49_999.5)
+    assert part["fee"] == pytest.approx(0.05 * 49_999.5 * CONTRACTS[0].maker_fee_rate) and CONTRACTS[0].maker_fee_rate < CONTRACTS[0].taker_fee_rate
+    adapter.cancel_order(order_id="pf-7-0-mk")
+    assert fake.posts == []
+    [ended] = adapter.settle_orders()
+    assert ended["status"] == "FILLED" and "filled_size" not in ended  # over, with nothing new: the caller knows 0.05 of 0.1 was filled
+    assert adapter.position_size("BTC/USD") == pytest.approx(0.05) and adapter.settle_orders() == []
+
+    sell = adapter.submit_order(order_id="pf-7-1-mk", side="sell", size=0.05, price=50_000.0, timestamp=T0, symbol="BTC/USD", post_only=True, reduce_only=True)
+    assert sell.status == "SUBMITTED" and fake.sent_orders()[-1]["limitPrice"] == "50000.5" and fake.sent_orders()[-1]["reduceOnly"] == "true"  # a sell joins the ask
+    fake.post_would_execute = True
+    refused = adapter.submit_order(order_id="pf-7-2-mk", side="buy", size=0.1, price=50_000.0, timestamp=T0, symbol="ETH/USD", post_only=True)
+    assert refused.status == "REJECTED" and "postWouldExecute" in refused.message
+    fake.prices.pop("PF_ETHUSD")
+    assert "needs the best bid and ask" in adapter.submit_order(order_id="pf-7-3-mk", side="buy", size=0.1, price=2_500.0, timestamp=T0, symbol="ETH/USD", post_only=True).message
+    assert [order["orderType"] for order in fake.sent_orders()] == ["post", "post", "post"]  # without a quote nothing was sent
+
+
+def _maker_live(fake: FakeKraken, tmp_path, logger=None) -> PortfolioEngine:
+    return _live_engine(fake, tmp_path, logger=logger, config=_config(execution={"policy": "maker_first", "maker_timeout_seconds": 120}))
+
+
+def _until_orders(engine: PortfolioEngine, fake: FakeKraken):
+    for index in range(FIRST, FIRST + 200):
+        report = _cycle(engine, fake, index)
+        if report.orders:
+            return index, report
+        for seconds in (120, 121, 122):  # let anything resting time out and settle before the next bar
+            engine.run_cycle(bars_until(index), now=_now(index) + timedelta(seconds=seconds))
+    raise AssertionError("no decision sent an order")
+
+
+def test_a_live_maker_first_book_rests_its_orders_and_books_maker_fills(tmp_path) -> None:
+    fake = FakeKraken()
+    logger = TradeLogger(tmp_path / "trades.db")
+    engine = _maker_live(fake, tmp_path, logger)
+    index, report = _until_orders(engine, fake)
+    assert report.fills == [] and len(fake.posts) == len(report.orders) == len(engine.pending_orders)
+    assert all(order["orderType"] == "post" for order in fake.sent_orders()[-len(report.orders):])
+    assert fake.positions == {} or all(order["reduceOnly"] for order in fake.posts)  # nothing traded by resting
+
+    fake.hit_posts()
+    hit = engine.run_cycle(bars_until(index), now=_now(index) + timedelta(seconds=60))
+    assert len(hit.fills) == len(report.orders) and all(fill["liquidity"] == "maker" for fill in hit.fills) and engine.pending_orders == {} and engine.open_plan == []
+    for fill in hit.fills:
+        assert fill["fee"] == pytest.approx(fill["units"] * fill["price"] * CONTRACTS[0].maker_fee_rate)
+    assert engine.reconcile() == {}
+    assert [order["orderType"] for order in fake.sent_orders() if order["orderType"] == "mkt"] == []  # no market order was needed
+    assert {event["metadata"]["outcome"] for event in logger.list_events(event_types=["portfolio_maker_result"])} == {"filled"}
+
+
+def test_a_live_maker_order_that_times_out_is_cancelled_and_only_the_unfilled_part_goes_to_market(tmp_path) -> None:
+    fake = FakeKraken()
+    engine = _maker_live(fake, tmp_path)
+    index, report = _until_orders(engine, fake)
+    planned = {meta["instrument"]: float(meta["units"]) for meta in engine.pending_orders.values()}
+    fake.hit_posts(0.5)  # half of each fills while it rests
+    half = engine.run_cycle(bars_until(index), now=_now(index) + timedelta(seconds=60))
+    first_half = {instrument: round(units * 0.5, 3) for instrument, units in planned.items()}
+    assert {fill["instrument"]: fill["units"] for fill in half.fills} == pytest.approx(first_half)
+    assert len(engine.pending_orders) == len(planned) and len(fake.posts) == len(planned)  # the rest keeps resting
+
+    fills = []
+    for seconds in (120, 180, 240):  # the timeout: cancel, then the remainder as a market order
+        fills += engine.run_cycle(bars_until(index), now=_now(index) + timedelta(seconds=seconds)).fills
+    assert fake.posts == [] and engine.pending_orders == {} and engine.open_plan == []
+    market = [order for order in fake.sent_orders() if order["orderType"] == "mkt"]
+    assert len(market) == len(planned) and all(order["cliOrdId"].endswith("-tk") for order in market)
+    assert {fill["instrument"]: fill["units"] for fill in fills} == pytest.approx({instrument: units - first_half[instrument] for instrument, units in planned.items()})
+    assert all("liquidity" not in fill for fill in fills) and engine.reconcile() == {}
+    for instrument, units in planned.items():  # the book and Kraken both hold exactly what the decision asked for
+        venue_symbol = "PF_XBTUSD" if instrument == BTC else "PF_ETHUSD"
+        assert abs(fake.positions[venue_symbol][0]) == pytest.approx(units) and abs(float(engine.book.units()[instrument])) == pytest.approx(units)
+
+
+def test_a_post_only_order_kraken_refuses_is_sent_to_market_at_once_and_a_restart_keeps_resting_orders(tmp_path) -> None:
+    fake = FakeKraken()
+    fake.post_would_execute = True  # the first maker order would have crossed the spread
+    engine = _maker_live(fake, tmp_path)
+    index, report = _until_orders(engine, fake)
+    sent = fake.sent_orders()[-(len(report.orders) + 1):]
+    assert [order["orderType"] for order in sent[:2]] == ["post", "mkt"] and sent[1]["cliOrdId"] == sent[0]["cliOrdId"].removesuffix("-mk") + "-tk"
+    resting = len(fake.posts)
+    assert resting == len(report.orders) - 1 == len([meta for meta in engine.pending_orders.values() if meta.get("style") == "maker"])
+
+    restarted = _maker_live(fake, tmp_path)  # the process dies with orders resting on Kraken
+    assert restarted.restored and len([meta for meta in restarted.pending_orders.values() if meta.get("style") == "maker"]) == resting
+    before = len(fake.sent_orders())
+    fake.hit_posts()
+    hit = restarted.run_cycle(bars_until(index), now=_now(index) + timedelta(seconds=60))
+    assert len(fake.sent_orders()) == before and restarted.pending_orders == {} and restarted.reconcile() == {}  # nothing resent
+    assert sorted(fill.get("liquidity", "taker") for fill in hit.fills).count("maker") == resting
+    assert all(fill["fee"] == pytest.approx(fill["units"] * fill["price"] * CONTRACTS[0].maker_fee_rate) for fill in hit.fills if fill.get("liquidity") == "maker")

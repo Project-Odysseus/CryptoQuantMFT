@@ -112,6 +112,11 @@ class PortfolioConfig:
     risk: PortfolioRiskConfig = field(default_factory=PortfolioRiskConfig)
     review: ReviewConfig | None = None  # kill criteria, set before live ([review]; src/portfolio/review.py)
     baskets: tuple[BasketSpec, ...] = ()  # [[baskets]]: their member sleeves are part of `sleeves`
+    # [execution] policy: "taker" sends every order as a market order. "maker_first" first rests it at the touch as a
+    # post-only limit order (no spread paid, the lower maker fee) and, if it hasn't filled after
+    # `maker_timeout_seconds`, cancels it and sends what is left as a market order. Checked once per runtime cycle.
+    execution_policy: str = "taker"
+    maker_timeout_seconds: float = 120.0
     path: str | None = None
 
     def small_lot_cap(self, equity: float) -> float | None:
@@ -170,7 +175,9 @@ class PortfolioConfig:
 
 _PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "scale", "allocation", "allocation_lookback_days", "allocation_refit_days",
                    "small_account_equity", "small_account_max_lot_weight"}
-_TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves", "review", "baskets"}
+_TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves", "review", "baskets", "execution"}
+_EXECUTION_KEYS = {"policy", "maker_timeout_seconds"}
+EXECUTION_POLICIES = ("taker", "maker_first")
 
 
 def _known(cls: type) -> set[str]:
@@ -353,6 +360,15 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
             except (TypeError, ValueError) as exc:
                 errors.append(f"[review] {exc}")
 
+    execution = dict(raw.get("execution", {}) or {})
+    for key in sorted(set(execution) - _EXECUTION_KEYS):
+        errors.append(f"[execution] unknown key '{key}'; allowed: {sorted(_EXECUTION_KEYS)}")
+    if execution.get("policy", "taker") not in EXECUTION_POLICIES:
+        errors.append(f"[execution] policy must be one of {list(EXECUTION_POLICIES)}, not {execution.get('policy')!r}")
+    maker_timeout = _number(execution, "maker_timeout_seconds", 120.0, "[execution]", errors)
+    if maker_timeout is not None and not 10 <= maker_timeout <= 3600:
+        errors.append("[execution] maker_timeout_seconds must be between 10 and 3600 (an order still resting when the next bar closes blocks that bar's trade)")
+
     if errors:
         source = f" in {path}" if path else ""
         raise PortfolioConfigError(f"{len(errors)} problem(s){source}:\n" + "\n".join(f"  - {error}" for error in errors))
@@ -372,6 +388,8 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         risk=risk,
         review=review,
         baskets=tuple(baskets),
+        execution_policy=str(execution.get("policy", "taker")),
+        maker_timeout_seconds=float(maker_timeout),
         path=path,
     )
 
