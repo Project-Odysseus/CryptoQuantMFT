@@ -6,6 +6,40 @@ accident.
 
 ---
 
+## 2026-10-03: The taker-buy basket, side by side: do the shorts earn their place?
+
+Question from the owner: the basket shorts the coins with the lowest taker-buy share, but is there evidence those
+coins lag, or does the long side do all the work? The basket exactly as configured (top 30, 20% legs, every 10 days;
+nothing changed), on Kraken perp prices, each side measured against the equal-weight ranked universe held over the
+same rebalance days. `python scripts/research/basket_legs.py`; 1 look logged (family `cross_sectional`). Annualised %
+per 1x of equity held in that side; funding from Binance's settled rates (a proxy for Kraken's).
+
+| | Universe | Long coins | Short coins | Long excess (t) | Short excess (t) | Long: funding paid / cost | Short: funding received / cost |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| In-sample 2022-05 to 2024-09 | +26 | +42 | +11 | +15.9 (0.9) | +14.9 (0.8) | 1.4 / 8.6 | 6.6 / 10.4 |
+| Holdout 2024-10 to 2025-12 | +27 | +137 | -38 | +109.7 (3.8) | +64.7 (3.4) | 1.5 / 9.7 | 3.0 / 10.4 |
+| 2022 (from May) | -102 | -54 | -140 | +48 (1.2) | +38 (1.0) | | |
+| 2023 | +95 | +79 | +97 | -17 (-0.8) | -2 (-0.1) | | |
+| 2024 | +97 | +168 | +46 | +71 (2.2) | +51 (1.8) | | |
+| 2025 | -30 | +60 | -72 | +90 (3.0) | +43 (2.2) | | |
+
+- **The short side is as real as the long side, and no more.** The shorted coins lagged the universe in three of four
+  years, by about as much as the long coins led it, and the two sides failed together in 2023. There is no sign that
+  the long side carries the basket alone.
+- **Shorting did not cost funding: it was paid.** The shorted coins had positive funding on average, so the short
+  side received 3-7% a year. The fear from the volatility study (shorts paying 25-60%) doesn't apply to this ranking.
+- **In-sample neither side is distinguishable from zero** (t 0.8-0.9), and each side's trading costs (9-10% a year
+  per 1x) are about two thirds of its in-sample excess. The strong holdout is 15 months.
+- A long-only version would keep half the edge and all of the market exposure (the universe itself swung from -102%
+  to +97% a year), which is the exposure the trend sleeves already carry.
+
+**What this changes:** nothing in the structure. Keep it long/short if it is kept at all. The open question is
+unchanged: the evidence is one strong holdout on a weak in-sample, and real Kraken spreads decide it (TODO section 2).
+A model that switches the basket between long-only, short-only and both is not supported by this: both sides work
+or fail together.
+
+---
+
 ## 2026-10-03: A multi-strategy book under correlation-aware limits
 
 The first book with strategies that are really different: five daily trend sleeves (BTC, ETH, SOL) plus the taker-buy
