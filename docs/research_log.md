@@ -6,6 +6,45 @@ accident.
 
 ---
 
+## 2026-10-03: H4 and H5 pre-registered (Kalshi daily BTC markets against Deribit options); pilot only
+
+Two hypotheses on one panel (`src/research/hypotheses/binary_panel.py`): at every recorded Deribit chain snapshot,
+Kalshi's quotes on its daily "BTC above K at 5 PM New York" levels (within 3% of the index, 1-26 hours left) next to
+the probability the option smile implies, and what happened. Pre-registered and locked before any result
+(`research/prereg/H4.txt`, `H5.txt`; `python scripts/research/new_hypothesis.py status`).
+
+- **H5:** where Deribit-implied and Kalshi's mid differ, the options are partly right (slope b > 0 in
+  outcome - mid = b x (implied - mid)), and a taker rule on gaps above 2 cents after the fee is profitable.
+- **H4:** downside protection bought as "No" contracts 0.5-2% below the price, at the ask plus the fee, loses money on
+  average (the practical question: what does capping a perp long's loss this way cost?).
+
+**The test is prospective.** The confirmatory window is 2026-10-05 to 2026-11-16, data that didn't exist when the
+texts were locked, run once on or after 2026-11-17 (`--window confirm`; the scripts refuse earlier). At least 20
+daily events are needed. `--collect` caches the window's Kalshi quotes as chains are recorded and prints counts only.
+
+**Pilot** (the week already recorded: 54 snapshots, 7 daily events, 967 rows; a pipeline check, 3 trials logged). No
+conclusion is drawn from it and no rule was changed after it:
+
+| | Pilot value (95% interval over events) |
+| --- | --- |
+| H5 slope b | +1.58 (+0.65 to +2.50); flat-volatility version +0.95 (+0.22 to +1.72) |
+| H5 Brier: Kalshi mid / options-implied | 0.0569 / 0.0551 |
+| H5 taker rule | 239 trades in 6 events, +0.056 per contract (+0.013 to +0.107) |
+| H4 protection: profit per contract | -0.082 (-0.126 to -0.043); cost 0.125, breach rate 0.043, options-implied fair 0.088 |
+| H4 cost of covering a long down to the level | 12.9 bps of the position |
+
+- The pipeline works end to end, and the gap has the opposite shape to the one predicted: Kalshi's quotes were *less*
+  extreme than the options' (0.949 against 0.970 for levels more than 1% below the price; 0.053 against 0.030 above),
+  and the outcomes were more extreme than both. The pre-registration expected the options' distribution to be the
+  wider one. It stays as written; the confirmatory window decides.
+- Seven events in one calm week: BTC settled below a protected level on 2 of them. Both pilot numbers are what a quiet
+  week produces whatever the truth is. A premium for selling protection shows up exactly like this until the week
+  it doesn't.
+- The data depend on the option-chain recorder, which only runs while the laptop is awake (2 to 15 snapshots a day so
+  far). An always-on machine would roughly triple the confirmatory sample.
+
+---
+
 ## 2026-10-03: Prediction markets on BTC (Polymarket, Kalshi): a fair-value model and a first look. Research only
 
 Both venues list binary markets on the BTC price: above a level at a time, inside a range, and up or down over a

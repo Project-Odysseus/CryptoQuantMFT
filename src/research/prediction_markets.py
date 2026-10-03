@@ -258,6 +258,28 @@ class KalshiClient:
                 for raw in self.raw_markets(series, status="settled", limit=limit, pages=max(1, limit // 200 + 1)) if raw.get("result") in ("yes", "no")]
         return pd.DataFrame(rows)
 
+    def event_markets(self, event_ticker: str) -> list[dict[str, Any]]:
+        """Every market of one event (e.g. "KXBTCD-26SEP3017": all the levels for one settlement time), as Kalshi returns them."""
+        return list(self.fetch(f"{KALSHI_API}/markets?{urllib.parse.urlencode({'event_ticker': event_ticker, 'limit': 200})}").get("markets", []))
+
+    def quotes_at(self, tickers: Sequence[str], when: datetime, *, lookback_minutes: int = 10, chunk: int = 40) -> dict[str, tuple[float, float]]:
+        """Each market's (Yes bid, Yes ask) as of `when`: the latest minute candle within `lookback_minutes` before it.
+
+        Markets without a two-sided quote in that window are left out: a quote older than that may predate a
+        price move, and comparing it with anything measured at `when` would manufacture a gap.
+        """
+        out: dict[str, tuple[float, float]] = {}
+        end = int(when.timestamp())
+        for first in range(0, len(tickers), chunk):
+            params = urllib.parse.urlencode({"market_tickers": ",".join(tickers[first : first + chunk]), "start_ts": end - lookback_minutes * 60, "end_ts": end, "period_interval": 1})
+            for market in self.fetch(f"{KALSHI_API}/markets/candlesticks?{params}").get("markets", []):
+                for candle in reversed(market.get("candlesticks", [])):
+                    bid, ask = _number((candle.get("yes_bid") or {}).get("close_dollars")), _number((candle.get("yes_ask") or {}).get("close_dollars"))
+                    if bid and ask and ask < 1.0:
+                        out[str(market["market_ticker"])] = (bid, ask)
+                        break
+        return out
+
     def candles(self, series: str, ticker: str, start: datetime, end: datetime, *, minutes: int = 1) -> pd.DataFrame:
         """A market's Yes bid, ask and traded price at the close of each `minutes`-minute period (indexed by period end)."""
         params = urllib.parse.urlencode({"start_ts": int(start.timestamp()), "end_ts": int(end.timestamp()), "period_interval": minutes})
