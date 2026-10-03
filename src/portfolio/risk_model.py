@@ -280,7 +280,7 @@ class ReturnWindow:
         return pd.DataFrame(np.corrcoef(block[:, active], rowvar=False), index=names, columns=names)
 
     def summary(self) -> dict[str, Any] | None:
-        """Average correlation, the effective number of bets and the most correlated pair; None when unmeasurable."""
+        """Average correlation, the effective number of bets, the most correlated pair and the matrix itself; None when unmeasurable."""
         correlation = self.correlation()
         if correlation is None:
             return None
@@ -289,7 +289,8 @@ class ReturnWindow:
         top = int(np.argmax(matrix[upper]))
         return {"units": len(matrix), "bars": len(self.rows), "average_correlation": average_correlation(matrix),
                 "effective_bets": effective_bets(matrix),
-                "most_correlated": [correlation.index[upper[0][top]], correlation.index[upper[1][top]], float(matrix[upper][top])]}
+                "most_correlated": [correlation.index[upper[0][top]], correlation.index[upper[1][top]], float(matrix[upper][top])],
+                "names": list(correlation.index), "matrix": [[round(float(value), 4) for value in row] for row in matrix]}  # for the dashboard's heatmap
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-ready state."""

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CryptoQuant books</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f4f3f0; --surface: #fcfcfb; --line: #e3e2dd; --grid: #ebeae6;
+  --text: #0b0b0b; --text-2: #52514e; --text-3: #898781;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --pole-cool: #2a78d6; --pole-warm: #e34948; --pole-mid: #f0efec;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+  --track: #e9e8e3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #111110; --surface: #1a1a19; --line: #2f2f2c; --grid: #262624;
+    --text: #ffffff; --text-2: #c3c2b7; --text-3: #8f8e86;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --pole-cool: #3987e5; --pole-warm: #e66767; --pole-mid: #383835;
+    --track: #2a2a28;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+.wrap { max-width: 1320px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; margin-bottom: 14px; }
+h1 { font-size: 17px; margin: 0; font-weight: 650; }
+h2 { font-size: 14px; margin: 0; font-weight: 650; }
+.muted { color: var(--text-2); }
+.small { font-size: 12px; }
+.books { display: flex; flex-wrap: wrap; gap: 8px; }
+.book { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 8px; padding: 7px 12px; cursor: pointer; text-align: left; font: inherit; min-width: 150px; }
+.book[aria-pressed="true"] { border-color: var(--series-1); box-shadow: inset 0 0 0 1px var(--series-1); }
+.book b { display: block; font-weight: 650; }
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.tag { font-size: 11px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--text-2); margin-left: 6px; font-weight: 500; }
+.tag.live { border-color: var(--critical); color: var(--text); }
+.spacer { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; color: var(--text-2); padding: 5px 11px; font: inherit; font-size: 12px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--text); color: var(--surface); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.tile, .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.tile { padding: 11px 13px; }
+.tile .label { font-size: 12px; color: var(--text-2); }
+.tile .value { font-size: 22px; font-weight: 650; letter-spacing: -0.01em; margin-top: 2px; }
+.tile .note { font-size: 12px; color: var(--text-3); }
+.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
+.card { padding: 14px; grid-column: span 12; min-width: 0; }
+@media (min-width: 900px) { .c6 { grid-column: span 6; } .c4 { grid-column: span 4; } .c8 { grid-column: span 8; } }
+.card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.card-head .sub { font-size: 12px; color: var(--text-2); }
+.linkish { border: 0; background: none; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; padding: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--text-2); margin-bottom: 4px; }
+.legend .key { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 6px; }
+.legend b { color: var(--text); font-weight: 600; margin-left: 5px; }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; touch-action: none; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.14); white-space: nowrap; z-index: 5; }
+.tip .when { color: var(--text-2); margin-bottom: 3px; }
+.tip .row { display: flex; align-items: center; gap: 7px; }
+.tip .row b { font-weight: 650; min-width: 62px; }
+.tip .key { width: 12px; border-top: 2px solid; display: inline-block; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: right; font-weight: 500; color: var(--text-2); font-size: 12px; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; padding-left: 0; }
+td.text, th.text { text-align: left; white-space: normal; }
+tr:last-child td { border-bottom: 0; }
+.scroll { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+.bar-cell { display: inline-block; width: 90px; height: 8px; position: relative; vertical-align: middle; margin-left: 8px; background: linear-gradient(var(--line), var(--line)) center/1px 100% no-repeat; }
+.bar-cell i { position: absolute; top: 0; height: 8px; background: var(--series-1); border-radius: 2px; }
+.meter { margin: 9px 0 13px; }
+.meter .top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.meter .track { height: 8px; background: var(--track); border-radius: 4px; margin-top: 5px; overflow: hidden; }
+.meter .fill { height: 100%; border-radius: 4px; }
+.status { display: inline-flex; align-items: center; gap: 6px; }
+.heat { border-collapse: separate; border-spacing: 2px; width: auto; }
+.heat td, .heat th { border: 0; padding: 0; text-align: center; }
+.heat td.cell { width: 54px; height: 34px; border-radius: 4px; font-size: 12px; cursor: default; }
+.heat td.cell:hover, .heat td.cell:focus { outline: 2px solid var(--text); outline-offset: -2px; }
+.heat th { font-size: 11px; color: var(--text-2); font-weight: 500; padding: 0 6px; white-space: nowrap; }
+.heat th.row { text-align: right; }
+.empty { color: var(--text-3); padding: 18px 0; text-align: center; font-size: 13px; }
+.alert { padding: 7px 0; border-bottom: 1px solid var(--grid); font-size: 13px; }
+.alert:last-child { border-bottom: 0; }
+.error { background: var(--surface); border: 1px solid var(--critical); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div id="root" class="wrap"><p class="muted">Loading…</p></div>
+<script src="/static/vendor/react.production.min.js"></script>
+<script src="/static/vendor/react-dom.production.min.js"></script>
+<script src="/static/vendor/htm.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

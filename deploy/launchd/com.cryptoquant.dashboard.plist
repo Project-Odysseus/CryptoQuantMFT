@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The read-only web dashboard (src/dashboard) as a macOS LaunchAgent: http://127.0.0.1:8787 on this Mac only. It
+  starts at login and is restarted if it exits. It reads the database and state files; it cannot trade, and stopping
+  it does not affect the books.
+    install:  cp deploy/launchd/com.cryptoquant.dashboard.plist ~/Library/LaunchAgents/
+              launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cryptoquant.dashboard.plist
+    open:     open http://127.0.0.1:8787
+    remove:   launchctl bootout gui/$(id -u)/com.cryptoquant.dashboard && rm ~/Library/LaunchAgents/com.cryptoquant.dashboard.plist
+  To see it from a phone on the same Wi-Fi, add <string>--host</string><string>0.0.0.0</string> to the arguments; there
+  is no login, so only on a network you trust. Paths are this machine's; edit them for another one.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.cryptoquant.dashboard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin/python</string>
+    <string>-m</string><string>src.dashboard.server</string>
+    <string>--port</string><string>8787</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT/logs/dashboard/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT/logs/dashboard/launchd.err.log</string>
+</dict>
+</plist>
