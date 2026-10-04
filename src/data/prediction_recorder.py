@@ -11,7 +11,8 @@ Each cycle, per venue and coin:
 - `depth/<day>.csv`: the top `LEVELS` price levels on each side for the markets that settle soonest (at most
   `max_books` per venue and coin, within `horizon_hours`). Prices are Yes prices; a No bid at q is a Yes ask at 1 - q.
 - `markets.csv`: one row per market the first time it has a quote recorded: the question, what it pays on, its settlement rule.
-- `results/kalshi.csv`: how each Kalshi market settled (checked hourly). Polymarket's results are not recorded yet.
+- `results/kalshi.csv`, `results/polymarket.csv`: how each market settled (checked hourly). Kalshi's come from its
+  list of settled markets; Polymarket's are looked up one by one for the markets this recorder has described.
 
 Files are append-only CSV, so a killed process loses nothing. One venue failing leaves the other's rows intact.
 """
@@ -81,6 +82,7 @@ class PredictionRecorder:
         self._results_seen: set[str] | None = None
         self._results_at: datetime | None = None
         self._poly_list: dict[str, tuple[datetime, list[pm.BinaryMarket]]] = {}
+        self._poly_results_at: datetime | None = None
 
     @staticmethod
     def _binance_spot(coin: str) -> float | None:
@@ -181,6 +183,29 @@ class PredictionRecorder:
         self._results_at = now
         return len(rows)
 
+    def _polymarket_results(self, now: datetime, *, per_pass: int = 60, give_up_days: float = 7.0) -> int:
+        """Look up the outcome of described Polymarket markets that have ended; at most once an hour, `per_pass` lookups."""
+        if self._poly_results_at is not None and now - self._poly_results_at < timedelta(hours=1):
+            return 0
+        self._poly_results_at = now
+        markets, path = self.root / "markets.csv", self.root / "results" / "polymarket.csv"
+        if not markets.exists():
+            return 0
+        done = _column(path, "market_id")
+        with markets.open(newline="", encoding="utf-8") as handle:
+            ended = [(row["market_id"], datetime.fromisoformat(row["expiry"])) for row in csv.DictReader(handle) if row["venue"] == "polymarket" and row["market_id"] not in done]
+        due = sorted((expiry, market_id) for market_id, expiry in ended if now - timedelta(days=give_up_days) < expiry < now - timedelta(minutes=10))
+        rows = []
+        for expiry, market_id in due[:per_pass]:
+            try:
+                outcome = self.polymarket.result(market_id)
+            except Exception:  # noqa: BLE001 - asked again next hour
+                continue
+            if outcome is not None:
+                rows.append(["polymarket", market_id, expiry.isoformat(), "", "", outcome])
+        _append(path, RESULT_COLUMNS, rows)
+        return len(rows)
+
     # --- the cycle -----------------------------------------------------------------------------------------------
 
     def cycle(self, now: datetime | None = None) -> dict[str, Any]:
@@ -196,8 +221,9 @@ class PredictionRecorder:
                     report["depth"] += depth
                 except Exception as exc:  # noqa: BLE001 - one venue down is a gap for that venue only
                     report["errors"].append(f"{venue} {coin}: {type(exc).__name__}: {exc}")
-        try:
-            report["results"] = self._kalshi_results(now)
-        except Exception as exc:  # noqa: BLE001
-            report["errors"].append(f"kalshi results: {type(exc).__name__}: {exc}")
+        for venue, results in (("kalshi", self._kalshi_results), ("polymarket", self._polymarket_results)):
+            try:
+                report["results"] += results(now)
+            except Exception as exc:  # noqa: BLE001
+                report["errors"].append(f"{venue} results: {type(exc).__name__}: {exc}")
         return report

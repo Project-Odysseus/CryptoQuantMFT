@@ -617,10 +617,10 @@ funding; `paper_vs_backtest.py` shows the difference as a return gap.
 `scripts/collectors/prediction_books.py` stores, every 10 minutes, the quotes and the top five order-book levels of
 Kalshi's and Polymarket's BTC and ETH price markets (public data, about 10 MB of network a day), under
 `data/market_data/prediction_markets/`: `quotes/<day>.csv`, `depth/<day>.csv`, `markets.csv` (each market's question
-and settlement rule, once) and `results/kalshi.csv` (how each Kalshi market settled). It runs with the other
+and settlement rule, once) and `results/<venue>.csv` (how each market settled, checked hourly). It runs with the other
 collectors. An order book can't be downloaded later, and the paper exchange for bets (`TODO.MD`, section 6b) will
 fill against these files. `--interval 120` samples every 2 minutes (for wifi); the 5- and 15-minute markets are only
-sampled either way. Polymarket's results are not recorded yet.
+sampled either way.
 
 ## Kraken's real trading costs against the assumed slippage
 

@@ -31,6 +31,10 @@ class FakeVenue:
             raise TimeoutError("down")
         return pd.DataFrame({"side": ["bid"] * 7 + ["ask"] * 2, "price": [0.60, 0.59, 0.58, 0.57, 0.56, 0.55, 0.54, 0.62, 0.63], "size": [10.0] * 9})
 
+    def result(self, slug):
+        self.asked = getattr(self, "asked", []) + [slug]
+        return getattr(self, "outcomes", {}).get(slug)
+
     def settled(self, series, *, limit=200):
         return pd.DataFrame([{"ticker": f"{series}-A", "open_time": NOW, "close_time": NOW, "floor": 85_000.0, "settled_at": 85_100.0, "yes": True, "volume": 1.0}])
 
@@ -90,3 +94,19 @@ def test_one_venue_failing_leaves_the_others_rows(tmp_path) -> None:
     report = _recorder(tmp_path, Down([]), FakeVenue([_market("polymarket", "P-1", 0.30, 0.35, token="tok1")])).cycle(NOW)
     assert len(report["errors"]) == 2 and report["errors"][0].startswith("kalshi BTC: ConnectionError") and report["quotes"] == 1
     assert pd.read_csv(tmp_path / "quotes" / "2026-10-04.csv")["venue"].tolist() == ["polymarket"]
+
+
+def test_polymarket_outcomes_are_looked_up_once_a_market_has_ended(tmp_path) -> None:
+    polymarket = FakeVenue([_market("polymarket", "P-SOON", 0.30, 0.35, hours=0.25, token="t1"), _market("polymarket", "P-LATER", 0.50, 0.55, hours=30, token="t2")])
+    recorder = _recorder(tmp_path, FakeVenue([]), polymarket)
+    recorder.cycle(NOW)
+    assert not (tmp_path / "results" / "polymarket.csv").exists()  # nothing has ended yet
+    polymarket.outcomes = {}
+    recorder.cycle(NOW + timedelta(hours=1, minutes=5))
+    assert polymarket.asked == ["P-SOON"] and not (tmp_path / "results" / "polymarket.csv").exists()  # ended, not resolved yet: asked, nothing stored
+    polymarket.outcomes = {"P-SOON": False}
+    assert recorder.cycle(NOW + timedelta(hours=2, minutes=10))["results"] == 1
+    stored = pd.read_csv(tmp_path / "results" / "polymarket.csv")
+    assert stored[["venue", "market_id", "yes"]].values.tolist() == [["polymarket", "P-SOON", False]]
+    recorder.cycle(NOW + timedelta(hours=3, minutes=15))
+    assert polymarket.asked == ["P-SOON", "P-SOON"]  # a stored result is not asked for again, and P-LATER has not ended

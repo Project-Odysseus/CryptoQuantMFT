@@ -204,6 +204,17 @@ class PolymarketClient:
         frame = pd.DataFrame(rows, columns=["side", "price", "size"])
         return pd.concat([frame[frame["side"] == "bid"].sort_values("price", ascending=False), frame[frame["side"] == "ask"].sort_values("price")], ignore_index=True)
 
+    def result(self, slug: str) -> bool | None:
+        """How a market ended: True if its first outcome (Yes, or Up) won, False if the other did, None while it isn't resolved."""
+        found = self.fetch(f"{POLYMARKET_GAMMA}/markets?{urllib.parse.urlencode({'slug': slug})}")
+        if not found or not found[0].get("closed"):
+            return None
+        try:
+            first, second = (float(price) for price in json.loads(found[0].get("outcomePrices") or "[]"))
+        except (TypeError, ValueError):
+            return None
+        return True if first >= 0.99 and second <= 0.01 else False if second >= 0.99 and first <= 0.01 else None
+
     def price_history(self, token_id: str, *, interval: str = "1d", fidelity_minutes: int = 1) -> pd.Series:
         """The outcome token's traded price over `interval` ("1h", "6h", "1d", "1w", "max"), one point per `fidelity_minutes`."""
         payload = self.fetch(f"{POLYMARKET_CLOB}/prices-history?market={token_id}&interval={interval}&fidelity={fidelity_minutes}")
