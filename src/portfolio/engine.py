@@ -220,6 +220,7 @@ class PortfolioEngine:
         self.unreconciled: dict[str, dict[str, float]] = {}  # book vs exchange disagreements: only reductions until resolved
         self.funding_booked_until: dict[str, str] = {}  # live: the last funding hour booked per instrument
         self.funding_source = funding_source
+        self.binary_results: Callable[[str], bool | None] | None = None  # instrument -> how its market resolved (None: not yet); set by the runtime
         self.equity_drift_alerted = False
         self.book_id = uuid.uuid4().hex[:10]  # part of every client order id; kept in the checkpoint
         self.sleeve_error_counts: dict[str, int] = {}
@@ -276,6 +277,7 @@ class PortfolioEngine:
         self.book.mark(prices, fx=fx, now=now)
         self._work_makers(report, now)
         self._settle_option_expiries(prices, now)
+        self._settle_binaries(now)
         self._book_live_funding(now)
         self._flush_tax(now)  # funding booked while marking
         self._check_equity_drift(now)
@@ -383,6 +385,31 @@ class PortfolioEngine:
         self._save()
         return report
 
+    def _settle_binaries(self, now: datetime) -> None:
+        """Settle held prediction-market contracts whose market has resolved, as `binary_results` reports them.
+
+        `binary_results(instrument)` returns True (Yes won), False, or None while unresolved or unknown. Paper books
+        read the recorder's result files through it; a live account settles on the venue. Booked for tax like an
+        option's expiry (how Norway treats such winnings is an open question in TODO 6b, part P).
+        """
+        held = [instrument for instrument, units in self.book.units().items() if units and self.book.instruments[instrument].kind == "binary"]
+        if not held or self.binary_results is None:
+            return
+        outcomes = {}
+        for instrument in held:
+            try:
+                outcome = self.binary_results(instrument)
+            except Exception:  # noqa: BLE001 - an unknown result is asked for again next cycle
+                outcome = None
+            if outcome is not None:
+                outcomes[instrument] = bool(outcome)
+        for record in self.book.settle_resolved_binaries(outcomes):
+            realized = float(record["realized"])
+            self._event("INFO", "portfolio_binary_settled", f"{record['instrument']} resolved {'Yes' if record['yes'] else 'No'}; realized {realized:+,.2f}",
+                        {key: str(value) for key, value in record.items()}, now)
+            self._tax_derivative(record["instrument"], "REALIZED_PNL", realized, now, {"kind": "binary_settlement"})
+            self._flush_tax(now)
+
     def _settle_option_expiries(self, prices: Mapping[str, float], now: datetime) -> None:
         """Settle options past their expiry at intrinsic value, at each coin's price from the book's perp or spot marks.
 
@@ -469,7 +496,7 @@ class PortfolioEngine:
         if not self.record_tax:
             return
         spec = self.book.instruments.get(instrument) or self.config.instruments[instrument]
-        if spec.kind in ("perp", "option"):  # derivatives: realized P&L and fees (opening an option isn't a taxable event)
+        if spec.kind in ("perp", "option", "binary"):  # derivatives: realized P&L and fees (opening an option isn't a taxable event)
             if realized:
                 self._tax_derivative(instrument, "REALIZED_PNL", realized, now, {"order_id": order_id})
             if fee:
@@ -1210,6 +1237,13 @@ class PortfolioEngine:
                 "funding": float(position.funding) if position else 0.0,
                 "exchange_stop": self.stop_anchors.get(instrument, {}).get("stop"),
             }
+        contracts = {}  # options and prediction-market contracts: not in the config, registered as they are traded
+        for instrument, spec in sorted(self.book.instruments.items()):
+            position = self.book.positions.get(instrument)
+            if spec.kind in ("option", "binary") and position is not None and (position.units or position.realized_pnl or position.fees):
+                price = float(self.book.marks.get(instrument, 0))
+                contracts[instrument] = {"kind": spec.kind, "units": float(position.units), "price": price, "avg_entry": float(position.avg_entry),
+                                         "value": float(position.units) * price, "realized_pnl": float(position.realized_pnl), "fees": float(position.fees)}
         sleeves = {}
         for sleeve_id, spec in self.sleeves.items():
             virtual = self.book.sleeves.get(sleeve_id)
@@ -1235,7 +1269,7 @@ class PortfolioEngine:
                        "groups": risk.groups, "max_beta_exposure": risk.max_beta_exposure, "max_portfolio_vol": risk.max_portfolio_vol,
                        "exposure": risk.exposure, "max_average_correlation": risk.max_average_correlation, "min_effective_bets": risk.min_effective_bets},
             "exposure": exposure, "strategy_correlation": self.unit_returns.summary(), "exposure_breaches": self.exposure_breaches(equity),
-            "instruments": instruments, "sleeves": sleeves, "residual_pnl": float(attribution.get("residual", 0)),
+            "instruments": instruments, "contracts": contracts, "sleeves": sleeves, "residual_pnl": float(attribution.get("residual", 0)),
             "execution": self.config.execution_policy, "pending_orders": len(self.pending_orders),  # orders sent and not yet settled (resting maker orders)
             "risk_actions": [vars_of(action) for action in (report.risk_actions if report is not None else [])],
             "fills": len(report.fills) if report is not None else 0,
@@ -1255,10 +1289,12 @@ class PortfolioEngine:
         spot: dict[str, float] = {}
         for instrument, spec in self.book.instruments.items():
             mark = float(self.book.marks.get(instrument, 0) or 0)
-            if spec.kind != "option" and mark > 0 and (spec.kind == "perp" or base_coin(spec.symbol) not in spot):
+            if spec.kind not in ("option", "binary") and mark > 0 and (spec.kind == "perp" or base_coin(spec.symbol) not in spot):
                 spot[base_coin(spec.symbol)] = mark
         try:
-            positions = [position for position in book_positions(self.book.units(), {instrument: spec.kind for instrument, spec in self.book.instruments.items()})
+            kinds = {instrument: spec.kind for instrument, spec in self.book.instruments.items()}
+            units = {instrument: held for instrument, held in self.book.units().items() if kinds.get(instrument) != "binary"}  # a binary's delta joins these limits in TODO 6b, A3
+            positions = [position for position in book_positions(units, kinds)
                          if position.underlying in spot]
             when = self.last_grid_bar + self.grid_step if self.last_grid_bar else datetime.now().astimezone()
             _table, _grid, breaches = check_exposure(positions, MarketState(now=when, spot=spot), self.config.risk.exposure, equity)

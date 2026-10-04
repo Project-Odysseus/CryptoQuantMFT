@@ -20,6 +20,14 @@ Accounting per instrument kind:
   (`settle_expired_options`). Contracts are registered as they are traded
   (`register_option`), since listings change every week. USDC counts as USD.
 
+- **binary** (a prediction-market contract, e.g. "kalshi:KXBTCD-26OCT0416-T85199.99"): units are Yes contracts and
+  the price is between 0 and 1. Buying Yes pays price x units; the position is worth units x mark; when the market
+  resolves it pays 1 per contract if Yes won and 0 if not (`settle_resolved_binaries`). A venue has no short
+  selling: the other side is bought as No, at 1 minus the Yes price. The book holds that as *negative Yes units*,
+  which has the same value at every price; the cash it shows is then higher by 1 per contract than the venue's,
+  because the venue keeps that 1 as the bet's stake. `binary_stake` reports it, so spendable cash can be known.
+  Contracts are registered as they are traded (`register_binary`).
+
 Each venue keeps its cash in its own currency (Kraken spot in EUR, Kraken
 Futures in USD). Equity in the base currency converts each venue at a
 recorded FX rate and never adds EUR to USD raw.
@@ -40,7 +48,9 @@ from typing import Any
 
 from src.portfolio.config import InstrumentSpec, PortfolioConfig
 
-VENUE_CURRENCY = {"kraken": "EUR", "kraken_futures": "USD", "deribit": "USD"}  # Deribit linear options settle in USDC, counted 1:1
+VENUE_CURRENCY = {"kraken": "EUR", "kraken_futures": "USD", "deribit": "USD",  # Deribit linear options settle in USDC, counted 1:1
+                  "kalshi": "USD", "polymarket": "USD"}  # Polymarket settles in USDC, counted 1:1
+BINARY_VENUES = ("kalshi", "polymarket")
 ZERO = Decimal(0)
 
 
@@ -126,6 +136,45 @@ class PortfolioBook:
             self.cash.setdefault("deribit", ZERO)
         return self.instruments[instrument]
 
+    def register_binary(self, instrument: str) -> InstrumentSpec:
+        """Make a prediction-market contract known to the book ("kalshi:<ticker>", "polymarket:<slug>"); idempotent."""
+        if instrument not in self.instruments:
+            venue = instrument.split(":", 1)[0]
+            if venue not in BINARY_VENUES or ":" not in instrument:
+                raise ValueError(f"binary ids look like '<{'|'.join(BINARY_VENUES)}>:<market id>', not {instrument!r}")
+            self.instruments[instrument] = InstrumentSpec(id=instrument, kind="binary", allow_short=True)
+            self.venue_currency.setdefault(venue, VENUE_CURRENCY[venue])
+            self.cash.setdefault(venue, ZERO)
+        return self.instruments[instrument]
+
+    def binary_stake(self, venue: str) -> Decimal:
+        """Cash the venue holds as the stake of No positions on `venue`: 1 per contract held as negative Yes units."""
+        return sum((-position.units for instrument, position in self.positions.items()
+                    if position.units < 0 and (spec := self.instruments.get(instrument)) is not None and spec.kind == "binary" and spec.venue == venue), ZERO)
+
+    def settle_resolved_binaries(self, outcomes: Mapping[str, bool], *, fees: Mapping[str, Decimal | float] | None = None) -> list[dict[str, Any]]:
+        """Close every held binary whose market has resolved; returns one record per settlement.
+
+        `outcomes` maps an instrument to True (Yes won: 1 per contract) or False (0). A market not in it is left
+        open. Long Yes receives the payout; a No position (negative units) pays it out of its stake. The realized
+        P&L is the payout minus the price paid.
+        """
+        settled = []
+        for instrument, position in self.positions.items():
+            spec = self.instruments.get(instrument)
+            if spec is None or spec.kind != "binary" or position.units == 0 or instrument not in outcomes:
+                continue
+            payout = Decimal(1) if outcomes[instrument] else ZERO
+            units, fee = position.units, _d((fees or {}).get(instrument, 0))
+            realized = (payout - position.avg_entry) * units
+            self.cash[spec.venue] += units * payout - fee
+            position.realized_pnl += realized
+            position.fees += fee
+            position.units, position.avg_entry = ZERO, ZERO
+            self.marks[instrument] = payout
+            settled.append({"instrument": instrument, "units": units, "yes": bool(outcomes[instrument]), "realized": realized, "fee": fee})
+        return settled
+
     def settle_expired_options(self, now: datetime, underlying_prices: Mapping[str, Decimal | float], *, fee_rate: Decimal | float = ZERO) -> list[dict[str, Any]]:
         """Close every option whose expiry has passed at its intrinsic value; returns one record per settlement.
 
@@ -169,6 +218,8 @@ class PortfolioBook:
         quantity, price, fee = _d(units), _d(price), _d(fee)
         if quantity <= 0 or price <= 0:
             raise ValueError(f"a fill needs positive units and price (got {quantity} at {price})")
+        if spec.kind == "binary" and price > 1:
+            raise ValueError(f"a binary's price is a probability between 0 and 1 (got {price})")
         if side not in ("buy", "sell"):
             raise ValueError(f"side must be 'buy' or 'sell', not {side!r}")
         signed = quantity if side == "buy" else -quantity
@@ -191,7 +242,7 @@ class PortfolioBook:
         elif new_units == 0:
             position.avg_entry = ZERO
 
-        if spec.kind in ("spot", "option"):  # the premium or the purchase price changes hands at the fill
+        if spec.kind in ("spot", "option", "binary"):  # the premium or the purchase price changes hands at the fill
             self.cash[venue] -= signed * price + fee
         else:
             self.cash[venue] += realized - fee
@@ -279,7 +330,7 @@ class PortfolioBook:
             if spec.venue != venue or position.units == 0:
                 continue
             mark = self.marks.get(instrument, position.avg_entry)
-            total += position.units * mark if spec.kind in ("spot", "option") else position.units * (mark - position.avg_entry)
+            total += position.units * mark if spec.kind in ("spot", "option", "binary") else position.units * (mark - position.avg_entry)
         return total
 
     def equity(self) -> Decimal:
@@ -335,12 +386,14 @@ class PortfolioBook:
             "last_update": self.last_update.isoformat() if self.last_update else None,
             "liquidations_booked": list(self.liquidations_booked),
             "options": sorted(instrument for instrument, spec in self.instruments.items() if spec.kind == "option"),
+            "binaries": sorted(instrument for instrument, spec in self.instruments.items() if spec.kind == "binary"),
         }
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any], *, instruments: Mapping[str, InstrumentSpec]) -> "PortfolioBook":
         """Rebuild from `to_dict` output and the config's instruments."""
         options = {instrument: InstrumentSpec(id=instrument, kind="option", allow_short=True) for instrument in payload.get("options", [])}
+        options.update({instrument: InstrumentSpec(id=instrument, kind="binary", allow_short=True) for instrument in payload.get("binaries", [])})
         book = cls(
             base_currency=payload["base_currency"],
             instruments={**dict(instruments), **options},
