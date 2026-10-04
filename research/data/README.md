@@ -7,3 +7,6 @@
 - CPI release dates are **not** included: bls.gov refused scripted requests (HTTP 403) and FRED/ALFRED timed out from
   this network. Add them by hand from https://www.bls.gov/schedule/news_release/cpi.htm (08:30 New York time) to
   complete H2's news split.
+- `kraken_perp_listings.csv`: every Kraken Futures linear perpetual (PF_...USD) listed on 2026-10-04 with the day it
+  opened (`openingDate` from https://futures.kraken.com/derivatives/api/v3/instruments). Used for a point-in-time coin
+  list (H6). Perps Kraken delisted before that day are not in it.

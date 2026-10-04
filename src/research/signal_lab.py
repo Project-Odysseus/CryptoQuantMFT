@@ -45,6 +45,7 @@ class Sleeve:
     description: str
     tradable: bool = True  # False: a theoretical series (missing costs or instruments), shown but never auto-selected
     note: str = ""
+    parts: dict[str, pd.Series] | None = None  # cross-sectional sleeves: daily price P&L, funding received and costs (negative)
 
 
 def metrics(returns: pd.Series, start: pd.Timestamp | None = None, end: pd.Timestamp | None = None) -> dict[str, float]:
@@ -59,11 +60,39 @@ def metrics(returns: pd.Series, start: pd.Timestamp | None = None, end: pd.Times
 
 # --- cross-sectional sleeves (Binance perps, the coins Kraken lists) ----------------------------------------------------
 
-def load_universe(*, top_n: int = 50, kraken_only: bool = True) -> dict[str, pd.DataFrame]:
+LISTINGS = Path("research/data/kraken_perp_listings.csv")
+
+
+def snapshot_kraken_listings(path: str | Path = LISTINGS) -> pd.DataFrame:
+    """Write every Kraken Futures linear perp with the day it opened (one public request), for a point-in-time coin list."""
+    from src.data.kraken_futures import fetch_instruments
+
+    rows = [{"symbol": str(item["symbol"]), "base": "BTC" if str(item["symbol"])[3:-3] == "XBT" else str(item["symbol"])[3:-3], "opening_date": str(item["openingDate"])[:10]}
+            for item in fetch_instruments() if str(item.get("symbol", "")).startswith("PF_") and str(item["symbol"]).endswith("USD") and item.get("openingDate")]
+    frame = pd.DataFrame(rows).sort_values(["opening_date", "symbol"]).reset_index(drop=True)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False)
+    return frame
+
+
+def kraken_opening_dates(path: str | Path = LISTINGS) -> dict[str, pd.Timestamp]:
+    """Coin (as `base_asset` names it, e.g. PEPE for 1000PEPEUSDT) -> the day Kraken opened its perp, from the stored snapshot."""
+    opened: dict[str, pd.Timestamp] = {}
+    for row in pd.read_csv(path).itertuples():
+        day = pd.Timestamp(row.opening_date, tz="UTC")
+        for key in {row.base, base_asset(f"{row.base}USDT")}:
+            opened[key] = min(day, opened.get(key, day))
+    return opened
+
+
+def load_universe(*, top_n: int = 50, kraken_only: bool = True, listing: str = "today") -> dict[str, pd.DataFrame]:
     """Daily close, volume, taker-buy volume and funding per coin, plus `universe` (the tradable coins each day).
 
-    `kraken_only` keeps the coins Kraken Futures lists *today* (one public request), since those are what could be
-    traded. That looks ahead: a coin Kraken has since delisted is missing from the past too, which flatters results.
+    `kraken_only` keeps the coins Kraken Futures lists, since those are what could be traded. With `listing="today"`
+    that is today's list (one public request), which looks ahead: a coin is in the past universe before Kraken had
+    it. `listing="point_in_time"` admits a coin only from the day Kraken opened its perp (`LISTINGS`, a stored
+    snapshot). Perps Kraken has since delisted are in neither list; that remaining bias can't be removed from
+    public data.
     """
     klines = load_panel("klines_1d")
     if klines.empty:
@@ -74,7 +103,12 @@ def load_universe(*, top_n: int = 50, kraken_only: bool = True) -> dict[str, pd.
     funding = load_panel("funding")
     wide["funding"] = funding.pivot_table(index="date", columns="symbol", values="funding").reindex_like(wide["close"])
     universe = liquid_universe(wide["quote_volume"], top_n=top_n)
-    if kraken_only:
+    if kraken_only and listing == "point_in_time":
+        opened = kraken_opening_dates()
+        for symbol in universe.columns:
+            day = opened.get(base_asset(symbol))
+            universe[symbol] = universe[symbol] & (universe.index > day) if day is not None else False  # tradable from the day after it opened
+    elif kraken_only:
         listed = kraken_perp_bases()
         universe.loc[:, [symbol for symbol in universe.columns if base_asset(symbol) not in listed]] = False
     wide["universe"] = universe
@@ -96,21 +130,22 @@ def in_sample_sign(score: pd.DataFrame, wide: Mapping[str, pd.DataFrame]) -> flo
 
 
 def cross_sectional_sleeve(name: str, score: pd.DataFrame, wide: Mapping[str, pd.DataFrame], *, description: str, quantile: float = 0.2, rebalance_days: int = 7,
-                           note: str = "") -> Sleeve:
+                           note: str = "", cost_multiplier: float = 1.0, start: pd.Timestamp = START) -> Sleeve:
     """Long the top `quantile` of the universe by `score`, short the bottom, dollar-neutral at 1x gross, with fees, slippage and funding."""
     weights = rank_weights(score, wide["universe"], quantile=quantile, gross=1.0)
-    costs = PortfolioCosts(fee_pct=0.05, slippage_bps=slippage_by_liquidity(wide["quote_volume"]))
+    costs = PortfolioCosts(fee_pct=0.05 * cost_multiplier, slippage_bps=slippage_by_liquidity(wide["quote_volume"]) * cost_multiplier)
     result = simulate_portfolio(wide["close"], weights, funding=wide["funding"], costs=costs, rebalance_every=rebalance_days)
-    returns = result.returns[result.returns.index >= START]
-    parts = {"price": result.long_pnl + result.short_pnl, "funding received": -result.funding, "costs": -result.costs}  # the result stores both as amounts paid
-    drags = ", ".join(f"{label} {float(series[series.index >= START].mean() * DAYS):+.1%}" for label, series in parts.items())
-    return Sleeve(name, returns, description, note=(note + " " if note else "") + f"Per year: {drags}.")
+    returns = result.returns[result.returns.index >= start]
+    # the result stores funding and costs as amounts paid
+    parts = {label: series[series.index >= start] for label, series in (("price", result.long_pnl + result.short_pnl), ("funding received", -result.funding), ("costs", -result.costs))}
+    drags = ", ".join(f"{label} {float(series.mean() * DAYS):+.1%}" for label, series in parts.items())
+    return Sleeve(name, returns, description, note=(note + " " if note else "") + f"Per year: {drags}.", parts=parts)
 
 
-def carry_sleeve(wide: Mapping[str, pd.DataFrame]) -> Sleeve:
+def carry_sleeve(wide: Mapping[str, pd.DataFrame], **settings: Any) -> Sleeve:
     """Funding carry: long the coins where longs are paid (or pay least), short the ones where longs pay most."""
     return cross_sectional_sleeve("carry", -features(wide)["funding_7d"], wide,
-                                  description="Long the lowest 7-day funding, short the highest; weekly, market-neutral")
+                                  description="Long the lowest 7-day funding, short the highest; weekly, market-neutral", **settings)
 
 
 def momentum_sleeve(wide: Mapping[str, pd.DataFrame]) -> Sleeve:
@@ -121,10 +156,10 @@ def momentum_sleeve(wide: Mapping[str, pd.DataFrame]) -> Sleeve:
                                   description="Rank by past 30-day return, direction fixed in-sample; weekly, market-neutral")
 
 
-def taker_sleeve(wide: Mapping[str, pd.DataFrame]) -> Sleeve:
+def taker_sleeve(wide: Mapping[str, pd.DataFrame], **settings: Any) -> Sleeve:
     """The taker-buy basket (already in the paper book), on the same footing as the others."""
     return cross_sectional_sleeve("taker", features(wide)["taker_buy_share_7d"], wide,
-                                  description="Long the coins with the most aggressive buying over 7 days, short the least; weekly")
+                                  description="Long the coins with the most aggressive buying over 7 days, short the least; weekly", **settings)
 
 
 # --- event and volatility sleeves ----------------------------------------------------------------------------------------

@@ -1,0 +1,96 @@
+PRE-REGISTRATION H6: CROSS-SECTIONAL FUNDING CARRY ON KRAKEN-TRADABLE PERPS
+Version 1. Written 2026-10-04, before any H6 test was run. Changes after results = a new version (lock it again), logged
+as extra trials.
+
+PRIOR EXPOSURE (what has already been looked at that bears on this)
+This signal on this data has been looked at three times, so nothing in the development window is unseen:
+- 2026-09-26, cross_sectional_study.py: funding_7d long/short, weekly. Full Binance universe: Sharpe 1.24 to 2023,
+  -0.70 from 2024 to 2026-08. Coins Kraken lists today, top 50: 1.19 and 0.42. That holdout ran into 2026, so the
+  frozen window has been seen in aggregate up to 2026-08.
+- 2026-10-04, signal lab: the same rule on today's Kraken list. Top 50: 1.09 to 2023, 0.93 for 2024-2025. Top 30: 1.77
+  and 1.63. Chosen next to the taker basket by an in-sample rule.
+- 2026-09-28, H1b: timed spot-against-perp carry on BTC, ETH, SOL. Failed its holdout look.
+Consequence: this test cannot confirm the signal. It can only reject it, by showing that the earlier result does not
+survive a point-in-time coin list, doubled costs and nearby definitions. Confirmation, if it passes, is prospective
+(see PROSPECTIVE PHASE).
+
+MARKET BEHAVIOUR
+Coins whose perpetual charges longs the most funding do not outperform by enough to pay for it. Short the coins with
+the highest funding and long the ones with the lowest, and the book collects the funding difference.
+
+MECHANISM
+Funding is the price of leveraged long exposure. Leveraged buyers crowd into the popular coins and pay; whoever takes
+the other side is paid for carrying squeeze risk on crowded coins and for holding unloved ones. The other side of
+this trade is the leveraged long.
+
+OBSERVABLE PREDICTION AND EXPECTED SIGN
+A dollar-neutral book, long low funding and short high funding, has a positive net return. Funding received is
+positive and is the main source; the price legs are near zero.
+
+DATA (point-in-time)
+- Binance USDT-margined perpetuals, daily klines and settled funding, delisted symbols included
+  (src/data/binance_archive.py). Binance prices and funding stand in for Kraken's: Kraken's public funding history
+  covers about one year only.
+- Universe each day: the 50 symbols with the highest 30-day average quote volume that have traded at least 60 days
+  (src/research/portfolio.liquid_universe), then only those whose Kraken perpetual had opened before that day
+  (research/data/kraken_perp_listings.csv, a snapshot of Kraken's openingDate per perp taken 2026-10-04).
+- Window: the first day with at least 10 names in that universe, to 2025-12-31. Kraken's linear perps began
+  2022-03-22, so 2020 and 2021 are out. The holdout (2026-01-01 on) stays locked.
+
+SIGNAL (known at each day's close; traded at that close, as in the earlier studies)
+score = minus the mean of the last 7 daily funding sums (at least 5). Long the top 20% of the universe by score,
+short the bottom 20%, equal weight within each side, 1x gross, dollar-neutral. Rebalanced every 7 days. Flat on days
+with fewer than 10 names.
+
+COSTS
+0.05% taker fee per side, slippage per side by liquidity tier (3, 8, 15 or 25 bps, src/research/portfolio
+.slippage_by_liquidity), each coin's settled funding on every position.
+
+PRIMARY OUTCOME
+The annualised Sharpe ratio of the book's daily net returns over the whole window, at 1x costs, for the one
+configuration above.
+
+SECONDARY OUTCOMES (reported, not part of pass or kill unless named there)
+- The return split into price legs, funding received and costs, per year.
+- Sharpe per calendar year; the worst drawdown.
+- A 95% confidence interval for the Sharpe from a circular block bootstrap (20-day blocks, 2,000 draws, seed 0).
+- Correlation of daily returns with the taker-buy basket on the same universe, and with BTC.
+- The same rule on today's Kraken list over the same window, to show what the point-in-time list changed.
+- Kraken against Binance funding, 2025-10-01 to 2025-12-31 (the overlap of Kraken's history with the window): per coin
+  in the universe, the correlation of daily funding, and the share of days on which the book's long and short sides
+  are ordered the same way by Kraken's 7-day funding. Descriptive.
+
+PARAMETER GRID (every configuration is a trial; count them)
+9 trials, nothing else is run:
+- 8 = universe size {30, 50} x quantile {0.2, 0.3} x rebalance days {7, 14}, at 1x costs. Primary: 50, 0.2, 7.
+- 1 = the primary configuration at 2x costs (fee and slippage doubled).
+The today's-list comparison is a configuration already logged on 2026-10-04 and is not a new trial.
+
+PASS CRITERIA (all five)
+1. Primary Sharpe >= 0.7.
+2. The lower bound of its bootstrap interval is above 0.
+3. Funding received over the window is positive.
+4. Net return at 2x costs is positive.
+5. At least 6 of the 8 grid cells have a positive Sharpe, and at least 3 of the calendar years 2022 to 2025 are
+   positive for the primary configuration (2022 counts from the window's first day).
+
+KILL IF (any)
+- Primary Sharpe < 0.3.
+- Net return at 2x costs is negative.
+- Funding received is not positive.
+Between kill and pass the result is inconclusive: the sleeve is not built.
+
+PROSPECTIVE PHASE (only after a pass)
+A pass sends the primary configuration to paper trading, not to live. The paper book charges Kraken's real funding
+rates per coin. It runs 13 weeks from its first decision. That is too short to measure a Sharpe of 1 (a t-statistic
+of about 0.5), so it tests the implementation, not the edge. It is stopped and the sleeve dropped if, over the 13
+weeks, funding received on Kraken is not positive, or the paper book's positions differ from the backtest's
+(scripts/research/paper_vs_backtest.py). Going live needs a separate decision by the owner.
+
+KNOWN RISKS AND BIASES
+- Every period of the window was seen before (PRIOR EXPOSURE).
+- Perps Kraken delisted are missing from the listing snapshot: survivorship remains for those.
+- Binance funding and prices are proxies for Kraken's. Kraken's funding formula and caps differ.
+- The window is under four years and holds one market cycle.
+- Shorting crowded small coins: squeezes, thin books, and Kraken's position limits. Capacity is small.
+- Overlap with the book: the taker basket trades the same coins (correlation measured at 0.16 on today's list).
