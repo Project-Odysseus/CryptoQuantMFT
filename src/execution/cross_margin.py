@@ -57,6 +57,7 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         exchange_name: str = "kraken_futures",
         state_path: str | Path | None = None,
         quote_source: Callable[[str], tuple[float, float] | None] | None = None,
+        funding_source: Callable[[str], float | None] | None = None,
     ) -> None:
         """Open an account holding `starting_collateral` for `contracts` (keyed by their runtime symbol).
 
@@ -70,6 +71,10 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
             state_path: JSON file saved after every change and restored at
                 startup, so a restarted paper run keeps its wallet and positions.
                 `starting_collateral` applies only when the file doesn't exist.
+            funding_source: symbol -> the exchange's real funding rate right now,
+                in % of notional per day (positive: longs pay), or None when
+                unknown; `funding_pct_per_day` is then used. The rate at each
+                update is charged for the whole time since the previous one.
             quote_source: symbol -> the real (best bid, best ask) right now, or
                 None when unknown. Only resting post-only orders use it: the
                 marks this account gets are bar closes, which don't move
@@ -106,6 +111,7 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         self.fees_paid_total = 0.0
         self.state_path = Path(state_path) if state_path is not None else None
         self._quote_source = quote_source
+        self._funding_source = funding_source
         self._recent_fills: dict[str, dict[str, Any]] = {}  # order id -> its fill, kept in the state file
         self._tracked: set[str] = set()  # order ids a restarted engine is asking about
         self._resting: dict[str, dict[str, Any]] = {}  # post-only orders waiting at their limit price, kept in the state file
@@ -206,6 +212,17 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         return snapshot
 
     # --- orders --------------------------------------------------------------------------------------------------
+
+    def _funding_rate(self, symbol: str) -> float:
+        """% of notional per day that longs pay on `symbol`: the real rate when a source knows it, else the assumed one."""
+        if self._funding_source is not None:
+            try:
+                real = self._funding_source(symbol)
+            except Exception:  # noqa: BLE001 - an unknown rate falls back to the assumption, never a crashed cycle
+                real = None
+            if real is not None and math.isfinite(real):
+                return float(real)
+        return self._per_symbol(self._funding, symbol)
 
     def _per_symbol(self, setting: float | Mapping[str, float], symbol: str) -> float:
         return float(setting.get(symbol, 0.0)) if isinstance(setting, Mapping) else float(setting)
@@ -435,7 +452,7 @@ class SandboxCrossMarginPerpAdapter(ExecutionAdapter):
         if previous is not None:
             days = (timestamp - previous).total_seconds() / 86400.0
             for symbol, size in self.positions().items():
-                rate = self._per_symbol(self._funding, symbol)
+                rate = self._funding_rate(symbol)
                 mark = self._marks.get(symbol)
                 if days > 0.0 and rate and mark:
                     payment = size * mark * rate / 100.0 * days

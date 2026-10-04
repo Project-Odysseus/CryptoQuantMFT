@@ -154,8 +154,8 @@ direction is in `aspirations.md`.
 - [x] Signal lab (2026-10-04, `src/research/signal_lab.py`, `notebooks/signal_lab.ipynb`): five ideas side by side and combined
 - [x] H6, cross-sectional funding carry with a point-in-time Kraken coin list (2026-10-04): inconclusive (Sharpe 0.52,
   interval -0.72 to 1.82), not built. `research/reports/H6.md`
-- [ ] Store Kraken's hourly funding per perp from now on (its API only reaches a year back), and charge the paper
-  exchange Kraken's real funding per coin instead of a flat 0.01% a day: the taker basket's paper result depends on it
+- [x] Paper books charge Kraken's real funding per coin, and the collector stores those rates (2026-10-04,
+  `kraken_spreads.FundingRates`, `data/market_data/kraken_spreads/funding/`)
 - [x] Web dashboard (2026-10-04, `src/dashboard/`): local read-only page per book (equity vs BTC, drawdown, exposure,
   limits, strategies, positions, correlations, fills, alerts, job health, measured costs). LaunchAgent on the Mac
 - [x] Kraken spread and depth collector (2026-10-04, `src/data/kraken_spreads.py`) and `scripts/research/kraken_costs.py`:

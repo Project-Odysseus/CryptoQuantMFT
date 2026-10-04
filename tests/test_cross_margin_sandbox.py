@@ -199,3 +199,16 @@ def test_a_resting_order_is_checked_like_any_other_and_a_stale_reduce_only_one_i
     _order(account, "close", BTC, "sell", 0.02, 50_000.0)  # the position is closed another way while the order waits
     account.on_market_update(prices={BTC: 50_600.0}, timestamp=T0 + timedelta(minutes=1))
     assert account.position_size(BTC) == 0.0 and account.settle_orders() == [{"order_id": "trim", "status": "CANCELED"}]  # it would have opened a short
+
+
+def test_funding_is_charged_at_the_real_rate_per_coin_when_a_source_knows_it() -> None:
+    real = {BTC: 0.05, ETH: -0.20}  # % of notional per day: BTC longs pay, ETH longs are paid
+    account = _account(funding_pct_per_day=0.01, funding_source=lambda symbol: real.get(symbol))
+    account.on_market_update(prices={BTC: 50_000.0, ETH: 2_500.0}, timestamp=T0)
+    _order(account, "b", BTC, "buy", 0.01, 50_000.0)
+    _order(account, "e", ETH, "buy", 0.2, 2_500.0)
+    events = {event["symbol"]: event["payment"] for event in account.on_market_update(prices={BTC: 50_000.0, ETH: 2_500.0}, timestamp=T0 + timedelta(days=1))}
+    assert events[BTC] == pytest.approx(500.0 * 0.0005) and events[ETH] == pytest.approx(-500.0 * 0.002)  # paid 0.25, received 1.00
+    real.clear()  # the source no longer knows: the assumed flat rate applies
+    later = {event["symbol"]: event["payment"] for event in account.on_market_update(prices={BTC: 50_000.0, ETH: 2_500.0}, timestamp=T0 + timedelta(days=2))}
+    assert later[BTC] == pytest.approx(500.0 * 0.0001) and later[ETH] == pytest.approx(500.0 * 0.0001)

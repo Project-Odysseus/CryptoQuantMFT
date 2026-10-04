@@ -89,6 +89,7 @@ def build_paper_adapters(
     state_dir: str | Path | None = None,
     funding_pct_per_day: float = 0.01,
     quote_source: Callable[[str], tuple[float, float] | None] | None = None,
+    funding_source: Callable[[str], float | None] | None = None,
 ) -> dict[str, ExecutionAdapter]:
     """Sandbox adapters for paper trading a config, funded with the book's cash per venue.
 
@@ -115,6 +116,7 @@ def build_paper_adapters(
                 funding_pct_per_day=funding_pct_per_day, slippage_bps={spec.symbol: spec.slippage_bps for spec in specs}, exchange_name=venue,
                 state_path=Path(state_dir) / f"paper_{venue}.json" if state_dir else None,
                 quote_source=quote_source if venue == "kraken_futures" else None,  # real bid and ask for resting maker orders
+                funding_source=funding_source if venue == "kraken_futures" else None,  # Kraken's real funding per coin
             )
         elif all(spec.kind == "spot" for spec in specs):
             if len({spec.taker_fee_pct for spec in specs}) > 1:

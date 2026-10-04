@@ -59,9 +59,10 @@ def fetch_tickers(*, now: datetime | None = None, fetch: Fetch = http_json_gzip)
             continue
         mid = (float(bid) + float(ask)) / 2.0
         rows.append({"time": now.isoformat(timespec="seconds"), "symbol": symbol, "bid": float(bid), "ask": float(ask), "bid_size": float(ticker.get("bidSize") or 0.0),
+                     "funding_pct_per_day": float(ticker["fundingRate"]) / float(ticker.get("markPrice") or mid) * 2400.0 if ticker.get("fundingRate") is not None else float("nan"),
                      "ask_size": float(ticker.get("askSize") or 0.0), "mark": float(ticker.get("markPrice") or mid), "volume_quote_24h": float(ticker.get("volumeQuote") or 0.0),
                      "half_spread_bps": (float(ask) - float(bid)) / 2.0 / mid * 10_000.0})
-    return pd.DataFrame(rows, columns=list(TICKER_COLUMNS))
+    return pd.DataFrame(rows, columns=[*TICKER_COLUMNS, "funding_pct_per_day"])
 
 
 class TouchQuotes:
@@ -89,6 +90,34 @@ class TouchQuotes:
             self._quotes = {str(item.get("symbol")): (float(item["bid"]), float(item["ask"])) for item in tickers if item.get("bid") and item.get("ask")}
             self._at = self._clock()
         return self._quotes.get(venue_symbol_for(symbol))
+
+
+class FundingRates:
+    """Kraken's current funding rate per runtime symbol, in % of notional per day (positive: longs pay), cached.
+
+    The paper exchange charges this instead of a flat assumption. Kraken sets the rate hourly, so one `tickers`
+    request per `max_age` (15 minutes) is enough. The ticker gives the rate in quote currency per unit per hour;
+    divided by the mark price it is the relative hourly rate Kraken publishes in its funding history.
+    """
+
+    def __init__(self, *, max_age: float = 900.0, fetch: Fetch = http_json_gzip, clock: Callable[[], float] = time.monotonic) -> None:
+        self.max_age, self._fetch, self._clock = max_age, fetch, clock
+        self._at: float | None = None
+        self._rates: dict[str, float] = {}
+
+    def __call__(self, symbol: str) -> float | None:
+        """% per day for `symbol`'s perp; None when Kraken doesn't list it or has never been reached (a stale rate is kept through an outage)."""
+        from src.data.kraken_futures import venue_symbol_for
+
+        if self._at is None or self._clock() - self._at > self.max_age:
+            try:
+                tickers = self._fetch(f"{API}/tickers").get("tickers", [])
+                self._rates = {str(item["symbol"]): float(item["fundingRate"]) / float(item["markPrice"]) * 24.0 * 100.0
+                               for item in tickers if item.get("fundingRate") is not None and item.get("markPrice")}
+                self._at = self._clock()
+            except Exception:  # noqa: BLE001 - keep the last known rates
+                pass
+        return self._rates.get(venue_symbol_for(symbol))
 
 
 def market_order_cost_bps(levels: Sequence[Sequence[float]], mid: float, size_usd: float) -> float:
@@ -138,7 +167,9 @@ def record_tickers(*, root: Path | str = ROOT, now: datetime | None = None, fetc
     now = now or datetime.now(timezone.utc)
     frame = fetch_tickers(now=now, fetch=fetch)
     if len(frame):
-        _append(frame, "tickers", Path(root), now)
+        _append(frame[list(TICKER_COLUMNS)], "tickers", Path(root), now)
+        # Kraken's API only reaches a year back for funding: keep our own record (% of notional per day, positive: longs pay)
+        _append(frame[["time", "symbol", "funding_pct_per_day"]].dropna(), "funding", Path(root), now)
     return len(frame)
 
 

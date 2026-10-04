@@ -603,6 +603,15 @@ it is effectively a multiple of 5 minutes.
   (`restart_drill.py` on a config with `[execution] policy = "maker_first"`).
 - `config/portfolio.multi_paper.toml` uses it (paper); `config/portfolio.btc_live.toml` does not.
 
+## Funding in paper mode
+
+A paper book charges Kraken's real funding rate per coin (one public `tickers` request every 15 minutes; the rate at
+each cycle is charged for the time since the previous cycle). If Kraken can't be reached before the first rate is
+known, or doesn't publish one for a coin, the flat 0.01% a day applies. `--use-mock-connector` always uses the flat
+rate. The collector stores the same rates in `data/market_data/kraken_spreads/funding/` (% of notional per day,
+positive when longs pay), because Kraken's own history only reaches a year back. The backtest still uses Binance's
+funding; `paper_vs_backtest.py` shows the difference as a return gap.
+
 ## Kraken's real trading costs against the assumed slippage
 
 `scripts/collectors/kraken_spreads.py <config>` records every Kraken perp's best bid and ask every 10 minutes and, for

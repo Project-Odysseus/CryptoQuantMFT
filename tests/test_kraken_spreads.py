@@ -80,3 +80,23 @@ def test_touch_quotes_answer_per_runtime_symbol_from_one_cached_request() -> Non
     assert quotes("BTC/USD") == (84_742.0, 84_743.0) and len(calls) == 2  # older than max_age: asked again
     clock[0] = 40.0
     assert quotes("BTC/USD") is None and len(calls) == 3  # Kraken unreachable: "unknown", not an exception and not a stale price
+
+
+def test_funding_rates_are_krakens_relative_rate_per_day_and_survive_an_outage(tmp_path) -> None:
+    tickers = {"tickers": [{"symbol": "PF_XBTUSD", "bid": 84_999, "ask": 85_001, "fundingRate": 0.4025, "markPrice": 85_000.0}, {"symbol": "PF_QNTUSD", "bid": 99, "ask": 100, "markPrice": 99.5}]}
+    calls, clock = [], [0.0]
+
+    def fetch(url: str):
+        calls.append(url)
+        if len(calls) > 1:
+            raise TimeoutError("down")
+        return tickers
+
+    rates = ks.FundingRates(max_age=900.0, fetch=fetch, clock=lambda: clock[0])
+    assert rates("BTC/USD") == pytest.approx(0.4025 / 85_000 * 24 * 100) and rates("QNT/USD") is None and len(calls) == 1  # 0.0114% a day; no rate published: unknown
+    clock[0] = 1_000.0
+    assert rates("BTC/USD") == pytest.approx(0.4025 / 85_000 * 24 * 100) and len(calls) == 2  # Kraken unreachable: the last known rate stands
+    assert ks.record_tickers(root=tmp_path, now=NOW, fetch=lambda url: tickers) == 2
+    stored = ks.load("funding", root=tmp_path)
+    assert stored["symbol"].tolist() == ["PF_XBTUSD"] and stored["funding_pct_per_day"].iloc[0] == pytest.approx(0.011365, rel=1e-3)
+    assert list(ks.load("tickers", root=tmp_path).columns) == list(ks.TICKER_COLUMNS)  # the spread file keeps its columns
