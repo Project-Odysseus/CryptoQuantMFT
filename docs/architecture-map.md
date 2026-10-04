@@ -71,6 +71,8 @@ flowchart TD
 - `src/data/kraken_spreads.py` (`scripts/collectors/kraken_spreads.py`, `scripts/research/kraken_costs.py`):
   Kraken Futures' real spreads and book depth, recorded over time and compared with a config's assumed slippage;
   `TouchQuotes` gives the paper exchange the real best bid and ask for resting maker orders.
+- `src/data/prediction_recorder.py` (`scripts/collectors/prediction_books.py`): quotes, order-book depth, market
+  descriptions and Kalshi results for BTC and ETH prediction markets, appended to daily CSV files.
 - `src/data/positioning.py`
   - Public funding, open-interest, long/short-ratio and implied-vol history from Binance, Bybit and Deribit for
     research, cached under `data/historical_cache/positioning/`.

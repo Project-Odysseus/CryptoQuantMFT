@@ -45,13 +45,13 @@ for unit in deploy/systemd/*.service deploy/systemd/*.timer; do
 done
 render deploy/logrotate/cryptoquant | sudo tee /etc/logrotate.d/cryptoquant >/dev/null
 sudo systemctl daemon-reload
-sudo systemctl enable --now cryptoquant-liquidations.service cryptoquant-option-chains.service cryptoquant-spreads.service cryptoquant-backup.timer
+sudo systemctl enable --now cryptoquant-liquidations.service cryptoquant-option-chains.service cryptoquant-spreads.service cryptoquant-prediction-books.service cryptoquant-backup.timer
 if [ "$WITH_PAPER" = 1 ]; then
   sudo systemctl enable --now cryptoquant-paper.service
 fi
 
 echo "== check"
 "$PYTHON" -m pytest -q -x tests/test_research_harness.py tests/test_market_data_recorder.py
-systemctl --no-pager --lines=0 status cryptoquant-liquidations cryptoquant-option-chains cryptoquant-spreads cryptoquant-backup.timer || true
+systemctl --no-pager --lines=0 status cryptoquant-liquidations cryptoquant-option-chains cryptoquant-spreads cryptoquant-prediction-books cryptoquant-backup.timer || true
 [ "$WITH_PAPER" = 1 ] && systemctl --no-pager --lines=0 status cryptoquant-paper || true
 echo "Done. Logs: journalctl -u cryptoquant-liquidations -f   (see deploy/README.md)"

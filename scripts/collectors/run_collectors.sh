@@ -25,5 +25,7 @@ forever liquidations "$PY" main.py --record-market-data --record-config config/m
 forever option_chains "$PY" main.py --record-option-chains BTC ETH --option-chain-interval 3600 &
 # Kraken Futures spreads (every perp, each 10 min) and book depth (the multi-strategy book's coins, each 2 h): ~7 MB a day
 forever kraken_spreads "$PY" scripts/collectors/kraken_spreads.py config/portfolio.multi_paper.toml &
+# Prediction-market quotes and order books (Kalshi, Polymarket; BTC and ETH price markets), every 10 min: ~10 MB a day
+forever prediction_books "$PY" scripts/collectors/prediction_books.py &
 trap 'kill 0' INT TERM
 wait

@@ -208,6 +208,7 @@ class DashboardData:
                 jobs.append((f"book: {state.parent.name}", "the book's checkpoint, written every cycle", state.stat().st_mtime, 20 * 60.0))
         jobs.append(("option chains", "hourly Deribit chains (the H4/H5 studies need them)", self._newest(self.root / "data/options/deribit/BTC", "*/*.parquet"), 2.5 * 3600.0))
         jobs.append(("Kraken spreads", "every perp's bid and ask, each 10 minutes", self._newest(self.root / "data/market_data/kraken_spreads/tickers", "*.csv"), 45 * 60.0))
+        jobs.append(("prediction-market books", "Kalshi and Polymarket quotes and depth, each 10 minutes", self._newest(self.root / "data/market_data/prediction_markets/quotes", "*.csv"), 45 * 60.0))
         jobs.append(("research daily job", "stores the H4/H5 data once a day", self._newest(self.root / "logs/research", "daily.log"), 30 * 3600.0))
         return [{"job": job, "what": what, "seconds_since": now - last if last else None, "ok": bool(last) and now - last <= limit, "limit_seconds": limit} for job, what, last, limit in jobs]
 

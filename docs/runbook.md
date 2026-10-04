@@ -612,6 +612,16 @@ rate. The collector stores the same rates in `data/market_data/kraken_spreads/fu
 positive when longs pay), because Kraken's own history only reaches a year back. The backtest still uses Binance's
 funding; `paper_vs_backtest.py` shows the difference as a return gap.
 
+## Recording prediction-market order books
+
+`scripts/collectors/prediction_books.py` stores, every 10 minutes, the quotes and the top five order-book levels of
+Kalshi's and Polymarket's BTC and ETH price markets (public data, about 10 MB of network a day), under
+`data/market_data/prediction_markets/`: `quotes/<day>.csv`, `depth/<day>.csv`, `markets.csv` (each market's question
+and settlement rule, once) and `results/kalshi.csv` (how each Kalshi market settled). It runs with the other
+collectors. An order book can't be downloaded later, and the paper exchange for bets (`TODO.MD`, section 6b) will
+fill against these files. `--interval 120` samples every 2 minutes (for wifi); the 5- and 15-minute markets are only
+sampled either way. Polymarket's results are not recorded yet.
+
 ## Kraken's real trading costs against the assumed slippage
 
 `scripts/collectors/kraken_spreads.py <config>` records every Kraken perp's best bid and ask every 10 minutes and, for

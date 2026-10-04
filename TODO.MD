@@ -276,9 +276,9 @@ is sized in contracts, not as a share of equity. Both tracks need the same new t
 
 ### C. Prediction-market track
 
-- [ ] C1 (S) **Record order books now.** A collector for the markets we would trade (Kalshi and Polymarket daily and
-  hourly BTC/ETH markets): best bid and ask and depth every few minutes. It can't be backfilled, and both the paper
-  exchange and every backtest need it. Small data
+- [x] C1 **Order books are recorded** (2026-10-04, `src/data/prediction_recorder.py`): Kalshi and Polymarket BTC and ETH
+  price markets, quotes and five levels of depth every 10 minutes, market descriptions and Kalshi results; runs
+  with the collectors. Open: Polymarket results; a shorter interval on wifi
 - [ ] C2 (M) **Market model.** Each market linked to what it pays on: underlying, strike or range, expiry, and its
   resolution source. Kalshi and Polymarket settle the "same" question on different price sources and averaging
   rules; that difference is a risk and must be stored per market, not assumed away
