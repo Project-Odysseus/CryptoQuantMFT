@@ -163,10 +163,12 @@
 
   function Meter({ label, value, limit, format, note }) {
     const share = finite(value) && finite(limit) && limit > 0 ? Math.abs(value) / limit : null;
-    const level = share === null ? null : share >= 1 ? "critical" : share >= 0.8 ? "warning" : null;
+    // A limit that is acting holds its measure at the limit, and prices move it a little between decisions: that is "at the limit", not a breach.
+    const level = share === null ? null : share > 1.03 ? "critical" : share >= 0.8 ? "warning" : null;
+    const word = share === null ? "" : share > 1.03 ? "over" : share >= 0.97 ? "at the limit" : "close";
     return html`<div class="meter">
       <div class="top"><span>${label}${note ? html` <span class="muted small">${note}</span>` : null}</span>
-        <span><b>${format(value)}</b> <span class="muted">${finite(limit) ? `of ${format(limit)} allowed` : "no limit set"}</span>${level ? html` <${Status} level=${level} label=${level === "critical" ? "over" : "close"} />` : null}</span></div>
+        <span><b>${format(value)}</b> <span class="muted">${finite(limit) ? `of ${format(limit)} allowed` : "no limit set"}</span>${level ? html` <${Status} level=${level} label=${word} />` : null}</span></div>
       <div class="track"><div class="fill" style=${{ width: `${Math.min(100, (share || 0) * 100)}%`, background: level ? `var(--${level})` : "var(--series-1)" }}></div></div>
     </div>`;
   }
