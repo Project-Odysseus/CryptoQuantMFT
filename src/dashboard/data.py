@@ -50,10 +50,51 @@ def unit_of(sleeve_id: str) -> str:
 class DashboardData:
     """Read-only views of one database and repository folder."""
 
-    def __init__(self, database_path: str | Path, root: str | Path = ".") -> None:
-        """`root` is the repository folder (for the state files and collectors' output)."""
+    def __init__(self, database_path: str | Path, root: str | Path = ".", *, fetch: Any = None, live_max_age: float = 60.0) -> None:
+        """`root` is the repository folder (for the state files and collectors' output); `fetch` gets a URL's JSON (Kraken's public tickers)."""
         self.database_path = Path(database_path)
         self.root = Path(root)
+        self._fetch = fetch
+        self._live_max_age = live_max_age
+        self._marks: tuple[float, dict[str, float]] | None = None
+
+    def _live_marks(self) -> tuple[float, dict[str, float]] | None:
+        """(fetched at, venue symbol -> Kraken's mark price now), from one public request kept for a minute; None when Kraken can't be reached."""
+        if self._marks is not None and time.time() - self._marks[0] <= self._live_max_age:
+            return self._marks
+        from src.data import kraken_spreads
+
+        try:
+            tickers = (self._fetch or kraken_spreads.http_json_gzip)(f"{kraken_spreads.API}/tickers").get("tickers", [])
+        except Exception:  # noqa: BLE001 - the page shows the bar-close value without it
+            return None
+        self._marks = (time.time(), {str(item["symbol"]): float(item["markPrice"]) for item in tickers if item.get("markPrice")})
+        return self._marks
+
+    def live(self, name: str) -> dict[str, Any] | None:
+        """A book's value at Kraken's prices right now: its last stored equity plus each position's move since the price that equity used.
+
+        A book values itself at its last bar close, so between closes its equity stands still. This adds the move
+        since then for display. It reads the book's stored positions and public prices; the book itself is untouched
+        and keeps deciding on bar closes. Fees and funding since the snapshot (stored at least hourly) are not in it.
+        """
+        from src.data.kraken_futures import venue_symbol_for
+
+        snapshot, marks = self.book(name), self._live_marks()
+        if snapshot is None or marks is None:
+            return None
+        rows, moved = {}, 0.0
+        for instrument, row in (snapshot.get("instruments") or {}).items():
+            venue, _, symbol = instrument.partition(":")
+            price = marks[1].get(venue_symbol_for(symbol)) if venue == "kraken_futures" else None
+            if price is None or not row.get("price"):
+                continue
+            change = float(row.get("units") or 0.0) * (price - float(row["price"]))
+            moved += change
+            rows[instrument] = {"price": price, "move": price / float(row["price"]) - 1.0, "pnl": change}
+        equity, initial = float(snapshot["equity"]) + moved, float(snapshot.get("initial_equity") or 0.0)
+        return clean({"name": name, "as_of": datetime.fromtimestamp(marks[0], timezone.utc).isoformat(), "snapshot_time": snapshot["timestamp"], "bar_close_equity": snapshot["equity"],
+                      "equity": equity, "since_bar_close": moved, "change": equity / initial - 1.0 if initial else None, "instruments": rows})
 
     def _rows(self, query: str, params: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
         if not self.database_path.exists():

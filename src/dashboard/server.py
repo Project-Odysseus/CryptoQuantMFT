@@ -52,6 +52,10 @@ async def fills(request: web.Request) -> web.Response:
     return _json(await _read(request, "fills", request.match_info["name"]))
 
 
+async def live(request: web.Request) -> web.Response:
+    return _json(await _read(request, "live", request.match_info["name"]))
+
+
 async def alerts(request: web.Request) -> web.Response:
     return _json(await _read(request, "alerts", request.query.get("book")))
 
@@ -74,7 +78,7 @@ def build_app(data: DashboardData) -> web.Application:
     app = web.Application()
     app[DATA_KEY] = data
     app.add_routes([web.get("/", index), web.get("/api/books", books), web.get("/api/book/{name}", book), web.get("/api/book/{name}/history", history),
-                    web.get("/api/book/{name}/fills", fills), web.get("/api/alerts", alerts), web.get("/api/system", system), web.static("/static", STATIC)])
+                    web.get("/api/book/{name}/fills", fills), web.get("/api/book/{name}/live", live), web.get("/api/alerts", alerts), web.get("/api/system", system), web.static("/static", STATIC)])
     return app
 
 
