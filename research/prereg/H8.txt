@@ -1,0 +1,89 @@
+PRE-REGISTRATION H8: PAIRS OF KRAKEN-TRADABLE PERPS THAT MOVED TOGETHER COME BACK TOGETHER
+Version 1. Written 2026-10-04, before any H8 test was run. Changes after results = a new version (lock it again), logged
+as extra trials.
+
+PRIOR EXPOSURE (what has already been looked at that bears on this)
+- No pairs or spread study has been run in this project.
+- Related, on the same coins: the cross-sectional study (2026-09-26) found a 1-day reversal in the rankings (IC -0.03
+  to -0.04) that daily trading costs wiped out. That is a different rule (ranks over all coins, no pair selection, no
+  entry threshold), but it says short-horizon reversal exists and is expensive to collect.
+- The regime study (2026-10-04) found the book's trend rules lose in flat markets. That is the reason for looking at
+  a spread trade; it used none of the data in this form.
+
+MARKET BEHAVIOUR
+Two liquid coins whose prices tracked each other closely over three months, and then drift apart, tend to come back
+together.
+
+MECHANISM
+Most of a coin's move is the market's. When two close substitutes diverge without news that separates them, it is
+usually one-sided flow in one of them (a liquidation, a large order), and the price impact fades. The other side is
+whoever needed to trade at once. The risk is that the divergence is news and never closes.
+
+OBSERVABLE PREDICTION AND EXPECTED SIGN
+Short the coin that ran ahead and long the one that lagged, and the position earns as the gap closes: a positive net
+return that does not depend on the market's direction.
+
+DATA (point-in-time)
+- Binance USDT-margined perpetual daily closes and settled funding (src/data/binance_archive.py), standing in for
+  Kraken's.
+- Coins: at each formation date, the 10 with the highest 30-day average quote volume among those whose Kraken perp
+  had opened by then (research/data/kraken_perp_listings.csv) and that have a close on every day of the formation
+  window.
+- Window: trading periods from the first date with 10 such coins to 2025-12-31. The holdout (2026 on) stays locked.
+
+RULE (the distance method of Gatev, Goetzmann and Rouwenhorst, with one day's delay)
+- Every 30 days: over the previous 90 days (formation), scale each coin's closes to start at 1. For each of the 45
+  pairs, distance = the sum of squared differences between the two scaled series. Take the 5 pairs with the smallest
+  distance. sigma = the standard deviation of that pair's formation difference.
+- Over the next 30 days (trading), scale both closes to 1 at the last formation close. spread = scaled A - scaled B.
+- Open when |spread| > 2 sigma at a close: short the higher coin, long the lower, equal dollar amounts.
+  Close when the spread has crossed zero at a close, or on the period's last day. A pair can open again in the same
+  period.
+- Every decision is traded at the NEXT day's close (one day's delay), so no trade uses the close that produced it.
+- Size: each open pair holds 10% of equity long and 10% short. With all 5 open the book is 1x gross, dollar-neutral.
+
+COSTS
+0.05% taker fee per side, slippage by liquidity tier (3 to 25 bps, slippage_by_liquidity), settled funding on every
+position, through src/research/portfolio.simulate_portfolio (which also charges the daily re-weighting).
+
+PRIMARY OUTCOME
+The annualised Sharpe ratio of the book's daily net returns over the whole window at 1x costs, for the rule above.
+
+SECONDARY OUTCOMES
+- Return a year on equity, worst drawdown, average gross exposure, number of trades, share closed by convergence,
+  average days held.
+- 95% interval for the Sharpe (circular block bootstrap, 20-day blocks, 2,000 draws, seed 0).
+- Per calendar year. Return split into price, funding and costs.
+- Return on flat, middling and trending days (the regime study's label), and correlation with the taker basket on
+  the top-50 point-in-time universe and with BTC.
+- The same rule traded at the signal's own close (no delay), to show what the delay costs. Reported, not judged.
+
+PARAMETER GRID (every configuration is a trial; count them)
+10 trials, nothing else is run:
+- 9 = formation days {60, 90, 120} x entry threshold {1.5, 2.0, 2.5} sigma, at 1x costs. Primary: 90 days, 2.0.
+- 1 = the primary at 2x costs.
+The no-delay variant is an 11th configuration and is logged as a trial too: 11 in total.
+
+PASS CRITERIA (all five)
+1. Primary Sharpe >= 0.7.
+2. The lower bound of its bootstrap interval is above 0.
+3. Net return at 2x costs is positive.
+4. At least 7 of the 9 grid cells have a positive Sharpe.
+5. At least 3 of the calendar years 2022 to 2025 are positive (2022 counts from the window's first day).
+
+KILL IF (any)
+- Primary Sharpe < 0.3.
+- Net return at 2x costs is negative.
+Between kill and pass: inconclusive, and the sleeve is not built.
+
+WHAT A PASS LEADS TO
+A candidate for a paper book only. The runtime has no pairs sleeve yet, so a pass means building one and running it
+in paper for 13 weeks before any other decision. Not live.
+
+KNOWN RISKS AND BIASES
+- Binance prices and funding are proxies for Kraken's; perps Kraken delisted are missing from the listing snapshot.
+- Under four years of data and about 45 trading periods: low power.
+- Daily closes only. Divergences that open and close within a day are invisible, and the one-day delay gives up part
+  of any fast reversion.
+- A pair that diverges on real news keeps diverging until the period ends: losses are larger than typical gains.
+- Four legs per round trip on coins with 3 to 15 bps of assumed slippage.
