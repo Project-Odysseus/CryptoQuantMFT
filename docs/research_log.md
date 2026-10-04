@@ -6,6 +6,33 @@ accident.
 
 ---
 
+## 2026-10-04: Signal lab: carry, momentum, taker, liquidation proxy and variance premium side by side
+
+**What it is:** a showcase, not new evidence. `src/research/signal_lab.py` turns five ideas into daily net return
+series for 1x of equity so they can be compared and combined; `notebooks/signal_lab.ipynb` shows each one, their
+correlations, the book chosen on in-sample Sharpe, and a preset book. All five were tested before (entries of
+2026-09-26 and 2026-09-28); the same data, costs and definitions are reused. In-sample 2020-06 to 2023, holdout
+2024 to 2025 (the frozen 2026 holdout is cut off, so the holdout here is shorter than in those entries). Universe:
+the 50 most traded coins that Kraken lists today. Logged as 8 configurations (family "cross_sectional").
+
+| Sleeve | Sharpe in-sample | Sharpe holdout | Holdout drawdown | Note |
+| --- | --- | --- | --- | --- |
+| carry (long low funding, short high) | 1.09 | 0.93 | 31% | 1.77 / 1.63 on 30 coins; lost in 2022 |
+| momentum (30-day, sign from in-sample IC) | -0.98 | -0.63 | 62% | the IC says reversal, the book traded that way lost; sign flips on 30 coins |
+| taker (in the paper book) | 1.07 | 1.32 | 19% | |
+| liquidation proxy (H2 rule, 24h hold) | 0.17 | -0.10 | 17% | 200 trades in 5.5 years |
+| BTC variance premium (theoretical, no costs) | 1.02 | 0.91 | 8% | not tradable as computed |
+
+**The book chosen in-sample** (tradable, in-sample Sharpe >= 0.5, inverse volatility): carry 51%, taker 49%.
+Sharpe 1.32 in-sample, 1.47 holdout, 16% holdout drawdown; the two correlate 0.16.
+
+**Why not to act on it yet:** the coin list is today's Kraken listing (survivorship); the holdout has been looked at
+several times now; the 2026-09-26 study, whose holdout ran to 2026-08, had carry at 0.42 on this universe, so 2026
+was a bad year for it; and carry's result moves a lot with the universe size. **Next:** pre-register cross-sectional
+carry with one configuration and a point-in-time coin list before it is considered for a config.
+
+---
+
 ## 2026-10-03: H4 and H5 pre-registered (Kalshi daily BTC markets against Deribit options); pilot only
 
 Two hypotheses on one panel (`src/research/hypotheses/binary_panel.py`): at every recorded Deribit chain snapshot,

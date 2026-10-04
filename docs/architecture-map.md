@@ -189,6 +189,9 @@ Plan and status: `docs/portfolio_plan.md`.
   backtest bar by bar as the runtime steps it. The overlay in `risk.py` reads the estimate for its group, beta and
   volatility caps (`[risk.groups]`, `max_beta_exposure`, `max_portfolio_vol`) and enforces `[risk.exposure]`
   `max_delta` and `max_scenario_loss` on linear targets.
+- `src/research/signal_lab.py` plus `notebooks/signal_lab.ipynb`: candidate signals as comparable daily return
+  series (carry, momentum, taker, liquidation proxy, variance premium) and a book of the ones chosen in-sample or
+  of a preset. A showcase of known studies, not a route into a config.
 - `src/portfolio/paper_check.py` plus `scripts/research/paper_vs_backtest.py`: a running book against the backtest
   over the same days (positions per decision bar, return since the first one), started at the book's first bar.
 - `src/dashboard/`: the local read-only web dashboard. `data.py` turns the database and state folders into JSON
