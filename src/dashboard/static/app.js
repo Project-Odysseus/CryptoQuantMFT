@@ -230,7 +230,8 @@
       <p class="muted small">“Wants” is what each strategy asks for, as a share of equity, before opposite requests are netted and the limits are applied. Positions below are what the book actually holds.</p></div>`;
   }
 
-  function Positions({ snapshot }) {
+  function Positions({ snapshot, live }) {
+    const now = (live && live.instruments) || {};
     const [all, setAll] = useState(false);
     const equity = snapshot.equity || 0;
     const rows = Object.entries(snapshot.instruments || {}).map(([name, row]) => ({ name, ...row, value: (row.units || 0) * (row.price || 0) }))
@@ -238,8 +239,9 @@
     const scale = Math.max(...rows.map((row) => Math.abs(row.weight || 0)), 1e-9);
     const share = (snapshot.exposure || {}).risk_share || {};
     return html`<div>
-      ${rows.length ? html`<div class="scroll"><table><thead><tr><th>Coin</th><th>Side</th><th>Units</th><th>Price</th><th>Value</th><th>Share of equity</th><th>Share of risk</th><th>Realised</th><th>Fees</th><th>Funding</th></tr></thead>
+      ${rows.length ? html`<div class="scroll"><table><thead><tr><th>Coin</th><th>Side</th><th>Units</th><th>Bar close</th><th>Now</th><th>Since close</th><th>Value</th><th>Share of equity</th><th>Share of risk</th><th>Realised</th><th>Fees</th><th>Funding</th></tr></thead>
         <tbody>${rows.map((row) => html`<tr key=${row.name}><td>${coin(row.name)}</td><td>${row.units > 0 ? "long" : row.units < 0 ? "short" : "–"}</td><td>${row.units ? price(row.units) : "–"}</td><td>${price(row.price)}</td>
+          <td>${now[row.name] ? price(now[row.name].price) : "–"}</td><td>${now[row.name] && row.units ? signedMoney(now[row.name].pnl) : "–"}</td>
           <td>${row.units ? money(row.value) : "–"}</td><td>${row.units ? pct(row.weight, 1, true) : "–"}<${SignedBar} value=${row.weight} scale=${scale} /></td><td>${pct(share[row.name], 0)}</td>
           <td>${signedMoney(row.realized_pnl)}</td><td>${money(row.fees)}</td><td>${signedMoney(row.funding)}</td></tr>`)}</tbody></table></div>`
         : html`<div class="empty">The book holds nothing right now${equity ? "" : " (no equity reported)"}.</div>`}
@@ -305,18 +307,18 @@
   }
 
   function Book({ name, range }) {
-    const [state, setState] = useState({ snapshot: null, history: null, fills: [], alerts: [], error: null });
+    const [state, setState] = useState({ snapshot: null, history: null, fills: [], alerts: [], live: null, error: null });
     useEffect(() => {
       let alive = true;
-      const load = () => Promise.all([get(`/api/book/${encodeURIComponent(name)}`), get(`/api/book/${encodeURIComponent(name)}/history`), get(`/api/book/${encodeURIComponent(name)}/fills`), get(`/api/alerts?book=${encodeURIComponent(name)}`)])
-        .then(([snapshot, history, fills, alerts]) => alive && setState({ snapshot, history, fills, alerts, error: null }))
+      const load = () => Promise.all([get(`/api/book/${encodeURIComponent(name)}`), get(`/api/book/${encodeURIComponent(name)}/history`), get(`/api/book/${encodeURIComponent(name)}/fills`), get(`/api/alerts?book=${encodeURIComponent(name)}`), get(`/api/book/${encodeURIComponent(name)}/live`).catch(() => null)])
+        .then(([snapshot, history, fills, alerts, live]) => alive && setState({ snapshot, history, fills, alerts, live, error: null }))
         .catch((error) => alive && setState((previous) => ({ ...previous, error: String(error) })));
-      setState({ snapshot: null, history: null, fills: [], alerts: [], error: null });
+      setState({ snapshot: null, history: null, fills: [], alerts: [], live: null, error: null });
       load();
       const timer = setInterval(load, REFRESH_MS);
       return () => { alive = false; clearInterval(timer); };
     }, [name]);
-    const { snapshot, history, fills, alerts, error } = state;
+    const { snapshot, history, fills, alerts, live, error } = state;
     const view = useMemo(() => {
       if (!history || !history.time.length) return null;
       const end = new Date(history.time[history.time.length - 1]).getTime();
@@ -344,8 +346,10 @@
     return html`<div>
       ${error ? html`<div class="error">The last refresh failed (${error}); showing the previous data.</div>` : null}
       <div class="tiles">
-        <${Tile} label="Equity" value=${money(snapshot.equity)} note=${`started with ${money(snapshot.initial_equity)}`} />
-        <${Tile} label="Since start" value=${pct(change, 2, true)} note=${signedMoney(snapshot.equity - snapshot.initial_equity)} />
+        ${live ? html`<${Tile} label="Equity now" value=${money(live.equity)} note=${`${pct(live.change, 2, true)} since start, at Kraken's prices ${clock(live.as_of, false)}`} />` : null}
+        ${live ? html`<${Tile} label="Since the last bar close" value=${signedMoney(live.since_bar_close)} note=${`${pct(live.since_bar_close / snapshot.equity, 2, true)}; not yet in the book's own number`} />` : null}
+        <${Tile} label=${live ? "Equity at the last bar close" : "Equity"} value=${money(snapshot.equity)} note=${`started with ${money(snapshot.initial_equity)}`} />
+        <${Tile} label=${live ? "Since start, at bar close" : "Since start"} value=${pct(change, 2, true)} note=${signedMoney(snapshot.equity - snapshot.initial_equity)} />
         <${Tile} label="Drawdown" value=${pct(snapshot.drawdown, 2)} note=${`stops at ${pct(limits.max_drawdown, 0)}`} />
         <${Tile} label="Gross exposure" value=${times(snapshot.gross)} note=${`net ${times(snapshot.net)}`} />
         <${Tile} label="Bitcoin beta" value=${times(exposure.beta_exposure)} note="a 1% BTC move ≈ this × 1%" />
@@ -368,7 +372,7 @@
           <${LineChart} time=${view.time} series=${[{ name: "Gross", values: view.gross }, { name: "Net", values: view.net }, { name: "Bitcoin beta", values: view.beta }]} format=${multiple} zero=${true} height=${200} />
         <//>
         <${Card} title="Strategies" sub="each one's request and its profit"><${Strategies} snapshot=${snapshot} history=${history} /><//>
-        <${Card} title="Positions" sub=${`as of ${clock(snapshot.timestamp)}`} span=${correlation && correlation.matrix ? "c8" : ""}><${Positions} snapshot=${snapshot} /><//>
+        <${Card} title="Positions" sub=${`as of ${clock(snapshot.timestamp)}`} span=${correlation && correlation.matrix ? "c8" : ""}><${Positions} snapshot=${snapshot} live=${live} /><//>
         ${correlation && correlation.matrix ? html`<${Card} title="How alike the strategies are" sub=${`return correlation, last ${correlation.bars} bars; average ${correlation.average_correlation.toFixed(2)}`} span="c4">
           <${Heatmap} names=${correlation.names} matrix=${correlation.matrix} /><//>` : null}
         <${Card} title="Fills" sub=${snapshot.execution === "maker_first" ? "newest first; orders rest at the touch first (maker), then go to market" : "newest first"} span="c8"><${Fills} fills=${fills} /><//>

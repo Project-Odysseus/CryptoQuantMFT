@@ -111,3 +111,23 @@ async def test_the_server_only_reads(tmp_path: Path) -> None:
         assert (await client.post("/api/books")).status == 405
         for asset in ("app.js", "vendor/react.production.min.js", "vendor/react-dom.production.min.js", "vendor/htm.min.js"):
             assert (STATIC / asset).exists() and (await client.get(f"/static/{asset}")).status == 200  # no file comes from the internet
+
+
+def test_the_live_value_adds_each_positions_move_since_the_bar_close(tmp_path: Path) -> None:
+    calls = []
+
+    def fetch(url: str):
+        calls.append(url)
+        return {"tickers": [{"symbol": "PF_XBTUSD", "markPrice": 82_000.0}, {"symbol": "PF_ADAUSD", "markPrice": 0.30}]}
+
+    data = DashboardData(_database(tmp_path), tmp_path, fetch=fetch)
+    live = data.live("multi")  # stored: 0.05 BTC valued at 81,000, equity 10,020; ADA not held
+    assert live["bar_close_equity"] == 10_020.0 and live["since_bar_close"] == pytest.approx(0.05 * 1_000.0) and live["equity"] == pytest.approx(10_070.0)
+    assert live["change"] == pytest.approx(0.007) and live["instruments"][BTC]["move"] == pytest.approx(82_000 / 81_000 - 1) and live["instruments"]["kraken_futures:ADA/USD"]["pnl"] == 0.0
+    assert data.live("multi")["equity"] == pytest.approx(10_070.0) and len(calls) == 1  # one request a minute serves every book
+    assert data.live("nope") is None
+
+    def down(url: str):
+        raise TimeoutError("no network")
+
+    assert DashboardData(_database(tmp_path), tmp_path, fetch=down).live("multi") is None  # the page then shows the bar-close value only
