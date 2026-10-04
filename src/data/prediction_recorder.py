@@ -6,7 +6,7 @@ strategy need exactly that, so it is recorded from now on.
 
 Each cycle, per venue and coin:
 
-- `quotes/<day>.csv`: every market with a two-sided quote between 1% and 99%: best Yes bid and ask, volume, and the
+- `quotes/<day>.csv`: every market with both a buyer and a seller quoting: best Yes bid and ask, volume, and the
   coin's spot price at that moment.
 - `depth/<day>.csv`: the top `LEVELS` price levels on each side for the markets that settle soonest (at most
   `max_books` per venue and coin, within `horizon_hours`). Prices are Yes prices; a No bid at q is a Yes ask at 1 - q.
@@ -133,7 +133,8 @@ class PredictionRecorder:
         rows = []
         for market in markets:
             bid, ask = (touch or {}).get(market.market_id, (market.yes_bid, market.yes_ask)) if touch is not None else (market.yes_bid, market.yes_ask)
-            if bid is None or ask is None or not 0.01 <= (bid + ask) / 2.0 <= 0.99 or ask <= bid:
+            # Two-sided means a real buyer and a real seller: a venue shows "no bid" as 0 and "no offer" as 1
+            if bid is None or ask is None or bid <= 0.0 or ask >= 1.0 or ask <= bid:
                 continue
             rows.append([now.isoformat(timespec="seconds"), market.venue, market.market_id, market.underlying, market.kind, market.floor, market.cap, market.expiry.isoformat(),
                          bid, ask, market.volume, spot])
@@ -156,7 +157,7 @@ class PredictionRecorder:
             self._poly_list[coin] = listed
         open_markets = [market for market in listed[1] if market.expiry > now]
         # Between list refreshes the listed quotes are stale, so a market's quote is the top of the book just read
-        depth, touch = self._books(self.polymarket, [market for market in open_markets if market.yes_bid is not None and market.yes_ask is not None and 0.01 <= market.mid <= 0.99], now)
+        depth, touch = self._books(self.polymarket, [market for market in open_markets if market.yes_bid and market.yes_ask and market.yes_ask < 1.0], now)
         quotes = self._quote_rows([market for market in open_markets if market.market_id in touch], spot, now, touch)
         quoted = {row[2] for row in quotes}
         self._note_markets([market for market in open_markets if market.market_id in quoted], now)

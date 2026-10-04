@@ -44,7 +44,7 @@ def _recorder(tmp_path, kalshi, polymarket, **settings) -> PredictionRecorder:
 
 
 def test_one_cycle_stores_quotes_depth_markets_and_results(tmp_path) -> None:
-    kalshi = FakeVenue([_market("kalshi", "K-NEAR", 0.60, 0.62), _market("kalshi", "K-DEAD", 0.0, 0.01), _market("kalshi", "K-ONE-SIDED", None, 0.5),
+    kalshi = FakeVenue([_market("kalshi", "K-NEAR", 0.60, 0.62), _market("kalshi", "K-DEAD", 0.0, 0.01), _market("kalshi", "K-ONE-SIDED", None, 0.5), _market("kalshi", "K-NO-SELLER", 0.60, 1.00),
                         _market("kalshi", "K-FAR", 0.40, 0.45, hours=100), _market("kalshi", "K-OVER", 0.5, 0.6, hours=-1)])
     polymarket = FakeVenue([_market("polymarket", "P-1", 0.30, 0.35, token="tok1"), _market("polymarket", "P-BROKEN", 0.50, 0.55, token="tok2")], fail_books={"tok2"})
     recorder = _recorder(tmp_path, kalshi, polymarket)
@@ -52,7 +52,7 @@ def test_one_cycle_stores_quotes_depth_markets_and_results(tmp_path) -> None:
     assert report["errors"] == [] and report["results"] == 2  # one settled market per Kalshi series (above, up_down)
 
     quotes = pd.read_csv(tmp_path / "quotes" / "2026-10-04.csv")
-    assert quotes["market_id"].tolist() == ["K-NEAR", "K-FAR", "P-1"]  # two-sided and between 1% and 99%; an expired market is left out
+    assert quotes["market_id"].tolist() == ["K-NEAR", "K-FAR", "P-1"]  # a real bid and a real offer (0 and 1 mean none); an expired market is left out
     assert quotes.loc[0, ["yes_bid", "yes_ask", "spot"]].tolist() == [0.60, 0.62, 85_388.0]
     assert quotes.loc[2, ["yes_bid", "yes_ask"]].tolist() == [0.60, 0.62]  # Polymarket's quote is the top of the book just read, not the listed one
 
