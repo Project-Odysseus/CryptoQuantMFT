@@ -6,6 +6,20 @@ accident.
 
 ---
 
+## 2026-10-04: The book's strategies by market state, and H7 (halve the trend rules after a flat stretch): not built
+
+`scripts/research/regime_study.py` labels each day flat, middling or trending (Bitcoin's 60-day efficiency ratio,
+ranked against its previous year, known two days ahead) and calm, normal or stormy (30-day volatility), and splits
+each strategy's stand-alone returns. On 2022-10-10 to 2025-12-31 the trend rules made -25% to -78% a year on flat
+days and +59% to +147% on trending days; the taker basket made +40% on flat days and +14% on trending ones; the whole
+book -36% against +75%. Volatility splits are weak. **H7** (pre-registered, `research/reports/H7.md`) tested a gate
+that halves the trend rules on flat days on the unseen 2020-09 to 2022-10 sample: there the trend book made +47% a
+year on flat days (+106% on others), the difference's interval includes zero (-187 to +52 points), and the gate
+lowered Sharpe from 1.90 to 1.75. All three pass criteria failed. No regime gate is built. What stands is the
+complement: the basket earns where the trend rules don't.
+
+---
+
 ## 2026-10-04: H6, cross-sectional funding carry on what Kraken could trade: inconclusive, not built
 
 Pre-registered (`research/prereg/H6.txt`, locked before the run), full report in `research/reports/H6.md`. The signal

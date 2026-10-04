@@ -42,7 +42,7 @@ def trend_config():
     raw["sleeves"] = [sleeve for sleeve in raw["sleeves"] if sleeve["id"] in SLEEVES]
     used = {sleeve["instrument"] for sleeve in raw["sleeves"]}
     raw["instruments"] = {name: spec for name, spec in raw["instruments"].items() if name in used}
-    raw["risk"] = {key: value for key, value in raw.get("risk", {}).items() if key not in ("groups", "benchmark")}
+    raw["risk"] = {key: value for key, value in raw.get("risk", {}).items() if key != "groups"}  # the groups name coins that are no longer in the config; the overlay is off anyway
     return parse_portfolio_config(raw)
 
 
