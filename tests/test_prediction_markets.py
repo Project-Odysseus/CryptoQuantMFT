@@ -227,5 +227,7 @@ def test_the_model_is_lined_up_against_kalshis_own_quotes() -> None:
 def test_a_polymarket_result_is_read_only_from_a_closed_market() -> None:
     answers = {"open": [{"closed": False, "outcomePrices": '["0.455", "0.545"]'}], "up": [{"closed": True, "outcomePrices": '["1", "0"]'}],
                "down": [{"closed": True, "outcomePrices": '["0", "1"]'}], "void": [{"closed": True, "outcomePrices": '["0.5", "0.5"]'}], "gone": []}
-    client = pm.PolymarketClient(fetch=lambda url: answers[url.split("slug=")[1]])
+    urls = []
+    client = pm.PolymarketClient(fetch=lambda url: (urls.append(url), answers[url.split("slug=")[1].split("&")[0]])[1])
     assert [client.result(slug) for slug in ("open", "up", "down", "void", "gone")] == [None, True, False, None, None]
+    assert all(url.endswith("closed=true") for url in urls)  # without it the venue doesn't return finished markets at all

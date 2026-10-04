@@ -206,7 +206,8 @@ class PolymarketClient:
 
     def result(self, slug: str) -> bool | None:
         """How a market ended: True if its first outcome (Yes, or Up) won, False if the other did, None while it isn't resolved."""
-        found = self.fetch(f"{POLYMARKET_GAMMA}/markets?{urllib.parse.urlencode({'slug': slug})}")
+        # Gamma leaves closed markets out unless asked for them
+        found = self.fetch(f"{POLYMARKET_GAMMA}/markets?{urllib.parse.urlencode({'slug': slug, 'closed': 'true'})}")
         if not found or not found[0].get("closed"):
             return None
         try:
