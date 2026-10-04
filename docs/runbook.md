@@ -612,6 +612,26 @@ rate. The collector stores the same rates in `data/market_data/kraken_spreads/fu
 positive when longs pay), because Kraken's own history only reaches a year back. The backtest still uses Binance's
 funding; `paper_vs_backtest.py` shows the difference as a return gap.
 
+## Prediction-market bets in a paper book (`[[contract_sleeves]]`)
+
+```toml
+[[contract_sleeves]]
+id = "kalshi_bets"
+venue = "kalshi"            # or "polymarket"
+strategy = "<a registered name>"
+budget = 0.05               # share of equity the sleeve may have at risk
+params = { }
+```
+
+Paper only; a live start refuses a config that has one. The venue's paper account starts with the budget in cash.
+Every cycle the engine asks the strategy for the contracts it wants, cuts them to the budget, and trades the
+difference against the venue's real order book: a `taker` target fills what is offered inside its limit and cancels
+the rest; a `maker` target rests and is withdrawn after `[execution] maker_timeout_seconds`, never chased. When a
+market resolves (read from the recorder's result files, so the prediction-market recorder must be running), the
+position pays 1 or 0 and is booked like a derivative. Positions are under `contracts` and `contract_sleeves` in the
+snapshot. No strategy is registered yet (`src/portfolio/contracts.py`): one is added when it has passed its
+pre-registered test. The kill switch withdraws resting bets and leaves held ones to resolve.
+
 ## Recording prediction-market order books
 
 `scripts/collectors/prediction_books.py` stores, every 10 minutes, the quotes and the top five order-book levels of

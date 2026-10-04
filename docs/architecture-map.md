@@ -194,6 +194,11 @@ Plan and status: `docs/portfolio_plan.md`.
 - `src/research/signal_lab.py` plus `notebooks/signal_lab.ipynb`: candidate signals as comparable daily return
   series (carry, momentum, taker, liquidation proxy, variance premium) and a book of the ones chosen in-sample or
   of a preset. A showcase of known studies, not a route into a config.
+- `src/portfolio/contracts.py`: contract sleeves, i.e. strategies that hold prediction-market contracts under a loss
+  budget (`ContractTarget`, `ContractContext`, a registry, `fit_to_budget`), plus `VenueBooks` (live order books)
+  and `RecordedResults` (how markets ended) for paper books. The engine's `_run_contracts` runs them every cycle.
+  `src/execution/binary_sandbox.py` is the paper venue: taker fills from the real book, resting maker orders, fees,
+  No positions, settlement. The book's `binary` kind holds the positions.
 - `src/portfolio/paper_check.py` plus `scripts/research/paper_vs_backtest.py`: a running book against the backtest
   over the same days (positions per decision bar, return since the first one), started at the book's first bar.
 - `src/dashboard/`: the local read-only web dashboard. `data.py` turns the database and state folders into JSON

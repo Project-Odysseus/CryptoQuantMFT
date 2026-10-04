@@ -238,10 +238,11 @@ is sized in contracts, not as a share of equity. Both tracks need the same new t
 
 ### A. Shared foundation: contract strategies in the engine
 
-- [ ] A1 (M) **Contract sleeves.** A second strategy type next to weight sleeves: each cycle it returns the contracts
-  it wants (instrument, quantity, limit price, reason) and its worst-case loss. Config: `[[contract_sleeves]]` with a
-  `budget` (share of equity it may lose). This is steps E0-E1 and E4 of `docs/engine_plan.md`, cut down to what
-  these two tracks need
+- [x] A1 **Contract sleeves** (2026-10-04, `src/portfolio/contracts.py`): a strategy returns the contracts it wants
+  (instrument, signed quantity, limit price, taker or maker); the engine keeps each sleeve's positions apart, cuts
+  targets to its budget, and sends the difference through the normal write-ahead order path every cycle. Config:
+  `[[contract_sleeves]]` (id, venue, strategy, budget, params). The strategy registry is empty until one passes its
+  test. Paper only: live refuses a config with contract sleeves
 - [x] A2 **Binary contracts in the book** (2026-10-04): kind `binary` next to perp, spot and option. Yes contracts at a
   price between 0 and 1; No is held as negative Yes units (`binary_stake` reports the cash the venue holds for it);
   `settle_resolved_binaries` pays 1 or 0; restart-safe; the engine settles through `binary_results` and books it
@@ -251,12 +252,13 @@ is sized in contracts, not as a share of equity. Both tracks need the same new t
   budget. Book level: extend `[risk.exposure]` so a crypto-linked binary counts its delta (the model has
   `binary_delta`), and add limits that need no model: worst-case loss per event, per venue and in total. Option
   sleeves are scaled against the vega and gamma limits (`scale_for_limits`, open from O3b)
-- [ ] A4 (M) **Order flow for limit orders that rest.** Contract orders are limit orders. Reuse what maker-first
-  added: write-ahead `pending_orders`, settle each cycle, cancel after a timeout, no market-order fallback unless
-  the sleeve asks. Per-venue adapters behind the same `submit / settle / cancel` calls
+- [x] A4 **Limit orders, taker and maker** (2026-10-04): a taker bet fills what the book offers inside its limit and
+  cancels the rest; a maker bet rests, is withdrawn after `maker_timeout_seconds` and is never sent to market (the
+  strategy re-decides). Same `pending_orders`, settle and cancel path as perp orders
 - [ ] A5 (S) **Allocation.** Weight sleeves keep their allocator. Contract sleeves get a fixed budget from the
   config until they have a return history; then the same risk model can include them
-- [ ] A6 (M) **Restart drill and reconciliation** for contract positions (a fill booked once, an expiry or
+- [ ] A6 (M) **Restart drill and reconciliation** for contract positions (unit tests cover a restart with a bet held
+  and an order resting, and book-against-venue reconciliation; the kill -9 drill does not run a contract sleeve yet) (a fill booked once, an expiry or
   resolution that happens while the process is down)
 - [ ] A7 (S) **Dashboard and reports:** positions by kind, greeks, premium at risk, a calendar of expiries and
   resolutions, and the tearsheet
@@ -284,8 +286,10 @@ is sized in contracts, not as a share of equity. Both tracks need the same new t
 - [ ] C2 (M) **Market model.** Each market linked to what it pays on: underlying, strike or range, expiry, and its
   resolution source. Kalshi and Polymarket settle the "same" question on different price sources and averaging
   rules; that difference is a risk and must be stored per market, not assumed away
-- [ ] C3 (M) **Paper exchange for binaries.** Fills against the recorded or live order book (walks the depth), each
-  venue's fee formula, cash fully reserved, settlement from the venue's published result
+- [x] C3 **Paper exchange for binaries** (2026-10-04, `src/execution/binary_sandbox.py`): fills against the venue's live
+  order book (walks the depth), fee `rate x p x (1-p)` (Kalshi rounded up to a cent), No positions with their
+  stake set aside, resting orders, a state file, settlement from the recorder's result files (`RecordedResults`).
+  Open: the maker fee rates are assumed 0 and must be checked per venue; a backtest against the *recorded* books
 - [ ] C4 (M) **First binary sleeves**, only for ideas that pass their test: what H4/H5 show on 2026-11-17 (options-
   implied probability against the quoted price; protection bought as "no" contracts); the same market on two venues
 - [ ] C5 (M) **Hedged binaries.** A crypto-linked binary has a delta; the book's delta limit (A3) sees it, and a

@@ -115,8 +115,12 @@ class PortfolioBook:
         rates = {currency: _d(rate) for currency, rate in (fx or {}).items()}
         rates[config.base_currency] = Decimal(1)
         venues = sorted({spec.venue for spec in config.instruments.values()})
-        share = _d(config.initial_equity) / len(venues)
-        cash = {}
+        # A contract venue (bets) starts with its sleeves' budgets; the rest is split equally over the trading venues
+        budgets: dict[str, Decimal] = {}
+        for sleeve in getattr(config, "contract_sleeves", ()):
+            budgets[sleeve.venue] = budgets.get(sleeve.venue, ZERO) + _d(config.initial_equity) * _d(sleeve.budget)
+        share = (_d(config.initial_equity) - sum(budgets.values(), ZERO)) / len(venues)
+        cash = dict(budgets)
         for venue in venues:
             currency = VENUE_CURRENCY.get(venue, config.base_currency)
             if currency not in rates:

@@ -32,6 +32,28 @@ DEFAULT_FEE_PCT = {"perp": 0.05, "spot": 0.40,  # Kraken taker, entry tier
                    "option": 0.03}  # Deribit: 0.03% of the underlying per option (capped at 12.5% of its price)
 
 
+@dataclass(frozen=True, slots=True)
+class ContractSleeveSpec:
+    """One `[[contract_sleeves]]` block: a strategy that holds contracts on one venue under a loss budget.
+
+    Attributes:
+        id: Unique among all sleeves.
+        venue: "kalshi" or "polymarket"; the sleeve's cash sits there.
+        strategy: A name registered in `src/portfolio/contracts.py`.
+        budget: Share of the book's equity the sleeve may have at risk (the cost of its bets), e.g. 0.05.
+        params: Passed to the strategy.
+    """
+
+    id: str
+    venue: str
+    strategy: str
+    budget: float
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+CONTRACT_VENUES = ("kalshi", "polymarket")
+
+
 class PortfolioConfigError(ValueError):
     """A portfolio config has problems; the message lists all of them."""
 
@@ -115,6 +137,7 @@ class PortfolioConfig:
     # [execution] policy: "taker" sends every order as a market order. "maker_first" first rests it at the touch as a
     # post-only limit order (no spread paid, the lower maker fee) and, if it hasn't filled after
     # `maker_timeout_seconds`, cancels it and sends what is left as a market order. Checked once per runtime cycle.
+    contract_sleeves: tuple[ContractSleeveSpec, ...] = ()  # [[contract_sleeves]]: bets under a loss budget (src/portfolio/contracts.py)
     execution_policy: str = "taker"
     maker_timeout_seconds: float = 120.0
     path: str | None = None
@@ -175,7 +198,7 @@ class PortfolioConfig:
 
 _PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "scale", "allocation", "allocation_lookback_days", "allocation_refit_days",
                    "small_account_equity", "small_account_max_lot_weight"}
-_TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves", "review", "baskets", "execution"}
+_TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves", "review", "baskets", "execution", "contract_sleeves"}
 _EXECUTION_KEYS = {"policy", "maker_timeout_seconds"}
 EXECUTION_POLICIES = ("taker", "maker_first")
 
@@ -360,6 +383,31 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
             except (TypeError, ValueError) as exc:
                 errors.append(f"[review] {exc}")
 
+    contract_sleeves: list[ContractSleeveSpec] = []
+    taken = {sleeve.id for sleeve in sleeves}
+    for position, table in enumerate(raw.get("contract_sleeves", []), start=1):
+        from src.portfolio.contracts import REGISTRY
+
+        label = f"[[contract_sleeves]] #{position}"
+        table = dict(table)
+        for key in sorted(set(table) - {"id", "venue", "strategy", "budget", "params"}):
+            errors.append(f"{label} unknown key '{key}'")
+        sleeve_id = str(table.get("id", ""))
+        if not sleeve_id or sleeve_id in taken:
+            errors.append(f"{label} needs an id that no other sleeve uses (got {sleeve_id!r})")
+        taken.add(sleeve_id)
+        if table.get("venue") not in CONTRACT_VENUES:
+            errors.append(f"{label} venue must be one of {list(CONTRACT_VENUES)}, not {table.get('venue')!r}")
+        if table.get("strategy") not in REGISTRY:
+            errors.append(f"{label} strategy '{table.get('strategy')}' is not registered (registered: {sorted(REGISTRY) or 'none yet'})")
+        budget = _number(table, "budget", 0.0, label, errors)
+        if budget is not None and not 0 < budget <= 0.5:
+            errors.append(f"{label} budget must be above 0 and at most 0.5 (a share of equity; 0.05 = 5%)")
+        if not errors or all(label not in error for error in errors):
+            contract_sleeves.append(ContractSleeveSpec(id=sleeve_id, venue=str(table["venue"]), strategy=str(table["strategy"]), budget=float(budget), params=dict(table.get("params", {}))))
+    if sum(sleeve.budget for sleeve in contract_sleeves) > 0.5:
+        errors.append("[[contract_sleeves]] budgets add up to more than half of equity")
+
     execution = dict(raw.get("execution", {}) or {})
     for key in sorted(set(execution) - _EXECUTION_KEYS):
         errors.append(f"[execution] unknown key '{key}'; allowed: {sorted(_EXECUTION_KEYS)}")
@@ -388,6 +436,7 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         risk=risk,
         review=review,
         baskets=tuple(baskets),
+        contract_sleeves=tuple(contract_sleeves),
         execution_policy=str(execution.get("policy", "taker")),
         maker_timeout_seconds=float(maker_timeout),
         path=path,

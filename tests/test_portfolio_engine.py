@@ -57,9 +57,10 @@ def bars_until(grid_index: int) -> dict[tuple[str, str], list[OHLCVBar]]:
     }
 
 
-def _config(execution: dict[str, Any] | None = None, **portfolio: Any):
+def _config(execution: dict[str, Any] | None = None, contract_sleeves: list[dict[str, Any]] | None = None, **portfolio: Any):
     return parse_portfolio_config({
         **({"execution": execution} if execution else {}),
+        **({"contract_sleeves": contract_sleeves} if contract_sleeves else {}),
         "portfolio": {"name": "engine-test", "allocation": "equal", "initial_equity": 10_000, "rebalance_band": 0.02,
                       "allocation_lookback_days": 20, "allocation_refit_days": 5, **portfolio},
         "risk": {"max_drawdown": 0.9, "max_gross_exposure": 3.0, "max_net_exposure": 3.0, "max_instrument_weight": 2.0, "daily_loss_limit": 0.5},

@@ -1707,9 +1707,18 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
             funding = FundingRates()  # the paper exchange charges Kraken's real funding per coin, not a flat assumption
             if config.execution_policy == "maker_first":
                 quotes = TouchQuotes()  # resting paper orders are placed at, and filled against, Kraken's real bid and ask
-        adapters = build_paper_adapters(config, book, state_dir=state_dir, quote_source=quotes, funding_source=funding)
+        contract_books = None
+        if config.contract_sleeves and not args.use_mock_connector:
+            from src.portfolio.contracts import VenueBooks
+
+            contract_books = VenueBooks()  # paper bets fill against the venues' real order books
+        adapters = build_paper_adapters(config, book, state_dir=state_dir, quote_source=quotes, funding_source=funding, contract_books=contract_books)
     engine = PortfolioEngine(config, adapters=adapters, book=book, trade_logger=trade_logger, notifier=notifier, mode=args.runtime,
-                             state_path=state_dir / "engine.json", record_tax=live)
+                             state_path=state_dir / "engine.json", record_tax=live, contract_books=None if live else contract_books)
+    if config.contract_sleeves and not live:
+        from src.portfolio.contracts import RecordedResults
+
+        engine.binary_results = RecordedResults()  # how each market ended, as the prediction-market recorder stored it
     if live and (not engine.restored or args.portfolio_adopt_exchange):
         changes = engine.adopt_exchange_state(now=datetime.now(timezone.utc), reason="first live start" if not engine.restored else "--portfolio-adopt-exchange")
         print(f"LIVE: book set to the Kraken Futures account: equity {float(engine.book.equity()):,.2f} {config.base_currency}, positions {changes['kraken_futures']['after'] or 'none'}")
@@ -1936,6 +1945,8 @@ def _portfolio_live_refusal(args: argparse.Namespace, config: Any) -> str | None
         return "live trading can't use mock market data"
     if not settings.kraken_futures_api_key or not settings.kraken_futures_secret:
         return "KRAKEN_FUTURES_API_KEY / KRAKEN_FUTURES_SECRET are not set"
+    if getattr(config, "contract_sleeves", ()):
+        return "contract sleeves (prediction-market bets) are paper only: there is no live adapter for those venues"
     wrong = sorted(instrument for instrument, spec in config.instruments.items() if spec.venue != PERP_EXCHANGE_NAME or spec.kind != "perp")
     if wrong:
         return f"live portfolios trade Kraken Futures perps only for now; not {wrong}"

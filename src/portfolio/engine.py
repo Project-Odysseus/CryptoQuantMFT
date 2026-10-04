@@ -39,6 +39,7 @@ from typing import Any
 import numpy as np
 
 from src.execution.adapters import ExecutionAdapter, SandboxExecutionAdapter
+from src.execution.binary_sandbox import SandboxBinaryAdapter
 from src.execution.cross_margin import SandboxCrossMarginPerpAdapter
 from src.execution.perps import assumed_perp_contract
 from src.portfolio.allocation import Allocator, bar_number
@@ -90,6 +91,7 @@ def build_paper_adapters(
     funding_pct_per_day: float = 0.01,
     quote_source: Callable[[str], tuple[float, float] | None] | None = None,
     funding_source: Callable[[str], float | None] | None = None,
+    contract_books: Callable[[str], Any] | None = None,
 ) -> dict[str, ExecutionAdapter]:
     """Sandbox adapters for paper trading a config, funded with the book's cash per venue.
 
@@ -126,6 +128,10 @@ def build_paper_adapters(
             adapters[venue] = adapter
         else:
             raise ValueError(f"venue {venue} mixes spot and perp instruments; give them separate venue names")
+    for venue in sorted({sleeve.venue for sleeve in config.contract_sleeves}):  # one paper account per betting venue, funded with its sleeves' budgets
+        books = contract_books or (lambda instrument: None)
+        adapters[venue] = SandboxBinaryAdapter(venue=venue, books=lambda market, venue=venue, books=books: books(f"{venue}:{market}"),
+                                               starting_cash=float(book.cash.get(venue, Decimal(0))), state_path=Path(state_dir) / f"paper_{venue}.json" if state_dir else None)
     return adapters
 
 
@@ -157,6 +163,8 @@ class PortfolioEngine:
         record_tax: bool = False,
         funding_source: Any | None = None,
         basket_source: Any | None = None,
+        contract_strategies: Mapping[str, Any] | None = None,
+        contract_books: Callable[[str], Any] | None = None,
     ) -> None:
         """Wire the sleeves, allocator and book; restore the checkpoint at `state_path` if there is one.
 
@@ -174,7 +182,7 @@ class PortfolioEngine:
         `basket_source(basket, now)` returns a basket's daily signal data
         (default: Binance's public API, one fetch per basket and day).
         """
-        missing = sorted({spec.venue for spec in config.instruments.values()} - set(adapters))
+        missing = sorted(({spec.venue for spec in config.instruments.values()} | {sleeve.venue for sleeve in config.contract_sleeves}) - set(adapters))
         if missing:
             raise ValueError(f"no execution adapter for venue(s) {missing}")
         self.config = config
@@ -221,6 +229,13 @@ class PortfolioEngine:
         self.funding_booked_until: dict[str, str] = {}  # live: the last funding hour booked per instrument
         self.funding_source = funding_source
         self.binary_results: Callable[[str], bool | None] | None = None  # instrument -> how its market resolved (None: not yet); set by the runtime
+        # Contract sleeves (src/portfolio/contracts.py): strategies that hold bets under a loss budget
+        from src.portfolio import contracts as contract_module
+
+        self.contract_strategies = {sleeve.id: (contract_strategies or {}).get(sleeve.id) or contract_module.build(sleeve.strategy, sleeve.params) for sleeve in config.contract_sleeves}
+        self.contract_specs = {sleeve.id: sleeve for sleeve in config.contract_sleeves}
+        self.contract_books = contract_books or (lambda instrument: None)
+        self.contract_owner: dict[str, str] = {}  # contract instrument -> the sleeve that holds it (one sleeve per contract)
         self.equity_drift_alerted = False
         self.book_id = uuid.uuid4().hex[:10]  # part of every client order id; kept in the checkpoint
         self.sleeve_error_counts: dict[str, int] = {}
@@ -249,7 +264,7 @@ class PortfolioEngine:
         for meta in self.pending_orders.values():
             meta["recovered"] = True  # its fill may have been logged before the process died: don't log it twice
         for order_id, meta in {**self.written_off_orders, **self.pending_orders}.items():  # re-register orders sent before a restart
-            spec = self.config.instruments[meta["instrument"]]
+            spec = self._spec(meta["instrument"])
             track = getattr(self.adapters[spec.venue], "track_order", None)
             if callable(track):
                 maker = {"post_only": True} if meta.get("style") == "maker" and _accepts(track, "post_only") else {}
@@ -278,6 +293,7 @@ class PortfolioEngine:
         self._work_makers(report, now)
         self._settle_option_expiries(prices, now)
         self._settle_binaries(now)
+        self._run_contracts(report, now)
         self._book_live_funding(now)
         self._flush_tax(now)  # funding booked while marking
         self._check_equity_drift(now)
@@ -385,6 +401,77 @@ class PortfolioEngine:
         self._save()
         return report
 
+    def _spec(self, instrument: str) -> Any:
+        """An instrument's spec: from the config, or, for a contract registered as it was traded, from the book."""
+        return self.config.instruments.get(instrument) or self.book.instruments[instrument]
+
+    def _units(self) -> dict[str, Decimal]:
+        """Positions in the config's instruments: what the weight sleeves, the risk overlay and the order planner work on."""
+        return {instrument: units for instrument, units in self.book.units().items() if instrument in self.config.instruments}
+
+    def _weights(self) -> dict[str, float]:
+        return {instrument: weight for instrument, weight in self.book.weights().items() if instrument in self.config.instruments}
+
+    def _run_contracts(self, report: CycleReport, now: datetime) -> None:
+        """One step of every contract sleeve: mark what it holds, ask for its targets, fit them to its budget, send the difference.
+
+        Runs every cycle, since a bet's market moves and ends on its own clock, not on bar closes. Orders go through
+        `_execute`, so each is written to the checkpoint before it is sent and settled like any other.
+        """
+        if not self.contract_strategies:
+            return
+        marks = {}
+        for instrument in [key for key, units in self.book.units().items() if units and key in self.contract_owner]:
+            book = self.contract_books(instrument)
+            if book is not None and len(book):
+                bids, asks = book[book["side"] == "bid"]["price"], book[book["side"] == "ask"]["price"]
+                if len(bids) and len(asks):
+                    marks[instrument] = (float(bids.iloc[0]) + float(asks.iloc[0])) / 2.0
+        if marks:
+            self.book.mark(marks, now=now)
+        equity = float(self.book.equity())
+        busy = {meta["instrument"] for meta in self.pending_orders.values()}
+        from src.portfolio.contracts import ContractContext, ContractTarget, fit_to_budget
+
+        for number, (sleeve_id, strategy) in enumerate(self.contract_strategies.items()):
+            spec = self.contract_specs[sleeve_id]
+            held = {instrument: float(self.book.units().get(instrument, 0)) for instrument, owner in self.contract_owner.items() if owner == sleeve_id}
+            context = ContractContext(now=now, equity=equity, budget=spec.budget * equity, held=held, books=self.contract_books,
+                                      marks={instrument: float(price) for instrument, price in self.book.marks.items()})
+            try:
+                wanted = list(strategy.targets(context))
+            except Exception as exc:  # noqa: BLE001 - one broken sleeve must not stop the book; it keeps what it holds
+                self._event("ERROR", "portfolio_contract_sleeve_failed", f"contract sleeve {sleeve_id} failed: {type(exc).__name__}: {exc}", {"sleeve": sleeve_id}, now)
+                continue
+            named = {target.instrument for target in wanted}
+            wanted += [ContractTarget(instrument, 0.0, 0.5, reason="no longer wanted") for instrument, units in held.items() if units and instrument not in named]
+            for index, target in enumerate(fit_to_budget([target for target in wanted if target.units], spec.budget * equity) + [target for target in wanted if not target.units]):
+                venue = target.instrument.split(":", 1)[0]
+                owner = self.contract_owner.get(target.instrument, sleeve_id)
+                if venue != spec.venue or owner != sleeve_id:
+                    self._event("WARNING", "portfolio_contract_skipped", f"{sleeve_id}: {target.instrument} is " + ("on another venue" if venue != spec.venue else f"held by {owner}"),
+                                {"sleeve": sleeve_id, "instrument": target.instrument}, now)
+                    continue
+                change = target.units - held.get(target.instrument, 0.0)
+                if abs(change) < 1.0 or target.instrument in busy:
+                    continue
+                price = target.limit_price
+                if not target.units:  # closing: take what the book gives (a limit at the far end of the price range)
+                    price = 0.01 if change < 0 else 0.99
+                self.book.register_binary(target.instrument)
+                self.contract_owner[target.instrument] = sleeve_id
+                reduces = abs(target.units) < abs(held.get(target.instrument, 0.0)) and target.units * held.get(target.instrument, 0.0) >= 0
+                entry = {"order_id": f"pc-{self.cycle}-{number}-{index}-{target.instrument}", "instrument": target.instrument, "side": "buy" if change > 0 else "sell",
+                         "units": str(int(abs(change))), "price": price, "reason": target.reason or ("reduce" if reduces else "open"), "reduce_only": False,
+                         "sleeves": {sleeve_id: 1.0}, "contract": True}
+                if target.style == "maker" and target.units:
+                    entry.update({"style": "maker", "no_fallback": True})  # an unfilled bet is re-decided next cycle, never chased at market
+                busy.add(target.instrument)
+                self._execute(entry, report=report, now=now)
+        self._settle_pending(report, now)
+        for instrument in [key for key in self.contract_owner if not self.book.units().get(key) and key not in {meta["instrument"] for meta in self.pending_orders.values()}]:
+            del self.contract_owner[instrument]
+
     def _settle_binaries(self, now: datetime) -> None:
         """Settle held prediction-market contracts whose market has resolved, as `binary_results` reports them.
 
@@ -405,6 +492,9 @@ class PortfolioEngine:
                 outcomes[instrument] = bool(outcome)
         for record in self.book.settle_resolved_binaries(outcomes):
             realized = float(record["realized"])
+            resolve = getattr(self.adapters.get(record["instrument"].split(":", 1)[0]), "resolve", None)
+            if callable(resolve):  # the paper venue pays out too, and withdraws what rested on the market
+                resolve(record["instrument"].split(":", 1)[1], bool(record["yes"]))
             self._event("INFO", "portfolio_binary_settled", f"{record['instrument']} resolved {'Yes' if record['yes'] else 'No'}; realized {realized:+,.2f}",
                         {key: str(value) for key, value in record.items()}, now)
             self._tax_derivative(record["instrument"], "REALIZED_PNL", realized, now, {"kind": "binary_settlement"})
@@ -469,6 +559,8 @@ class PortfolioEngine:
                         self.book.book_funding(symbols[symbol], owed)
                         self._tax_derivative(symbols[symbol], "FUNDING_FEE", -float(owed), now, {"kind": "funding"})
                     seen[symbol] = total
+            elif isinstance(adapter, SandboxBinaryAdapter):
+                adapter.on_market_update(timestamp=now)  # fills resting bets the book has come to; `settle_orders` reports them
             elif getattr(adapter, "live", False):
                 for event in adapter.on_market_update(prices={symbol: prices[instrument] for symbol, instrument in symbols.items() if instrument in prices}, timestamp=now):
                     event = {**event, "venue": venue, "instrument": symbols.get(event.get("symbol"), event.get("symbol"))}
@@ -554,7 +646,7 @@ class PortfolioEngine:
         Without this, float noise accumulates in the Decimal book and a fully
         closed position is left at 1e-17 instead of 0.
         """
-        step = Decimal(str(self.config.instruments[instrument].lot_step)) or FALLBACK_STEP
+        step = Decimal(str(self._spec(instrument).lot_step)) or (Decimal(1) if self._spec(instrument).kind == "binary" else FALLBACK_STEP)
         return (Decimal(str(units)) / step).to_integral_value() * step
 
     def _decide_and_trade(self, report: CycleReport, *, scales: Mapping[str, float], prices: Mapping[str, float], stale: Sequence[str], now: datetime) -> None:
@@ -565,11 +657,11 @@ class PortfolioEngine:
         equity = float(self.book.equity())
         report.adjusted, report.risk_actions = apply_portfolio_risk(
             report.targets, config=self.config.risk, venues=self.config.venues(), can_short=self.config.can_short(),
-            current=self.book.weights(), equity=equity, peak_equity=float(self.book.peak_equity),
+            current=self._weights(), equity=equity, peak_equity=float(self.book.peak_equity),
             day_start_equity=float(self.book.day_start_equity), stale=stale,
             groups=self.config.groups(), underlyings=self.config.underlyings(), estimate=self.risk_model.estimate(),
         )
-        plan = plan_orders(self.book.units(), report.adjusted, prices=prices, equity=equity, instruments=self.config.instruments, band=self.config.rebalance_band,
+        plan = plan_orders(self._units(), report.adjusted, prices=prices, equity=equity, instruments=self.config.instruments, band=self.config.rebalance_band,
                            small_lot_cap=self.config.small_lot_cap(equity))
         busy = {meta["instrument"] for meta in self.pending_orders.values()}
         cooling = self._cooldowns(now)
@@ -789,7 +881,7 @@ class PortfolioEngine:
                 if (now - datetime.fromisoformat(meta["submitted_at"])).total_seconds() < self.config.maker_timeout_seconds:
                     continue
                 try:
-                    self.adapters[self.config.instruments[meta["instrument"]].venue].cancel_order(order_id=order_id)
+                    self.adapters[self._spec(meta["instrument"]).venue].cancel_order(order_id=order_id)
                 except Exception as exc:  # noqa: BLE001 - it stays resting; the next cycle tries again
                     self._event("WARNING", "portfolio_cancel_failed", f"could not cancel the resting {meta['side']} {meta['units']} {meta['instrument']}: {exc}", {"order_id": order_id}, now)
                     continue
@@ -802,7 +894,7 @@ class PortfolioEngine:
         for entry in fallbacks:
             self.open_plan.remove(entry)
             # Priced at the market now, not when the maker order was placed: the move in between is the cost of having waited
-            spec = self.config.instruments[entry["instrument"]]
+            spec = self._spec(entry["instrument"])
             reference = getattr(self.adapters[spec.venue], "reference_price", None)
             entry["price"] = float((reference(spec.symbol) if callable(reference) else None) or self.book.marks.get(entry["instrument"], entry["price"]))
             self._execute(entry, report=report, now=now)
@@ -812,7 +904,7 @@ class PortfolioEngine:
     def _maker_ended(self, meta: Mapping[str, Any], item: Mapping[str, Any], adapter: Any, now: datetime) -> None:
         """A maker order is over (filled, cancelled, or ended by the exchange): record how it went and queue the remainder."""
         instrument = meta["instrument"]
-        spec = self.config.instruments[instrument]
+        spec = self._spec(instrument)
         filled = float(meta.get("filled", 0.0))
         remainder = self._on_lot_grid(instrument, max(0.0, float(meta["units"]) - filled))
         waited = (now - datetime.fromisoformat(meta["submitted_at"])).total_seconds()
@@ -845,7 +937,7 @@ class PortfolioEngine:
         the order by its id (`_settle_pending`) and books the fill once, where a checkpoint without it would plan
         and send the same order again.
         """
-        spec = self.config.instruments[entry["instrument"]]
+        spec = self._spec(entry["instrument"])
         adapter = self.adapters[spec.venue]
         order_id = entry["order_id"]
         meta = {**entry, "submitted_at": now.isoformat()}
@@ -861,6 +953,10 @@ class PortfolioEngine:
             self._event("INFO", "portfolio_order_submitted", f"{meta['side']} {meta['units']} {meta['instrument']} {'resting as a maker order' if maker else 'sent'} ({meta['reason']})", meta, now)
             return
         self.pending_orders.pop(order_id, None)
+        if maker and meta.get("no_fallback") and (result.status != "FILLED" or not result.filled_size):
+            self._event("INFO", "portfolio_maker_result", f"maker {meta['side']} {meta['units']} {meta['instrument']}: not accepted ({result.message})",
+                        {"order_id": order_id, "instrument": meta["instrument"], "outcome": "not_accepted", "filled": 0.0, "remainder": float(meta["units"]), "waited_seconds": 0.0}, now)
+            return
         if maker and (result.status != "FILLED" or not result.filled_size):
             # The exchange would not rest it (it would have traded at once, or it failed a check): send it to market instead
             self._event("INFO", "portfolio_maker_result", f"maker {meta['side']} {meta['units']} {meta['instrument']}: not accepted ({result.message}); sending it to market",
@@ -871,7 +967,8 @@ class PortfolioEngine:
             rejection = {"order_id": order_id, "instrument": meta["instrument"], "side": meta["side"], "units": meta["units"], "reason": meta["reason"], "message": result.message}
             report.rejected.append(rejection)
             self._event("WARNING", "portfolio_order_rejected", f"{meta['side']} {meta['units']} {meta['instrument']} rejected: {result.message}", rejection, now)
-            self._note_rejection(meta["instrument"], now)
+            if not meta.get("contract"):  # a bet not filled at its limit is normal; it is not a venue refusing orders
+                self._note_rejection(meta["instrument"], now)
             return
         self._book_fill(meta, filled_size=float(result.filled_size), fill_price=float(result.fill_price), fee=float(result.fee), report=report, now=now)
 
@@ -894,7 +991,7 @@ class PortfolioEngine:
         """Book one fill (immediate or settled later): the book, the tax ledger, the trade log, the event log and Telegram."""
         instrument = meta["instrument"]
         self.rejection_streak.pop(instrument, None)  # the exchange takes orders again
-        spec = self.config.instruments[instrument]
+        spec = self._spec(instrument)
         drivers = dict(meta.get("sleeves", {}))
         strategy_id = next(iter(drivers)) if len(drivers) == 1 else "portfolio"
         realized = self.book.apply_fill(instrument, meta["side"], self._on_lot_grid(instrument, filled_size), fill_price, fee)
@@ -970,6 +1067,9 @@ class PortfolioEngine:
         for sleeve_id, weight in fill["sleeves"].items():
             decision = report.sleeve_decisions.get(sleeve_id)
             action = f", {decision.action}" + (f" ({decision.reason})" if decision.reason else "") if decision else ""
+            if sleeve_id in self.contract_specs:
+                notes.append(f"Contract sleeve {sleeve_id} ({self.contract_specs[sleeve_id].strategy})")
+                continue
             notes.append(f"Sleeve {sleeve_id} ({self.sleeves[sleeve_id].strategy}): target {weight:+.1%} of equity{action}")
         for action in report.risk_actions:
             if action.instrument == meta["instrument"]:
@@ -1000,7 +1100,7 @@ class PortfolioEngine:
 
         source = self.funding_source or fetch_funding_history
         for instrument, units in self.book.units().items():
-            spec = self.config.instruments[instrument]
+            spec = self._spec(instrument)
             if spec.venue not in live or spec.kind != "perp":
                 continue
             since = self.funding_booked_until.get(instrument)
@@ -1160,7 +1260,7 @@ class PortfolioEngine:
             if not getattr(adapter, "live", False):
                 continue
             state = adapter.sync_account()
-            before = {instrument: float(units) for instrument, units in self.book.units().items() if self.config.instruments[instrument].venue == venue}
+            before = {instrument: float(units) for instrument, units in self.book.units().items() if self._spec(instrument).venue == venue}
             for instrument, spec in self.config.instruments.items():
                 if spec.venue != venue:
                     continue
@@ -1185,7 +1285,7 @@ class PortfolioEngine:
             if meta.get("style") == "maker":  # withdraw resting orders; what they didn't fill must not be sent after a flatten
                 meta.update({"no_fallback": True, "cancel_requested": now.isoformat()})
                 try:
-                    self.adapters[self.config.instruments[meta["instrument"]].venue].cancel_order(order_id=order_id)
+                    self.adapters[self._spec(meta["instrument"]).venue].cancel_order(order_id=order_id)
                 except Exception as exc:  # noqa: BLE001 - still try to close the positions
                     self._event("ERROR", "portfolio_cancel_failed", f"could not cancel the resting order {order_id}: {exc}", {"order_id": order_id}, now)
         self._settle_pending(report, now)
@@ -1197,7 +1297,8 @@ class PortfolioEngine:
                 except Exception as exc:  # noqa: BLE001 - still try to close the positions
                     self._event("ERROR", "portfolio_cancel_all_failed", str(exc), {}, now)
         prices = {instrument: float(price) for instrument, price in self.book.marks.items()}
-        plan = plan_orders(self.book.units(), {}, prices=prices, equity=float(self.book.equity()), instruments=self.config.instruments, band=0.0)
+        # Contracts (bets, options) are not closed here: a bet is held to its resolution, and its resting orders were withdrawn above
+        plan = plan_orders(self._units(), {}, prices=prices, equity=float(self.book.equity()), instruments=self.config.instruments, band=0.0)
         report.orders, report.skipped = plan.orders, plan.skipped
         self.open_plan = [self._plan_entry(order, number=number, attribution={}) for number, order in enumerate(plan.orders)]  # replaces any interrupted decision
         self._run_plan(report, now)
@@ -1224,7 +1325,7 @@ class PortfolioEngine:
     def snapshot(self, report: CycleReport | None = None) -> dict[str, Any]:
         """What the book holds and why, for the dashboard: instruments, sleeves, risk usage and the last decision."""
         equity = float(self.book.equity())
-        weights = self.book.weights()
+        weights = self._weights()
         attribution = self.book.attribution()
         adjusted = report.adjusted if report is not None and report.decided else {}
         instruments = {}
@@ -1269,7 +1370,12 @@ class PortfolioEngine:
                        "groups": risk.groups, "max_beta_exposure": risk.max_beta_exposure, "max_portfolio_vol": risk.max_portfolio_vol,
                        "exposure": risk.exposure, "max_average_correlation": risk.max_average_correlation, "min_effective_bets": risk.min_effective_bets},
             "exposure": exposure, "strategy_correlation": self.unit_returns.summary(), "exposure_breaches": self.exposure_breaches(equity),
-            "instruments": instruments, "contracts": contracts, "sleeves": sleeves, "residual_pnl": float(attribution.get("residual", 0)),
+            "instruments": instruments, "contracts": contracts, "sleeves": sleeves,
+            "contract_sleeves": {sleeve_id: {"venue": spec.venue, "strategy": spec.strategy, "budget": spec.budget * equity,
+                                             "at_risk": sum(float(self.book.positions[instrument].avg_entry) * float(units) if units > 0 else (1.0 - float(self.book.positions[instrument].avg_entry)) * -float(units)
+                                                            for instrument, owner in self.contract_owner.items() if owner == sleeve_id and (units := self.book.units().get(instrument))),
+                                             "contracts": sorted(instrument for instrument, owner in self.contract_owner.items() if owner == sleeve_id)}
+                                 for sleeve_id, spec in self.contract_specs.items()}, "residual_pnl": float(attribution.get("residual", 0)),
             "execution": self.config.execution_policy, "pending_orders": len(self.pending_orders),  # orders sent and not yet settled (resting maker orders)
             "risk_actions": [vars_of(action) for action in (report.risk_actions if report is not None else [])],
             "fills": len(report.fills) if report is not None else 0,
@@ -1318,6 +1424,13 @@ class PortfolioEngine:
                 exchange = float(adapter.get_account_snapshot().get("positions", {}).get(adapter._position_symbol(spec.symbol), 0.0))
             book = float(book_units.get(instrument, 0))
             if not np.isclose(book, exchange, rtol=1e-9, atol=1e-10):
+                mismatches[instrument] = {"book": book, "exchange": exchange}
+        for instrument in self.contract_owner:  # bets: the book's contracts against the venue account's
+            adapter = self.adapters.get(instrument.split(":", 1)[0])
+            if any(meta["instrument"] == instrument for meta in self.pending_orders.values()) or not hasattr(adapter, "position_size"):
+                continue
+            book, exchange = float(book_units.get(instrument, 0)), float(adapter.position_size(instrument.split(":", 1)[1]))
+            if not np.isclose(book, exchange, atol=1e-9):
                 mismatches[instrument] = {"book": book, "exchange": exchange}
         return mismatches
 
@@ -1371,6 +1484,7 @@ class PortfolioEngine:
             "pending_orders": self.pending_orders,
             "open_plan": self.open_plan,
             "paper_funding_seen": self.paper_funding_seen,
+            "contract_owner": self.contract_owner,
             "written_off_orders": self.written_off_orders,
             "unreconciled": self.unreconciled,
             "funding_booked_until": self.funding_booked_until,
@@ -1411,6 +1525,7 @@ class PortfolioEngine:
         self.pending_tax = list(payload.get("pending_tax", []))
         self.pending_orders = dict(payload.get("pending_orders", {}))
         self.open_plan = list(payload.get("open_plan", []))
+        self.contract_owner = {str(instrument): str(owner) for instrument, owner in dict(payload.get("contract_owner", {})).items()}
         self.paper_funding_seen = {venue: {symbol: float(paid) for symbol, paid in totals.items()} for venue, totals in dict(payload.get("paper_funding_seen", {})).items()}
         self.written_off_orders = dict(payload.get("written_off_orders", {}))
         self.unreconciled = dict(payload.get("unreconciled", {}))
