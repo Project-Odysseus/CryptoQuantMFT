@@ -15,8 +15,14 @@ Two ways to trade, as on the perp exchange:
   bid, the best bid at or above a resting offer). That is pessimistic: a real resting order is also filled by trades
   that never move the best quote. `on_market_update` makes that check; `cancel_order` withdraws the order.
 
-Fees are `rate x price x (1 - price)` per contract, the shape both venues use for crypto markets, rounded up to a
-cent per order where the venue does (Kalshi). The maker rate defaults to 0; check it per venue before relying on it.
+Fees are `rate x price x (1 - price)` per contract, rounded up to a cent per order where the venue does (Kalshi):
+
+- Kalshi: taker 0.07, maker 0.0175, on every order.
+- Polymarket (crypto markets): taker 0.07, maker 0, and no taker fee on selling a token that is held, so only the
+  part of an order that opens a position pays. Its maker rebate is not modelled.
+
+The maker rates and Polymarket's free selling come from a secondhand summary (2026-10-04), not from the venues' fee
+pages: check them there before relying on a maker strategy's paper result.
 
 Like the perp paper exchange it keeps a state file, answers a repeated order id with the first outcome, and can say
 after a restart whether an order rested, filled, was cancelled, or never arrived (`track_order`, `settle_orders`).
@@ -37,6 +43,8 @@ from src.execution.adapters import ExecutionAdapter, ExecutionReport
 
 KEPT = 500  # finished order ids remembered, so a repeat or a restart gets the first outcome back
 TAKER_FEE_RATE = {"kalshi": 0.07, "polymarket": 0.07}
+MAKER_FEE_RATE = {"kalshi": 0.0175, "polymarket": 0.0}
+FEE_ON_CLOSING = {"kalshi": True, "polymarket": False}  # Polymarket charges no taker fee for selling a held token
 ROUND_FEE_UP_TO_CENT = {"kalshi": True, "polymarket": False}
 
 Books = Callable[[str], pd.DataFrame | None]  # market id -> rows of side ("bid"/"ask"), price (Yes), size; best first
@@ -51,7 +59,7 @@ def binary_fee(price: float, contracts: float, rate: float, *, round_up: bool = 
 class SandboxBinaryAdapter(ExecutionAdapter):
     """One prediction-market account on paper: cash, Yes and No positions, fills from the real book."""
 
-    def __init__(self, *, venue: str, books: Books, starting_cash: float = 0.0, taker_fee_rate: float | None = None, maker_fee_rate: float = 0.0,
+    def __init__(self, *, venue: str, books: Books, starting_cash: float = 0.0, taker_fee_rate: float | None = None, maker_fee_rate: float | None = None,
                  state_path: str | Path | None = None) -> None:
         """
         Args:
@@ -64,7 +72,8 @@ class SandboxBinaryAdapter(ExecutionAdapter):
         self.books = books
         self.cash = float(starting_cash)
         self.taker_fee_rate = TAKER_FEE_RATE.get(venue, 0.07) if taker_fee_rate is None else taker_fee_rate
-        self.maker_fee_rate = maker_fee_rate
+        self.maker_fee_rate = MAKER_FEE_RATE.get(venue, 0.0) if maker_fee_rate is None else maker_fee_rate
+        self._fee_on_closing = FEE_ON_CLOSING.get(venue, True)
         self._round_up = ROUND_FEE_UP_TO_CENT.get(venue, False)
         self.units: dict[str, float] = {}  # market id -> signed Yes contracts (negative: No)
         self.fees_paid_total = 0.0
@@ -110,6 +119,13 @@ class SandboxBinaryAdapter(ExecutionAdapter):
             return size * price - covering
         opening = max(size - max(held, 0.0), 0.0)  # selling more Yes than held opens No, which needs its stake
         return opening * 1.0 - size * price
+
+    def _fee_contracts(self, side: str, size: float, held: float) -> float:
+        """The contracts of an order that pay the taker fee: all of them, or where closing is free only the part that opens a position."""
+        if self._fee_on_closing:
+            return size
+        closing = min(size, max(held, 0.0)) if side == "sell" else min(size, max(-held, 0.0))
+        return size - closing
 
     def _book(self, market: str) -> pd.DataFrame | None:
         try:
@@ -160,7 +176,7 @@ class SandboxBinaryAdapter(ExecutionAdapter):
         if filled < 1:
             return self._reject(order_id, f"nothing offered at {price:.2f} or better")
         fill_price = value / filled
-        fee = binary_fee(fill_price, filled, self.taker_fee_rate, round_up=self._round_up)
+        fee = binary_fee(fill_price, self._fee_contracts(side, filled, held), self.taker_fee_rate, round_up=self._round_up)
         if self._cost(side, filled, fill_price, held) + fee > self.available_cash() + 1e-9:
             return self._reject(order_id, f"insufficient cash: needs {self._cost(side, filled, fill_price, held) + fee:.2f}, {self.available_cash():.2f} available")
         return self._fill(order_id, symbol, side, filled, fill_price, fee, "taker")

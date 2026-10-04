@@ -249,6 +249,23 @@
     </div>`;
   }
 
+  // Bets and options: contracts a sleeve holds under a loss budget (shown only when the book has any).
+  function Contracts({ snapshot }) {
+    const sleeves = Object.entries(snapshot.contract_sleeves || {});
+    const held = Object.entries(snapshot.contracts || {});
+    return html`<div>
+      ${sleeves.map(([id, sleeve]) => html`<${Meter} key=${id} label=${`${id} (${sleeve.strategy}, ${sleeve.venue})`} note="money at risk against its budget" value=${sleeve.at_risk} limit=${sleeve.budget} format=${money} />`)}
+      ${held.length ? html`<div class="scroll"><table><thead><tr><th>Contract</th><th>Kind</th><th>Side</th><th>Contracts</th><th>Paid</th><th>Now</th><th>Value</th><th>Realised</th><th>Fees</th></tr></thead>
+        <tbody>${held.map(([name, row]) => html`<tr key=${name}><td>${name.split(":").pop()}</td><td>${row.kind === "binary" ? "bet" : row.kind}</td>
+          <td>${row.units > 0 ? (row.kind === "binary" ? "Yes" : "long") : row.units < 0 ? (row.kind === "binary" ? "No" : "short") : "closed"}</td>
+          <td>${row.units ? Math.abs(row.units) : "–"}</td><td>${row.units ? price(row.kind === "binary" && row.units < 0 ? 1 - row.avg_entry : row.avg_entry) : "–"}</td>
+          <td>${row.units ? price(row.kind === "binary" && row.units < 0 ? 1 - row.price : row.price) : "–"}</td>
+          <td>${row.units ? money(row.kind === "binary" && row.units < 0 ? -row.units * (1 - row.price) : row.value) : "–"}</td><td>${signedMoney(row.realized_pnl)}</td><td>${money(row.fees)}</td></tr>`)}</tbody></table></div>`
+        : html`<div class="empty">No contracts held right now.</div>`}
+      <p class="muted small">A bet pays 1 per contract if its side wins and 0 if not. “Paid” and “Now” are the price of the side held.</p>
+    </div>`;
+  }
+
   function Limits({ snapshot }) {
     const exposure = snapshot.exposure || {}, limits = snapshot.limits || {};
     const dayLoss = snapshot.day_start_equity ? Math.max(0, 1 - snapshot.equity / snapshot.day_start_equity) : null;
@@ -375,6 +392,8 @@
         <${Card} title="Positions" sub=${`as of ${clock(snapshot.timestamp)}`} span=${correlation && correlation.matrix ? "c8" : ""}><${Positions} snapshot=${snapshot} live=${live} /><//>
         ${correlation && correlation.matrix ? html`<${Card} title="How alike the strategies are" sub=${`return correlation, last ${correlation.bars} bars; average ${correlation.average_correlation.toFixed(2)}`} span="c4">
           <${Heatmap} names=${correlation.names} matrix=${correlation.matrix} /><//>` : null}
+        ${Object.keys(snapshot.contract_sleeves || {}).length || Object.keys(snapshot.contracts || {}).length
+          ? html`<${Card} title="Bets and options" sub="contracts held under a loss budget"><${Contracts} snapshot=${snapshot} /><//>` : null}
         <${Card} title="Fills" sub=${snapshot.execution === "maker_first" ? "newest first; orders rest at the touch first (maker), then go to market" : "newest first"} span="c8"><${Fills} fills=${fills} /><//>
         <${Card} title="Alerts" span="c4"><${Alerts} alerts=${alerts} /><//>
       </div>

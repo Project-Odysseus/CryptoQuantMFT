@@ -75,7 +75,8 @@ def test_a_post_only_order_rests_and_fills_only_when_the_other_side_comes_to_it(
     book.asks = [(0.37, 20.0), (0.39, 200.0)]  # an offer at our price: someone sells where we bid
     account.on_market_update(timestamp=NOW)
     [filled] = account.settle_orders()
-    assert filled["status"] == "FILLED" and filled["liquidity"] == "maker" and filled["fill_price"] == 0.37 and filled["filled_size"] == 100 and filled["fee"] == 0.0
+    assert filled["status"] == "FILLED" and filled["liquidity"] == "maker" and filled["fill_price"] == 0.37 and filled["filled_size"] == 100
+    assert filled["fee"] == 0.41  # Kalshi's maker fee: 0.0175 x 0.37 x 0.63 x 100 = 0.408, up to the cent (a quarter of the taker fee)
     assert account.position_size(MARKET) == 100 and account.settle_orders() == []
 
     _order(account, "m2", "sell", 100, 0.50, post_only=True)  # an offer to sell what is held, above the market
@@ -97,3 +98,16 @@ def test_fees_follow_the_venues_formula() -> None:
     assert binary_fee(0.95, 1, 0.07, round_up=True) == 0.01 and binary_fee(0.5, 0, 0.07, round_up=True) == 0.0
     polymarket = SandboxBinaryAdapter(venue="polymarket", books=Book(), starting_cash=100.0)
     assert polymarket.submit_order(order_id="p", side="buy", size=10, price=0.38, timestamp=NOW, symbol=MARKET).fee == pytest.approx(0.07 * 0.38 * 0.62 * 10)  # not rounded there
+
+
+def test_polymarket_charges_nothing_for_resting_orders_or_for_selling_what_is_held() -> None:
+    book = Book()
+    account = SandboxBinaryAdapter(venue="polymarket", books=book, starting_cash=100.0)
+    bought = account.submit_order(order_id="b", side="buy", size=30, price=0.38, timestamp=NOW, symbol=MARKET)
+    assert bought.fee == pytest.approx(0.07 * 0.38 * 0.62 * 30)
+    sold = account.submit_order(order_id="s", side="sell", size=50, price=0.36, timestamp=NOW, symbol=MARKET)  # 30 close the Yes, 20 open No
+    assert sold.filled_size == 50 and sold.fee == pytest.approx(0.07 * 0.36 * 0.64 * 20) and account.position_size(MARKET) == -20  # only the 20 that open pay
+    account.submit_order(order_id="m", side="buy", size=20, price=0.37, timestamp=NOW, symbol=MARKET, post_only=True)
+    book.asks = [(0.37, 50.0)]
+    account.on_market_update(timestamp=NOW)
+    assert account.settle_orders()[0]["fee"] == 0.0 and account.position_size(MARKET) == 0  # a resting order pays no fee there

@@ -236,6 +236,7 @@ class PortfolioEngine:
         self.contract_specs = {sleeve.id: sleeve for sleeve in config.contract_sleeves}
         self.contract_books = contract_books or (lambda instrument: None)
         self.contract_owner: dict[str, str] = {}  # contract instrument -> the sleeve that holds it (one sleeve per contract)
+        self.contract_meta: dict[str, dict[str, Any]] = {}  # contract instrument -> its coin and delta per contract, as its strategy last gave them
         self.equity_drift_alerted = False
         self.book_id = uuid.uuid4().hex[:10]  # part of every client order id; kept in the checkpoint
         self.sleeve_error_counts: dict[str, int] = {}
@@ -412,14 +413,8 @@ class PortfolioEngine:
     def _weights(self) -> dict[str, float]:
         return {instrument: weight for instrument, weight in self.book.weights().items() if instrument in self.config.instruments}
 
-    def _run_contracts(self, report: CycleReport, now: datetime) -> None:
-        """One step of every contract sleeve: mark what it holds, ask for its targets, fit them to its budget, send the difference.
-
-        Runs every cycle, since a bet's market moves and ends on its own clock, not on bar closes. Orders go through
-        `_execute`, so each is written to the checkpoint before it is sent and settled like any other.
-        """
-        if not self.contract_strategies:
-            return
+    def _mark_contracts(self, now: datetime) -> None:
+        """Value every held contract at the middle of its order book (left at its last mark when the book can't be read)."""
         marks = {}
         for instrument in [key for key, units in self.book.units().items() if units and key in self.contract_owner]:
             book = self.contract_books(instrument)
@@ -429,6 +424,16 @@ class PortfolioEngine:
                     marks[instrument] = (float(bids.iloc[0]) + float(asks.iloc[0])) / 2.0
         if marks:
             self.book.mark(marks, now=now)
+
+    def _run_contracts(self, report: CycleReport, now: datetime) -> None:
+        """One step of every contract sleeve: mark what it holds, ask for its targets, fit them to its budget, send the difference.
+
+        Runs every cycle, since a bet's market moves and ends on its own clock, not on bar closes. Orders go through
+        `_execute`, so each is written to the checkpoint before it is sent and settled like any other.
+        """
+        if not self.contract_strategies:
+            return
+        self._mark_contracts(now)
         equity = float(self.book.equity())
         busy = {meta["instrument"] for meta in self.pending_orders.values()}
         from src.portfolio.contracts import ContractContext, ContractTarget, fit_to_budget
@@ -445,7 +450,11 @@ class PortfolioEngine:
                 continue
             named = {target.instrument for target in wanted}
             wanted += [ContractTarget(instrument, 0.0, 0.5, reason="no longer wanted") for instrument, units in held.items() if units and instrument not in named]
-            for index, target in enumerate(fit_to_budget([target for target in wanted if target.units], spec.budget * equity) + [target for target in wanted if not target.units]):
+            budget = spec.budget * equity
+            for index, target in enumerate(fit_to_budget([target for target in wanted if target.units], budget, max_event=spec.max_event_share * budget)
+                                           + [target for target in wanted if not target.units]):
+                if target.underlying:  # the strategy's own delta, so the book's exposure limits see the bet
+                    self.contract_meta[target.instrument] = {"underlying": target.underlying, "delta": float(target.delta)}
                 venue = target.instrument.split(":", 1)[0]
                 owner = self.contract_owner.get(target.instrument, sleeve_id)
                 if venue != spec.venue or owner != sleeve_id:
@@ -469,8 +478,10 @@ class PortfolioEngine:
                 busy.add(target.instrument)
                 self._execute(entry, report=report, now=now)
         self._settle_pending(report, now)
+        self._mark_contracts(now)  # a bet bought this cycle is valued at the market too, not at what was paid, before anything else is sized on equity
         for instrument in [key for key in self.contract_owner if not self.book.units().get(key) and key not in {meta["instrument"] for meta in self.pending_orders.values()}]:
             del self.contract_owner[instrument]
+            self.contract_meta.pop(instrument, None)
 
     def _settle_binaries(self, now: datetime) -> None:
         """Settle held prediction-market contracts whose market has resolved, as `binary_results` reports them.
@@ -1007,9 +1018,13 @@ class PortfolioEngine:
         self._tax_fill(instrument, meta["side"], filled_size, fill_price, fee, float(realized), now, meta["order_id"])
         if self.trade_logger is not None:
             # the mode is part of the source, so a paper soak's fills can never be read as real ones
+            # The trade and its event go in as one transaction: `_fill_logged` looks for the event after a restart, and a
+            # process killed between two separate writes would log the trade a second time
             self.trade_logger.log_trade(timestamp=now, source=f"portfolio_{self.mode}", exchange=spec.venue, pair=spec.symbol, side=meta["side"], price=fill_price,
-                                        size=filled_size, fee=fee, strategy_id=strategy_id)
-            self._event("INFO", "portfolio_fill", f"{meta['side']} {filled_size} {instrument} @ {fill_price} ({meta['reason']})", {**fill, "book_id": self.book_id}, now)
+                                        size=filled_size, fee=fee, strategy_id=strategy_id,
+                                        event={"level": "INFO", "event_type": "portfolio_fill", "source": "portfolio",
+                                               "message": f"{meta['side']} {filled_size} {instrument} @ {fill_price} ({meta['reason']})",
+                                               "metadata": {"portfolio": self.snapshot_name, **fill, "book_id": self.book_id}})
         if self.notifier is not None:
             self.notifier.send_trade_alert(self._trade_alert(meta, fill, report, now))
 
@@ -1389,7 +1404,7 @@ class PortfolioEngine:
         """
         if not self.config.risk.exposure or equity <= 0:
             return []
-        from src.portfolio.exposure import MarketState
+        from src.portfolio.exposure import MarketState, Position
         from src.portfolio.exposure_limits import base_coin, book_positions, check_exposure
 
         spot: dict[str, float] = {}
@@ -1399,8 +1414,11 @@ class PortfolioEngine:
                 spot[base_coin(spec.symbol)] = mark
         try:
             kinds = {instrument: spec.kind for instrument, spec in self.book.instruments.items()}
-            units = {instrument: held for instrument, held in self.book.units().items() if kinds.get(instrument) != "binary"}  # a binary's delta joins these limits in TODO 6b, A3
-            positions = [position for position in book_positions(units, kinds)
+            units = {instrument: held for instrument, held in self.book.units().items() if kinds.get(instrument) != "binary"}
+            # A bet on a coin's price counts as the coins it moves like (its strategy's delta per contract x contracts held)
+            bets = [Position(kind="perp", underlying=meta["underlying"], quantity=float(self.book.units()[instrument]) * float(meta["delta"]), label=instrument)
+                    for instrument, meta in self.contract_meta.items() if self.book.units().get(instrument) and meta.get("delta")]
+            positions = [position for position in book_positions(units, kinds) + bets
                          if position.underlying in spot]
             when = self.last_grid_bar + self.grid_step if self.last_grid_bar else datetime.now().astimezone()
             _table, _grid, breaches = check_exposure(positions, MarketState(now=when, spot=spot), self.config.risk.exposure, equity)
@@ -1485,6 +1503,7 @@ class PortfolioEngine:
             "open_plan": self.open_plan,
             "paper_funding_seen": self.paper_funding_seen,
             "contract_owner": self.contract_owner,
+            "contract_meta": self.contract_meta,
             "written_off_orders": self.written_off_orders,
             "unreconciled": self.unreconciled,
             "funding_booked_until": self.funding_booked_until,
@@ -1526,6 +1545,7 @@ class PortfolioEngine:
         self.pending_orders = dict(payload.get("pending_orders", {}))
         self.open_plan = list(payload.get("open_plan", []))
         self.contract_owner = {str(instrument): str(owner) for instrument, owner in dict(payload.get("contract_owner", {})).items()}
+        self.contract_meta = {str(instrument): dict(meta) for instrument, meta in dict(payload.get("contract_meta", {})).items()}
         self.paper_funding_seen = {venue: {symbol: float(paid) for symbol, paid in totals.items()} for venue, totals in dict(payload.get("paper_funding_seen", {})).items()}
         self.written_off_orders = dict(payload.get("written_off_orders", {}))
         self.unreconciled = dict(payload.get("unreconciled", {}))

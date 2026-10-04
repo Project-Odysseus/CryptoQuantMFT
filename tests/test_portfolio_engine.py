@@ -799,3 +799,22 @@ def test_the_backtest_comparison_reads_positions_once_a_decisions_maker_orders_h
     assert frame.iloc[0][f"w:{BTC}"] == 0.4 and frame.iloc[0]["equity"] == 10_000.0  # the settled position, the decision's equity
     still = paper_check.decision_frame([snap(1, 0.0, decision=True, pending=1)], "4h")
     assert still.iloc[0][f"w:{BTC}"] == 0.0  # nothing settled yet: what the decision snapshot shows
+
+
+def test_a_fills_trade_row_and_its_event_are_written_together(tmp_path) -> None:
+    """A kill between two separate writes left a trade without its event, and the restart then logged the trade again."""
+    logger = TradeLogger(tmp_path / "trades.db")
+    logger.log_trade(timestamp=START, source="portfolio_paper", exchange="kraken_futures", pair="BTC/USD", side="buy", price=50_000.0, size=0.01, fee=0.25,
+                     event={"level": "INFO", "event_type": "portfolio_fill", "message": "buy", "source": "portfolio", "metadata": {"order_id": "pf-1-0", "book_id": "b"}})
+    [event] = logger.list_events(event_types=["portfolio_fill"])
+    assert event["metadata"]["order_id"] == "pf-1-0" and len(logger.list_trades()) == 1
+
+    class Broken(TradeLogger):
+        def _serialize_json(self, value):  # the event can't be written: the trade must not be either
+            raise RuntimeError("disk full")
+
+    broken = Broken(tmp_path / "other.db")
+    with pytest.raises(RuntimeError):
+        broken.log_trade(timestamp=START, source="portfolio_paper", exchange="kraken_futures", pair="BTC/USD", side="buy", price=50_000.0, size=0.01, fee=0.25,
+                         event={"level": "INFO", "event_type": "portfolio_fill", "message": "buy", "source": "portfolio", "metadata": {}})
+    assert TradeLogger(tmp_path / "other.db").list_trades() == []

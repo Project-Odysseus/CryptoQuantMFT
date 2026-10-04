@@ -1,6 +1,6 @@
 """Crash and restart drill for the paper portfolio: kill -9 the runtime at chosen moments, restart it, compare.
 
-    python scripts/drills/restart_drill.py [config/portfolio.example.toml] [--bars 240] [--random-kills 6]
+    python scripts/drills/restart_drill.py [config/portfolio.example.toml] [--bars 240] [--random-kills 6] [--bets]
 
 The runtime writes two things when it trades: the paper exchange's account (`paper_<venue>.json`, at every fill) and
 its own checkpoint (`engine.json`). A crash between the two leaves them telling different stories, and what happens
@@ -151,6 +151,43 @@ def arm(engine: Any, point: str, count: int) -> None:
         raise ValueError(f"unknown crash point {point!r}")
 
 
+def with_drill_bets(config_path: str, clock: dict[str, Any]) -> tuple[Any, Any, Any]:
+    """The config plus one contract sleeve that bets every bar, with a made-up venue that depends only on the bar number.
+
+    Every bar it buys 10 Yes of market A at the offer (a taker order) and bids for 10 Yes of market B below the
+    offer (a maker order, which the made-up book fills one bar later), and holds both until they resolve two bars
+    on. So a kill can land on a bet recorded but not sent, sent but not booked, resting, or about to settle.
+    """
+    import tomllib
+
+    import pandas as pd
+
+    from src.portfolio import contracts
+    from src.portfolio.config import parse_portfolio_config
+
+    def bar_of(instrument: str) -> int:
+        return int(instrument.split("-")[1])
+
+    class DrillBets:
+        def targets(self, context: Any) -> list[Any]:
+            bar = clock["bar"]()
+            keep = [contracts.ContractTarget(instrument, units, 0.5) for instrument, units in context.held.items() if units]
+            return keep + [contracts.ContractTarget(f"kalshi:DRILL-{bar}-A", 10, 0.52, reason="drill taker"),
+                           contracts.ContractTarget(f"kalshi:DRILL-{bar}-B", 10, 0.50, style="maker", reason="drill maker")]
+
+    def books(instrument: str) -> Any:
+        age = clock["bar"]() - bar_of(instrument)
+        return pd.DataFrame([("bid", 0.48, 1000.0), ("ask", 0.52 if age <= 0 else 0.50, 1000.0)], columns=["side", "price", "size"])
+
+    def results(instrument: str) -> bool | None:
+        return bar_of(instrument) % 2 == 0 if clock["bar"]() - bar_of(instrument) >= 2 else None
+
+    contracts.register("drill_bets", DrillBets)
+    raw = tomllib.loads(Path(config_path).read_text())
+    raw["contract_sleeves"] = [{"id": "drill_bets", "venue": "kalshi", "strategy": "drill_bets", "budget": 0.05}]
+    return parse_portfolio_config(raw, path=config_path), books, results
+
+
 def child(args: argparse.Namespace) -> int:
     from src.portfolio.book import PortfolioBook
     from src.portfolio.config import load_portfolio_config
@@ -162,15 +199,22 @@ def child(args: argparse.Namespace) -> int:
 
     state_dir = Path(args.state_dir)
     config = load_portfolio_config(args.config)
+    bets = os.environ.get("DRILL_BETS") == "1"
+    clock = {"bar": lambda: 0}
+    books = results = None
+    if bets:
+        config, books, results = with_drill_bets(args.config, clock)
     book = PortfolioBook.from_config(config)
     logger = TradeLogger(database_path=state_dir / "drill.db")
-    engine = PortfolioEngine(config, adapters=build_paper_adapters(config, book, state_dir=state_dir), book=book, trade_logger=logger,
-                             state_path=state_dir / "engine.json")
+    engine = PortfolioEngine(config, adapters=build_paper_adapters(config, book, state_dir=state_dir, contract_books=books), book=book, trade_logger=logger,
+                             state_path=state_dir / "engine.json", contract_books=books)
+    engine.binary_results = results
     per_day = 86400 // BAR_INTERVALS[engine.grid_interval]
     mock = MockCandleFeed(config.instruments, grid_interval=engine.grid_interval, history_days=HISTORY_DAYS, total_days=HISTORY_DAYS + args.bars // per_day + 2)
     if config.baskets:
         engine.basket_source = mock.basket_panel
     feed = ReplayFeed(mock, engine.last_grid_bar, state_dir / "replay_clock")
+    clock["bar"] = lambda: mock.clock - 1  # the bar of the cycle now running (the feed has already stepped to the next)
     runtime = PortfolioRuntime(engine, feed, interval_seconds=0, trade_logger=logger)
     if args.crash:
         point, count = args.crash.split(":")
@@ -212,7 +256,11 @@ def outcome(state_dir: Path) -> dict[str, Any]:
     exchange: dict[str, float] = {}
     for path in state_dir.glob("paper_*.json"):
         venue = path.stem.removeprefix("paper_")
-        for symbol, position in json.loads(path.read_text()).get("positions", {}).items():
+        account = json.loads(path.read_text())
+        if account.get("account") == "binary":  # a betting venue: signed Yes contracts per market
+            exchange.update({f"{venue}:{market}": float(units) for market, units in account.get("units", {}).items() if float(units) != 0.0})
+            continue
+        for symbol, position in account.get("positions", {}).items():
             if float(position["size"]) != 0.0:
                 exchange[f"{venue}:{symbol}"] = float(position["size"])
     with closing(sqlite3.connect(state_dir / "drill.db")) as connection:
@@ -220,7 +268,10 @@ def outcome(state_dir: Path) -> dict[str, Any]:
         mismatches = connection.execute("SELECT COUNT(*) FROM operational_events WHERE event_type = 'portfolio_reconciliation_mismatch'").fetchone()[0]
     cash = sum(float(amount) for amount in engine["book"]["cash"].values())
     return {"book": book, "exchange": exchange, "fills": [tuple(row) for row in fills], "mismatches": int(mismatches), "cash": cash,
-            "pending": sorted(engine.get("pending_orders", {})), "unreconciled": engine.get("unreconciled", {}), "cycle": engine["cycle"]}
+            # an order still resting at the end (a maker order) is a normal end state; anything else pending is not
+            "pending": sorted(order_id for order_id, meta in engine.get("pending_orders", {}).items() if meta.get("style") != "maker"),
+            "resting": sorted((meta["instrument"], meta["side"], meta["units"]) for meta in engine.get("pending_orders", {}).values() if meta.get("style") == "maker"),
+            "unreconciled": engine.get("unreconciled", {}), "cycle": engine["cycle"]}
 
 
 def judge(result: dict[str, Any], reference: dict[str, Any]) -> list[str]:
@@ -234,6 +285,8 @@ def judge(result: dict[str, Any], reference: dict[str, Any]) -> list[str]:
         problems.append(f"{result['mismatches']} reconciliation mismatch event(s)")
     if result["unreconciled"] or result["pending"]:
         problems.append(f"left unreconciled {result['unreconciled']} / pending {result['pending']}")
+    if result["resting"] != reference["resting"]:
+        problems.append(f"resting orders {result['resting']} vs {reference['resting']} in a clean run")
     if len(result["fills"]) != len(reference["fills"]):
         problems.append(f"{len(result['fills'])} fills logged, a clean run has {len(reference['fills'])}")
     elif result["fills"] != reference["fills"]:
@@ -277,6 +330,7 @@ def main() -> int:
     parser.add_argument("--random-kills", type=int, default=6, help="Scenarios killed from outside at random times (each is killed up to 3 times)")
     parser.add_argument("--seed", type=int, default=20261003)
     parser.add_argument("--keep", action="store_true", help="Keep the state folders (printed at the end)")
+    parser.add_argument("--bets", action="store_true", help="Add a contract sleeve that bets every bar on a made-up venue (taker and maker), so kills land on bets too")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--config", help=argparse.SUPPRESS)
     parser.add_argument("--state-dir", help=argparse.SUPPRESS)
@@ -288,6 +342,8 @@ def main() -> int:
     workdir = Path(tempfile.mkdtemp(prefix="restart-drill-"))
     rng = random.Random(args.seed)
     started = time.monotonic()
+    if args.bets:
+        os.environ["DRILL_BETS"] = "1"  # the child processes inherit it
     _kills, reference = scenario(args.config_path, args.bars, workdir, "reference")
     duration = time.monotonic() - started
     print(f"Reference run of {args.config_path}: {args.bars} bars, {len(reference['fills'])} fills, final positions {reference['book']} ({duration:.1f}s)")

@@ -27,7 +27,7 @@ import csv
 import math
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -49,6 +49,9 @@ class ContractTarget:
         style: "taker" fills what the book offers inside the limit now and cancels the rest; "maker" rests at the
             limit until filled or until the engine's maker timeout cancels it.
         reason: For the log and the trade alert.
+        underlying, delta: For a bet on a coin's price: the coin ("BTC") and how many coins one Yes contract moves
+            like, by the strategy's own model (e.g. `prediction_markets.binary_delta`). The book's delta and scenario
+            limits then count the position. Leave empty for a bet with no price exposure the book should see.
     """
 
     instrument: str
@@ -56,6 +59,8 @@ class ContractTarget:
     limit_price: float
     style: str = "taker"
     reason: str = ""
+    underlying: str = ""
+    delta: float = 0.0
 
     def __post_init__(self) -> None:
         if ":" not in self.instrument:
@@ -105,13 +110,32 @@ def at_risk(units: float, price: float) -> float:
     return units * price if units >= 0 else -units * (1.0 - price)
 
 
-def fit_to_budget(targets: Sequence[ContractTarget], budget: float) -> list[ContractTarget]:
-    """`targets` scaled down, all by the same factor and to whole contracts, so their total cost is within `budget`."""
-    total = sum(at_risk(target.units, target.limit_price) for target in targets)
-    if total <= budget or total <= 0:
-        return [ContractTarget(target.instrument, float(math.trunc(target.units)), target.limit_price, target.style, target.reason) for target in targets]
-    scale = max(budget, 0.0) / total
-    return [ContractTarget(target.instrument, float(math.trunc(target.units * scale)), target.limit_price, target.style, target.reason) for target in targets]
+def event_of(instrument: str) -> str:
+    """The event a market belongs to: markets of one event resolve on the same price at the same time, so they win and lose together.
+
+    Kalshi lists one market per strike under an event ("kalshi:KXBTCD-26OCT0416-T85399.99" -> "kalshi:KXBTCD-26OCT0416").
+    A Polymarket market is its own event here.
+    """
+    venue, _, market = instrument.partition(":")
+    return f"{venue}:{market.rsplit('-', 1)[0]}" if venue == "kalshi" and market.count("-") >= 2 else instrument
+
+
+def fit_to_budget(targets: Sequence[ContractTarget], budget: float, *, max_event: float | None = None) -> list[ContractTarget]:
+    """`targets` cut to whole contracts so that no event costs more than `max_event` and all together cost at most `budget`.
+
+    Each event's targets are scaled by one factor, then all targets by another, so the strategy's proportions are kept.
+    """
+    def scaled(target: ContractTarget, factor: float) -> ContractTarget:
+        return replace(target, units=float(math.trunc(target.units * factor)))
+
+    out = list(targets)
+    if max_event is not None:
+        cost: dict[str, float] = {}
+        for target in out:
+            cost[event_of(target.instrument)] = cost.get(event_of(target.instrument), 0.0) + at_risk(target.units, target.limit_price)
+        out = [scaled(target, min(1.0, max(max_event, 0.0) / cost[event_of(target.instrument)])) if cost[event_of(target.instrument)] > 0 else target for target in out]
+    total = sum(at_risk(target.units, target.limit_price) for target in out)
+    return [scaled(target, min(1.0, max(budget, 0.0) / total) if total > 0 else 1.0) for target in out]
 
 
 # --- where a paper book gets a bet's order book and result ----------------------------------------------------------------

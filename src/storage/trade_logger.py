@@ -178,10 +178,14 @@ class TradeLogger:
         latency_ms: int = 0,
         record_tax_event: bool = False,
         strategy_id: str | None = None,
+        event: dict[str, Any] | None = None,
     ) -> tuple[int, str | None]:
         """Persist a single trade record.
 
         Args:
+            event: An operational event (`level`, `event_type`, `message`, `source`, `metadata`) written in the same
+                transaction as the trade. A caller that later asks "did I log this fill?" by looking for the event
+                then gets the same answer for both rows, even if the process was killed while logging.
             strategy_id: Identifies which strategy (or manual flow) placed the
                 trade. Optional today since only one strategy runs at a time,
                 but recorded now so portfolio-level attribution does not need
@@ -224,6 +228,11 @@ class TradeLogger:
                     strategy_id,
                 ),
             )
+            if event is not None:
+                connection.execute(
+                    "INSERT INTO operational_events (timestamp, level, event_type, message, source, metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                    (timestamp.isoformat(), event["level"], event["event_type"], event["message"], event["source"], self._serialize_json(event.get("metadata") or {})),
+                )
             connection.commit()
         trade_id = int(cursor.lastrowid)
 

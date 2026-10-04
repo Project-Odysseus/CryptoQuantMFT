@@ -123,7 +123,7 @@ def test_a_maker_bet_rests_then_fills_or_is_withdrawn_at_the_timeout_and_never_c
     books.book[MARKET] = ([(0.36, 100.0)], [(0.37, 10.0), (0.39, 200.0)])  # an offer arrives at our price
     hit = _cycle(engine, 10)
     [fill] = hit.fills
-    assert (fill["units"], fill["price"], fill["fee"], fill["liquidity"]) == (50.0, 0.37, 0.0, "maker") and engine.book.units()[MARKET] == 50 and engine.pending_orders == {}
+    assert (fill["units"], fill["price"], fill["fee"], fill["liquidity"]) == (50.0, 0.37, 0.21, "maker")  # 0.0175 x 0.37 x 0.63 x 50, up to the cent and engine.book.units()[MARKET] == 50 and engine.pending_orders == {}
 
     strategy.wanted = [ContractTarget(MARKET, 50, 0.37), ContractTarget(OTHER, 40, 0.09, style="maker")]  # a second bet, resting below its market
     _cycle(engine, 15)
@@ -182,3 +182,31 @@ def test_the_config_checks_contract_sleeves() -> None:
         ContractTarget(MARKET, 5, 1.2)
     with pytest.raises(ValueError, match="style must be"):
         ContractTarget(MARKET, 5, 0.5, style="market")
+
+
+def test_one_event_cannot_take_the_whole_budget_and_a_bets_delta_reaches_the_exposure_limits(tmp_path) -> None:
+    assert contracts.event_of(MARKET) == contracts.event_of(OTHER) == "kalshi:KXBTCD-26OCT0416" and contracts.event_of("polymarket:btc-updown-5m-1") == "polymarket:btc-updown-5m-1"
+    later = "kalshi:KXBTCD-26OCT0417-T85399.99"
+    cut = fit_to_budget([ContractTarget(MARKET, 1_000, 0.40), ContractTarget(OTHER, 1_000, 0.10), ContractTarget(later, 200, 0.50)], 500.0, max_event=125.0)
+    assert [target.units for target in cut] == [250.0, 250.0, 200.0]  # the first event cost 500: cut to 125; the other (100) is untouched; 225 in all
+
+    strategy, books = Scripted(), Books()
+    config = _config(contract_sleeves=[{**SLEEVE, "max_event_share": 0.1}])
+    config.risk.exposure.update({"max_delta": 0.5})  # the book's coin exposure may be at most half of equity
+    book = PortfolioBook.from_config(config)
+    engine = PortfolioEngine(config, adapters=build_paper_adapters(config, book, state_dir=tmp_path, contract_books=books), book=book, state_path=tmp_path / "engine.json",
+                             contract_strategies={"bets": strategy}, contract_books=books)
+    strategy.wanted = [ContractTarget(MARKET, 5_000, 0.39, underlying="BTC", delta=0.00001)]  # each contract moves like 0.00001 BTC
+    report = _cycle(engine)
+    [fill] = [fill for fill in report.fills if fill["instrument"] == MARKET]
+    assert fill["units"] == 128.0  # 10% of the 500 budget = 50 at risk at 0.39 a contract
+    assert engine.contract_meta == {MARKET: {"underlying": "BTC", "delta": 0.00001}}
+    equity = float(engine.book.equity())
+    assert engine.exposure_breaches(equity) == []  # 128 contracts x 0.00001 BTC: well under half of equity
+    engine.contract_meta[MARKET]["delta"] = 0.5  # the same bet, if each contract moved like half a coin: 64 BTC of exposure
+    [breach] = engine.exposure_breaches(equity)
+    assert (breach["rule"], breach["underlying"]) == ("max_delta", "BTC") and breach["value"] > 100
+    engine.contract_meta[MARKET]["delta"] = 0.00001
+    restarted = PortfolioEngine(config, adapters=build_paper_adapters(config, book, state_dir=tmp_path, contract_books=books), book=PortfolioBook.from_config(config),
+                                state_path=tmp_path / "engine.json", contract_strategies={"bets": strategy}, contract_books=books)
+    assert restarted.contract_meta == {MARKET: {"underlying": "BTC", "delta": 0.00001}}  # the checkpoint written at the end of the cycle

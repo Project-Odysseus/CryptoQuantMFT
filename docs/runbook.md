@@ -630,7 +630,10 @@ the rest; a `maker` target rests and is withdrawn after `[execution] maker_timeo
 market resolves (read from the recorder's result files, so the prediction-market recorder must be running), the
 position pays 1 or 0 and is booked like a derivative. Positions are under `contracts` and `contract_sleeves` in the
 snapshot. No strategy is registered yet (`src/portfolio/contracts.py`): one is added when it has passed its
-pre-registered test. The kill switch withdraws resting bets and leaves held ones to resolve.
+pre-registered test. The kill switch withdraws resting bets and leaves held ones to resolve. `max_event_share`
+(default 1) caps the share of the budget one event may take. A strategy that gives a bet's coin and delta makes it
+count in the `[risk.exposure]` check. The dashboard shows a "Bets and options" card for a book that has any.
+`python scripts/drills/restart_drill.py <config> --bets` runs the crash drill with a betting sleeve added.
 
 ## Recording prediction-market order books
 

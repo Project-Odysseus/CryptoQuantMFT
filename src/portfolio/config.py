@@ -41,6 +41,7 @@ class ContractSleeveSpec:
         venue: "kalshi" or "polymarket"; the sleeve's cash sits there.
         strategy: A name registered in `src/portfolio/contracts.py`.
         budget: Share of the book's equity the sleeve may have at risk (the cost of its bets), e.g. 0.05.
+        max_event_share: The most of that budget one event may take (markets of one event win and lose together).
         params: Passed to the strategy.
     """
 
@@ -48,6 +49,7 @@ class ContractSleeveSpec:
     venue: str
     strategy: str
     budget: float
+    max_event_share: float = 1.0
     params: dict[str, Any] = field(default_factory=dict)
 
 
@@ -390,7 +392,7 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
 
         label = f"[[contract_sleeves]] #{position}"
         table = dict(table)
-        for key in sorted(set(table) - {"id", "venue", "strategy", "budget", "params"}):
+        for key in sorted(set(table) - {"id", "venue", "strategy", "budget", "params", "max_event_share"}):
             errors.append(f"{label} unknown key '{key}'")
         sleeve_id = str(table.get("id", ""))
         if not sleeve_id or sleeve_id in taken:
@@ -403,8 +405,12 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         budget = _number(table, "budget", 0.0, label, errors)
         if budget is not None and not 0 < budget <= 0.5:
             errors.append(f"{label} budget must be above 0 and at most 0.5 (a share of equity; 0.05 = 5%)")
+        event_share = _number(table, "max_event_share", 1.0, label, errors)
+        if event_share is not None and not 0 < event_share <= 1:
+            errors.append(f"{label} max_event_share must be above 0 and at most 1 (a share of the sleeve's budget)")
         if not errors or all(label not in error for error in errors):
-            contract_sleeves.append(ContractSleeveSpec(id=sleeve_id, venue=str(table["venue"]), strategy=str(table["strategy"]), budget=float(budget), params=dict(table.get("params", {}))))
+            contract_sleeves.append(ContractSleeveSpec(id=sleeve_id, venue=str(table["venue"]), strategy=str(table["strategy"]), budget=float(budget),
+                                                       max_event_share=float(event_share), params=dict(table.get("params", {}))))
     if sum(sleeve.budget for sleeve in contract_sleeves) > 0.5:
         errors.append("[[contract_sleeves]] budgets add up to more than half of equity")
 
