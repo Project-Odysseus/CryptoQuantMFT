@@ -178,7 +178,7 @@ def binance_panel(coins: Sequence[str]) -> Panel:
 
 def _binance_klines(symbol: str, days: int) -> list[list[Any]]:
     query = urllib.parse.urlencode({"symbol": symbol, "interval": "1d", "limit": min(days + 1, 1500)})
-    request = urllib.request.Request(f"https://fapi.binance.com/fapi/v1/klines?{query}", headers={"User-Agent": "CryptoQuantMFT/0.1"})
+    request = urllib.request.Request(f"https://fapi.binance.com/fapi/v1/klines?{query}", headers={"User-Agent": "QuantMultiStrat/0.1"})
     with urllib.request.urlopen(request, timeout=20) as response:
         return json.loads(response.read().decode("utf-8"))
 

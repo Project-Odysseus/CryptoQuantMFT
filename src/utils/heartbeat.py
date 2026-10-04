@@ -24,7 +24,7 @@ Transport = Callable[[str, bytes | None], None]
 
 
 def _default_transport(url: str, body: bytes | None) -> None:
-    request = urllib.request.Request(url, data=body, method="POST" if body is not None else "GET", headers={"User-Agent": "CryptoQuantMFT/0.1"})
+    request = urllib.request.Request(url, data=body, method="POST" if body is not None else "GET", headers={"User-Agent": "QuantMultiStrat/0.1"})
     with urllib.request.urlopen(request, timeout=5):
         pass
 

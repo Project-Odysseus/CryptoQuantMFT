@@ -1,4 +1,4 @@
-app_name: CryptoQuantMFT
+app_name: QuantMultiStrat
 log_level: INFO
 database_path: data/cryptoquant.db
 eur_nok_fallback: 11.50

@@ -60,7 +60,7 @@ Fetch = Callable[[str], Any]
 
 def http_json(url: str) -> Any:
     """GET `url` and parse the JSON (blocking; public endpoints, no key)."""
-    request = urllib.request.Request(url, headers={"User-Agent": "CryptoQuantMFT/0.1", "Accept": "application/json"})
+    request = urllib.request.Request(url, headers={"User-Agent": "QuantMultiStrat/0.1", "Accept": "application/json"})
     with urllib.request.urlopen(request, timeout=20) as response:
         return json.loads(response.read().decode("utf-8"))
 

@@ -1,4 +1,4 @@
-"""Application logging utilities for the CryptoQuantMFT trading engine.
+"""Application logging utilities for the QuantMultiStrat trading engine.
 
 The logger is configured with colored console output for local debugging and
 JSON-formatted rotating file output for structured telemetry. The file rotation

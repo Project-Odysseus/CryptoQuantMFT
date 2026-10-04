@@ -20,7 +20,7 @@
     <string>-m</string><string>src.dashboard.server</string>
     <string>--port</string><string>8787</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT</string>
+  <key>WorkingDirectory</key><string>/Users/Sakarias/Odysseus/QuantMultiStrat</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
@@ -28,7 +28,7 @@
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>
-  <key>StandardOutPath</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT/logs/dashboard/launchd.out.log</string>
-  <key>StandardErrorPath</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT/logs/dashboard/launchd.err.log</string>
+  <key>StandardOutPath</key><string>/Users/Sakarias/Odysseus/QuantMultiStrat/logs/dashboard/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/Sakarias/Odysseus/QuantMultiStrat/logs/dashboard/launchd.err.log</string>
 </dict>
 </plist>

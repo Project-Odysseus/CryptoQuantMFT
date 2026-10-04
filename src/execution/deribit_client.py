@@ -30,7 +30,7 @@ Transport = Callable[[str, dict[str, str]], dict[str, Any]]
 
 
 def _default_transport(url: str, headers: dict[str, str]) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"User-Agent": "CryptoQuantMFT/0.1", "Accept": "application/json", **headers})
+    request = urllib.request.Request(url, headers={"User-Agent": "QuantMultiStrat/0.1", "Accept": "application/json", **headers})
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             return json.loads(response.read().decode("utf-8"))

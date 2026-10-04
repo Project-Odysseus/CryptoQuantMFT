@@ -1,4 +1,4 @@
-# Aspirations: where CryptoQuantMFT is headed
+# Aspirations: where QuantMultiStrat is headed
 
 What separates this project from a professional systematic trading operation, beyond capital and data, and in
 what order to close the gaps. `TODO.MD` holds the next concrete tasks; this file holds the direction. Revisit it

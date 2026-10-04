@@ -37,19 +37,19 @@ and the app's own `logs/`, rotated weekly.
 
 On the desktop:
 ```bash
-git clone <your GitHub repo URL> ~/CryptoQuantMFT
+git clone <your GitHub repo URL> ~/QuantMultiStrat
 ```
 From the Mac (the caches, the database and the recordings aren't in git; ~1.3 GB, do it at home):
 ```bash
-rsync -a --info=progress2 ~/Odysseus/CryptoQuantMFT/data/ <user>@<desktop-ip>:~/CryptoQuantMFT/data/
-scp ~/Odysseus/CryptoQuantMFT/.env <user>@<desktop-ip>:~/CryptoQuantMFT/.env     # only needed for paper/live
+rsync -a --info=progress2 ~/Odysseus/QuantMultiStrat/data/ <user>@<desktop-ip>:~/QuantMultiStrat/data/
+scp ~/Odysseus/QuantMultiStrat/.env <user>@<desktop-ip>:~/QuantMultiStrat/.env     # only needed for paper/live
 ```
 Commits made on the Mac need to be pushed first (you push yourself) and pulled there.
 
 ## 3. Run the setup
 
 ```bash
-cd ~/CryptoQuantMFT
+cd ~/QuantMultiStrat
 bash deploy/setup.sh                 # collectors + backups
 echo 'BACKUP_DIR=/mnt/hdd/cryptoquant-backups' > deploy/backup.env   # backups on the other disk
 ```
@@ -64,7 +64,7 @@ If the paper soak runs on the Mac (`deploy/launchd/com.cryptoquant.paper.plist`)
 across before starting `cryptoquant-paper` here, so the soak continues instead of starting over:
 ```bash
 launchctl bootout gui/$(id -u)/com.cryptoquant.paper && rm ~/Library/LaunchAgents/com.cryptoquant.paper.plist
-rsync -a ~/Odysseus/CryptoQuantMFT/data/portfolio/btc-live-paper/ <user>@<desktop-ip>:~/CryptoQuantMFT/data/portfolio/btc-live-paper/
+rsync -a ~/Odysseus/QuantMultiStrat/data/portfolio/btc-live-paper/ <user>@<desktop-ip>:~/QuantMultiStrat/data/portfolio/btc-live-paper/
 ```
 
 The Mac also has a LaunchAgent for the read-only web dashboard (`deploy/launchd/com.cryptoquant.dashboard.plist`,
@@ -78,7 +78,7 @@ prediction-market order books (`cryptoquant-prediction-books.service`, about 10 
 ```bash
 systemctl status 'cryptoquant-*'                          # everything at a glance
 journalctl -u cryptoquant-liquidations --since today      # a service's log
-cd ~/CryptoQuantMFT && ~/miniforge3/envs/CryptoArb/bin/python main.py --market-data-status   # rows and recording gaps
+cd ~/QuantMultiStrat && ~/miniforge3/envs/CryptoArb/bin/python main.py --market-data-status   # rows and recording gaps
 sudo systemctl restart cryptoquant-option-chains          # after a git pull that changes code
 ```
 Put `HEALTHCHECK_URL` in `.env` (runbook, dead-man's switch) to get an alert (healthchecks.io emails you) if the paper or live book stops pinging.

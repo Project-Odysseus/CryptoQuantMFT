@@ -44,7 +44,7 @@ from src.research.governance import trim_bars, trim_frame
 ARCHIVE_URL = "https://data.binance.vision/"
 LISTING_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 CACHE_DIR = Path("data/historical_cache/binance_um")
-USER_AGENT = {"User-Agent": "CryptoQuantMFT/0.1"}
+USER_AGENT = {"User-Agent": "QuantMultiStrat/0.1"}
 DATASETS = {
     "klines_1d": "data/futures/um/monthly/klines/{symbol}/1d/",
     "funding": "data/futures/um/monthly/fundingRate/{symbol}/",

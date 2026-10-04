@@ -4,7 +4,7 @@
 
 **Status**: In Progress (See Issue #2)
 
-This guide covers futures contract trading support in CryptoQuantMFT.
+This guide covers futures contract trading support in QuantMultiStrat.
 
 ## Table of Contents
 

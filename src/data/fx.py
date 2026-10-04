@@ -166,7 +166,7 @@ class FXRateCollector:
             separator = "&" if "?" in url else "?"
             url = f"{url}{separator}{query}"
 
-        request = urllib.request.Request(url, headers={"User-Agent": "CryptoQuantMFT/0.1", "Accept": "application/json"})
+        request = urllib.request.Request(url, headers={"User-Agent": "QuantMultiStrat/0.1", "Accept": "application/json"})
         with urllib.request.urlopen(request, timeout=10) as response:
             payload = response.read().decode("utf-8")
             return json.loads(payload)

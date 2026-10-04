@@ -71,7 +71,7 @@ def fetch_specs(currency: str = "USDC", *, kind: str = "option") -> dict[str, Co
 
     def call() -> dict[str, Any]:
         url = f"{PUBLIC_API}/get_instruments?" + urllib.parse.urlencode({"currency": currency, "kind": kind, "expired": "false"})
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "CryptoQuantMFT/0.1"}), timeout=20) as response:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "QuantMultiStrat/0.1"}), timeout=20) as response:
             return json.loads(response.read().decode("utf-8"))
 
     payload = retry_call(call, label="deribit get_instruments")

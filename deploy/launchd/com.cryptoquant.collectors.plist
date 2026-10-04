@@ -16,9 +16,9 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/Sakarias/Odysseus/CryptoQuantMFT/scripts/collectors/run_collectors.sh</string>
+    <string>/Users/Sakarias/Odysseus/QuantMultiStrat/scripts/collectors/run_collectors.sh</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT</string>
+  <key>WorkingDirectory</key><string>/Users/Sakarias/Odysseus/QuantMultiStrat</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PYTHON</key><string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin/python</string>
@@ -26,7 +26,7 @@
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT/logs/collectors/launchd.out.log</string>
-  <key>StandardErrorPath</key><string>/Users/Sakarias/Odysseus/CryptoQuantMFT/logs/collectors/launchd.err.log</string>
+  <key>StandardOutPath</key><string>/Users/Sakarias/Odysseus/QuantMultiStrat/logs/collectors/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/Sakarias/Odysseus/QuantMultiStrat/logs/collectors/launchd.err.log</string>
 </dict>
 </plist>

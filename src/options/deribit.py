@@ -59,7 +59,7 @@ def underlying_and_settlement(currency: str) -> tuple[str, str]:
 def fetch_book_summary(currency: str) -> list[dict[str, Any]]:
     """Deribit's book summary for every option on `currency` (one public request; blocking)."""
     url = f"{PUBLIC_API}/get_book_summary_by_currency?" + urllib.parse.urlencode({"currency": currency, "kind": "option"})
-    request = urllib.request.Request(url, headers={"User-Agent": "CryptoQuantMFT/0.1", "Accept": "application/json", "Accept-Encoding": "gzip"})
+    request = urllib.request.Request(url, headers={"User-Agent": "QuantMultiStrat/0.1", "Accept": "application/json", "Accept-Encoding": "gzip"})
     with urllib.request.urlopen(request, timeout=20) as response:
         body = response.read()
         if response.headers.get("Content-Encoding") == "gzip":

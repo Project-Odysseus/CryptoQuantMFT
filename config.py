@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration for the CryptoQuantMFT trading engine.
+    """Runtime configuration for the QuantMultiStrat trading engine.
 
     Values are loaded from the local .env file when present and validated with
     strict type hints to prevent accidental misconfiguration at runtime.

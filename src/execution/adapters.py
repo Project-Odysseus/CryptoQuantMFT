@@ -525,7 +525,7 @@ class ExchangeExecutionAdapter(ExecutionAdapter):
             else:
                 body = json.dumps(data).encode("utf-8")
 
-        request_headers = {"User-Agent": "CryptoQuantMFT/0.1", "Accept": "application/json"}
+        request_headers = {"User-Agent": "QuantMultiStrat/0.1", "Accept": "application/json"}
         if headers:
             request_headers.update(headers)
 

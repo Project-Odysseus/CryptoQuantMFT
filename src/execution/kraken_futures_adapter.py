@@ -115,7 +115,7 @@ class KrakenFuturesPrivateClient:
             query = urllib.parse.urlencode({key: value for key, value in (params or {}).items() if value is not None}, doseq=True)
             nonce = self.nonce()
             path = f"/api/history/v3/{endpoint}"
-            headers = {"APIKey": self.api_key, "Nonce": nonce, "Accept": "application/json", "User-Agent": "CryptoQuantMFT/0.1",
+            headers = {"APIKey": self.api_key, "Nonce": nonce, "Accept": "application/json", "User-Agent": "QuantMultiStrat/0.1",
                        "Authent": sign_request(post_data=query, nonce=nonce, endpoint_path=path, api_secret=self.api_secret)}
             payload = self.transport("GET", f"{HISTORY_BASE}{path}" + (f"?{query}" if query else ""), headers, None)
             if not isinstance(payload, dict) or "error" in payload or "errors" in payload:
@@ -135,7 +135,7 @@ class KrakenFuturesPrivateClient:
             "Nonce": nonce,
             "Authent": sign_request(post_data=post_data, nonce=nonce, endpoint_path=f"/api/v3/{endpoint}", api_secret=self.api_secret),
             "Accept": "application/json",
-            "User-Agent": "CryptoQuantMFT/0.1",
+            "User-Agent": "QuantMultiStrat/0.1",
         }
         url = f"{API_BASE}/api/v3/{endpoint}"
         body: bytes | None = None

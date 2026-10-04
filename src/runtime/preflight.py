@@ -83,7 +83,7 @@ def check_clock(*, fetch: Callable[[], float] | None = None, now: Callable[[], f
     """This machine's clock against Kraken's server time: orders, candles and funding all key off timestamps."""
 
     def kraken_time() -> float:
-        request = urllib.request.Request("https://api.kraken.com/0/public/Time", headers={"User-Agent": "CryptoQuantMFT/0.1"})
+        request = urllib.request.Request("https://api.kraken.com/0/public/Time", headers={"User-Agent": "QuantMultiStrat/0.1"})
         with urllib.request.urlopen(request, timeout=10) as response:
             return float(json.loads(response.read())["result"]["unixtime"])
 

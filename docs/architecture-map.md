@@ -1,4 +1,4 @@
-# CryptoQuantMFT architecture map
+# QuantMultiStrat architecture map
 
 This file is a practical map of how the codebase is wired today. It shows the main layers, the key classes, and the way they interact.
 

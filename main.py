@@ -1,4 +1,4 @@
-"""Application entry point for the CryptoQuantMFT trading engine."""
+"""Application entry point for the QuantMultiStrat trading engine."""
 
 from __future__ import annotations
 
@@ -2202,7 +2202,7 @@ def portfolio_check(path: str) -> int:
 
 def main() -> None:
     """Initialize the runtime and run either the data pipeline or a demo backtest."""
-    parser = argparse.ArgumentParser(description="CryptoQuantMFT runtime")
+    parser = argparse.ArgumentParser(description="QuantMultiStrat runtime")
     parser.add_argument("--demo-backtest", action="store_true", help="Run a synthetic backtest and save plots")
     parser.add_argument("--plot-output-dir", default="plots", help="Directory for generated plots")
     parser.add_argument("--strategy", default="moving_average_crossover", help="Name of the strategy to run")
@@ -2337,7 +2337,7 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
-    logger.info("CryptoQuantMFT startup complete")
+    logger.info("QuantMultiStrat startup complete")
     logger.info("database_path={}", settings.database_path)
     logger.info("log_level={}", settings.log_level)
 

@@ -1,4 +1,4 @@
-# CryptoQuantMFT
+# QuantMultiStrat
 
 A Python 3.13 framework for systematic crypto trading on Kraken, covering spot and Kraken Futures perpetuals. It
 takes a strategy from research to paper to live: a multi-strategy portfolio, Norwegian tax records, and an options

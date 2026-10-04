@@ -37,7 +37,7 @@ from typing import Any
 import pandas as pd
 
 CACHE_DIR = Path("data/historical_cache/positioning")
-USER_AGENT = {"User-Agent": "CryptoQuantMFT/0.1", "Accept": "application/json"}
+USER_AGENT = {"User-Agent": "QuantMultiStrat/0.1", "Accept": "application/json"}
 COINS = {"BTC": {"binance": "BTCUSDT", "bybit": "BTCUSDT", "deribit": "BTC-PERPETUAL", "dvol": "BTC"}, "ETH": {"binance": "ETHUSDT", "bybit": "ETHUSDT", "deribit": "ETH-PERPETUAL", "dvol": "ETH"},
          "SOL": {"binance": "SOLUSDT", "bybit": "SOLUSDT"}}  # Deribit has no SOL perpetual history or DVOL
 

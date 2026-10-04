@@ -1,10 +1,10 @@
-# Extended Explanation of the CryptoQuantMFT Repository
+# Extended Explanation of the QuantMultiStrat Repository
 
 This document explains the repository as a system, not just as a set of files. It is written so another agent can understand what exists today, how the components connect, and where new work should be added.
 
 ## 1. What this repository is
 
-CryptoQuantMFT is a lightweight Python framework for experimenting with crypto trading logic in three modes:
+QuantMultiStrat is a lightweight Python framework for experimenting with crypto trading logic in three modes:
 
 - Backtesting: test strategies against historical bars or synthetic data.
 - Paper trading: run a strategy against market snapshots and simulate fills without real money.
