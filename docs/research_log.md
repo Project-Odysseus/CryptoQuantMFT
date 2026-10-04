@@ -6,6 +6,20 @@ accident.
 
 ---
 
+## 2026-10-04: H6, cross-sectional funding carry on what Kraken could trade: inconclusive, not built
+
+Pre-registered (`research/prereg/H6.txt`, locked before the run), full report in `research/reports/H6.md`. The signal
+lab's carry sleeve with a point-in-time coin list (a coin enters when Kraken opened its perp), 2022-03-23 to
+2025-12-31, one primary configuration, 9 trials. **Sharpe 0.52 (95% interval -0.72 to 1.82), +13.2% a year, 40%
+drawdown; 0.18 at 2x costs.** Funding received is a steady +12.8% a year against 8.6% of costs; the price legs
+(-43% in 2022, +16 to +27% after) decide each year. Top-30 cells score 0.8-1.6, top-50 cells 0.2-1.0. Over the three
+months where Kraken's funding history overlaps, the funding spread between the book's sides was 31% a year on Kraken
+against 89% on Binance. Failed two of five pass criteria (Sharpe >= 0.7, interval above 0); no kill rule met. By the
+pre-registration the sleeve is not built and not paper traded. The earlier 0.9-1.1 came from 2020-2021 and from
+today's coin list.
+
+---
+
 ## 2026-10-04: Signal lab: carry, momentum, taker, liquidation proxy and variance premium side by side
 
 **What it is:** a showcase, not new evidence. `src/research/signal_lab.py` turns five ideas into daily net return
