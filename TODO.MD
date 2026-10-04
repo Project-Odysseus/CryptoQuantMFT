@@ -210,6 +210,114 @@ direction is in `aspirations.md`.
 - [ ] O5: option instruments and sleeves in the portfolio (research first)
 - [ ] O7: Deribit testnet paper trading. O8: live (needs Deribit keys, Norway eligibility, and more capital: the smallest BTC option is 0.1 BTC, the smallest linear USDC option 0.01 BTC)
 
+## 6b. Options and prediction markets in the multi-strategy book (plan written 2026-10-04; nothing started)
+
+**Goal:** one book that can hold perps, options and prediction-market contracts side by side, paper first, with one
+risk overlay, one dashboard and one tax record. Sizes: S = a day or less, M = a few days, L = a week or more.
+
+**Where we stand.** Options: pricing, surface, chains recorded hourly, option positions in the book with expiry and
+tax, greek and scenario limits, a Deribit adapter tested on a fake exchange. No option strategy in the engine, no
+paper exchange for options. Prediction markets: read-only Polymarket and Kalshi clients, a fair-value model, the
+H4/H5 studies collecting until 2026-11-17. No order code, no instrument in the book, no paper mode.
+
+**The one design problem both share.** Today a strategy outputs a *weight* per instrument, and the engine nets
+weights and trades the difference. An option or a bet is a specific contract that expires, has a known worst loss and
+is sized in contracts, not as a share of equity. Both tracks need the same new thing: a strategy that outputs
+*positions in contracts* under a loss budget. Build that once (part A) and both tracks use it.
+
+### P. Checks only the owner can do (none blocks paper; all block live)
+
+- [ ] Employer rule: are crypto options allowed? Are prediction markets (crypto-linked ones, and others)?
+- [ ] Access from Norway: Deribit (options), Kalshi, Polymarket. Each has its own country rules; read their terms
+- [ ] "Freeport Markets": I don't know this venue. Its address and API documentation are needed before it can be
+  planned (does it have a public order book API, what settles its markets, which countries it serves)
+- [ ] Tax: how Norway treats prediction-market winnings (capital income or gambling) and option premiums; ask
+  Skatteetaten or an accountant before any live bet
+- [ ] Capital: the smallest Deribit USDC option is 0.01 BTC (about 850 USD of underlying). Prediction-market
+  contracts cost under 1 USD each, so they fit a small account
+
+### A. Shared foundation: contract strategies in the engine
+
+- [ ] A1 (M) **Contract sleeves.** A second strategy type next to weight sleeves: each cycle it returns the contracts
+  it wants (instrument, quantity, limit price, reason) and its worst-case loss. Config: `[[contract_sleeves]]` with a
+  `budget` (share of equity it may lose). This is steps E0-E1 and E4 of `docs/engine_plan.md`, cut down to what
+  these two tracks need
+- [ ] A2 (M) **Binary contracts in the book.** A new instrument kind next to perp, spot and option: price between 0
+  and 1, pays 1 or 0 when its market resolves, fully paid up front. Register, mark, settle on resolution
+  (`settle_resolved`), fees per venue formula, tax entries. Options already have this
+- [ ] A3 (M) **Sizing and limits for contracts.** Per sleeve: premium at risk and worst-case loss against its
+  budget. Book level: extend `[risk.exposure]` so a crypto-linked binary counts its delta (the model has
+  `binary_delta`), and add limits that need no model: worst-case loss per event, per venue and in total. Option
+  sleeves are scaled against the vega and gamma limits (`scale_for_limits`, open from O3b)
+- [ ] A4 (M) **Order flow for limit orders that rest.** Contract orders are limit orders. Reuse what maker-first
+  added: write-ahead `pending_orders`, settle each cycle, cancel after a timeout, no market-order fallback unless
+  the sleeve asks. Per-venue adapters behind the same `submit / settle / cancel` calls
+- [ ] A5 (S) **Allocation.** Weight sleeves keep their allocator. Contract sleeves get a fixed budget from the
+  config until they have a return history; then the same risk model can include them
+- [ ] A6 (M) **Restart drill and reconciliation** for contract positions (a fill booked once, an expiry or
+  resolution that happens while the process is down)
+- [ ] A7 (S) **Dashboard and reports:** positions by kind, greeks, premium at risk, a calendar of expiries and
+  resolutions, and the tearsheet
+
+### B. Options track (continues section 6: O5, E4, O7, O8)
+
+- [ ] B1 (M) **Live chain quotes for the runtime.** The collector stores hourly chains; a running book needs the
+  bid and ask of the contracts it holds or wants, each cycle (public Deribit data, a few requests)
+- [ ] B2 (M) **Paper exchange for options.** Fills a limit order only against the real quote: a buy at or above the
+  ask fills at the ask, otherwise it rests. Deribit's fee formula. Long options and defined-risk spreads only at
+  first, so no margin model is needed
+- [ ] B3 (M) **First option sleeve: a tail hedge.** A rolling put spread on BTC sized by budget, using the contract
+  picker and roll rules that exist. Chosen first because it is long-only, simple, and useful to the trend book
+- [ ] B4 (L) **Research before more sleeves** (each pre-registered): the tail hedge against simply running the book
+  smaller; H3 phase B (selling BTC volatility with defined risk) once about 3 months of chains are recorded
+- [ ] B5 (M) **Option backtest on recorded chains**, so paper can be compared with a backtest as the perp books are
+- [ ] B6 (M) Deribit test network: the real adapter against test.deribit.com with test keys, restart drill (O7)
+- [ ] B7 Live (O8): only after P, B6, and capital for at least the 0.01 BTC contract
+
+### C. Prediction-market track
+
+- [ ] C1 (S) **Record order books now.** A collector for the markets we would trade (Kalshi and Polymarket daily and
+  hourly BTC/ETH markets): best bid and ask and depth every few minutes. It can't be backfilled, and both the paper
+  exchange and every backtest need it. Small data
+- [ ] C2 (M) **Market model.** Each market linked to what it pays on: underlying, strike or range, expiry, and its
+  resolution source. Kalshi and Polymarket settle the "same" question on different price sources and averaging
+  rules; that difference is a risk and must be stored per market, not assumed away
+- [ ] C3 (M) **Paper exchange for binaries.** Fills against the recorded or live order book (walks the depth), each
+  venue's fee formula, cash fully reserved, settlement from the venue's published result
+- [ ] C4 (M) **First binary sleeves**, only for ideas that pass their test: what H4/H5 show on 2026-11-17 (options-
+  implied probability against the quoted price; protection bought as "no" contracts); the same market on two venues
+- [ ] C5 (M) **Hedged binaries.** A crypto-linked binary has a delta; the book's delta limit (A3) sees it, and a
+  hedge sleeve trades the perp against it. This is the first strategy that truly mixes the two worlds
+- [ ] C6 (L) **Trading access**, per venue, only after P: Kalshi (API key with request signing, USD account);
+  Polymarket (a wallet, USDC on Polygon, signed orders: a different kind of custody and its own security review);
+  Freeport (unknown until P). Each needs its adapter, a one-contract live drill like the Kraken one, and the gates
+- [ ] C7 (S) Non-crypto markets, if ever: they have no delta and no model here; only the worst-case-loss limits
+  apply, and each needs its own research. Not planned
+
+### D. The combined book
+
+- [ ] D1 (S) A paper config with trend sleeves, the basket, a tail hedge and one binary sleeve; cash per venue (the
+  book already keeps cash per venue; moving money between venues stays manual)
+- [ ] D2 (M) Kill switch and flatten across venues: perps close at market; options close at the bid or are left to
+  expire by rule; binaries are sold at the bid or held to resolution by rule. The rule is set per sleeve
+- [ ] D3 (S) Runbook, architecture map, and the paper-versus-backtest check for contract sleeves
+- [ ] D4 13 weeks of the combined paper book before any live decision on the new parts
+
+### Order, and where to start
+
+1. **C1, the prediction-market order-book recorder (S).** It is the only item where waiting loses something: every
+   day not recorded is data that can't be had later. It is small, read-only and independent of everything else.
+2. **A1 and A2 together (M + M):** contract sleeves and binary contracts in the book, with tests. This is the
+   foundation both tracks stand on.
+3. **C2 and C3:** the binary paper exchange. Binaries come before options because they are the simplest contract
+   (no surface, no greeks needed to hold one, worst loss known), they settle daily so paper gives answers in days,
+   and they fit the capital. By then the 17 November result says whether there is a strategy to put in it.
+4. **B1 to B3:** the options paper exchange and the tail hedge, reusing A1-A4.
+5. **A3-A7, C5, D:** limits, drills, the hedged binary and the combined book.
+
+Not before a strategy has passed its test: C4, B4's sleeves, and anything live. The engine work is worth doing only
+if it ends with something to run in it; if H4 and H5 both fail and no option study passes, stop after step 2.
+
 ## 7. Other venues (API keys)
 
 Kraken spot and Kraken Futures keys are configured (2026-09-26). Put keys in `.env` only, with no withdrawal
