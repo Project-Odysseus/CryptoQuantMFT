@@ -242,9 +242,11 @@ is sized in contracts, not as a share of equity. Both tracks need the same new t
   it wants (instrument, quantity, limit price, reason) and its worst-case loss. Config: `[[contract_sleeves]]` with a
   `budget` (share of equity it may lose). This is steps E0-E1 and E4 of `docs/engine_plan.md`, cut down to what
   these two tracks need
-- [ ] A2 (M) **Binary contracts in the book.** A new instrument kind next to perp, spot and option: price between 0
-  and 1, pays 1 or 0 when its market resolves, fully paid up front. Register, mark, settle on resolution
-  (`settle_resolved`), fees per venue formula, tax entries. Options already have this
+- [x] A2 **Binary contracts in the book** (2026-10-04): kind `binary` next to perp, spot and option. Yes contracts at a
+  price between 0 and 1; No is held as negative Yes units (`binary_stake` reports the cash the venue holds for it);
+  `settle_resolved_binaries` pays 1 or 0; restart-safe; the engine settles through `binary_results` and books it
+  for tax; snapshots list option and binary positions under `contracts`. Open: fee formulas live with the paper
+  exchange (C3); a binary's delta in the exposure limits is A3
 - [ ] A3 (M) **Sizing and limits for contracts.** Per sleeve: premium at risk and worst-case loss against its
   budget. Book level: extend `[risk.exposure]` so a crypto-linked binary counts its delta (the model has
   `binary_delta`), and add limits that need no model: worst-case loss per event, per venue and in total. Option
