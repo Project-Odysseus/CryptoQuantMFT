@@ -154,7 +154,7 @@ direction is in `aspirations.md`.
 - [x] Signal lab (2026-10-04, `src/research/signal_lab.py`, `notebooks/signal_lab.ipynb`): five ideas side by side and combined
 - [x] Strategies by market state and H7, a flat-market gate on the trend rules (2026-10-04): the gate failed on the
   unseen 2020-2022 sample, not built. `scripts/research/regime_study.py`, `research/reports/H7.md`
-- [ ] Next flat-market candidate: pairs (a spread between two perps that reverts), pre-registered; see the research log
+- [x] H8, pairs of Kraken perps by the distance method (2026-10-04): killed (Sharpe -0.65, 12% of trades converged). `research/reports/H8.md`
 - [x] H6, cross-sectional funding carry with a point-in-time Kraken coin list (2026-10-04): inconclusive (Sharpe 0.52,
   interval -0.72 to 1.82), not built. `research/reports/H6.md`
 - [x] Paper books charge Kraken's real funding per coin, and the collector stores those rates (2026-10-04,

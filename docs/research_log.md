@@ -6,6 +6,17 @@ accident.
 
 ---
 
+## 2026-10-04: H8, pairs of Kraken-tradable perps by the distance method: killed
+
+Pre-registered (`research/prereg/H8.txt`), report in `research/reports/H8.md`. Every 30 days the 5 closest pairs among
+the 10 most traded Kraken-listed coins (90-day formation), opened at a 2-sigma gap, closed at zero or at the period's
+end, traded one day after the signal; 2022-06 to 2025-12-31. **Sharpe -0.65 (interval -1.66 to 0.32), -7.2% a year,
+all nine grid cells negative, negative in all four years.** Only 12% of 139 trades closed by convergence: the price
+legs lose 6% a year before costs, so divergences between large coins mostly continue at this horizon. Flat days were
+least bad (-2% a year) but not positive. Not built. `src/research/pairs.py` holds the rule.
+
+---
+
 ## 2026-10-04: The book's strategies by market state, and H7 (halve the trend rules after a flat stretch): not built
 
 `scripts/research/regime_study.py` labels each day flat, middling or trending (Bitcoin's 60-day efficiency ratio,
