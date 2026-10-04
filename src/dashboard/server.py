@@ -75,7 +75,14 @@ async def index(_request: web.Request) -> web.FileResponse:
 
 def build_app(data: DashboardData) -> web.Application:
     """The aiohttp application over one `DashboardData` (tests pass one built on a temporary database)."""
-    app = web.Application()
+    @web.middleware
+    async def revalidate(request: web.Request, handler: Any) -> web.StreamResponse:
+        """Make browsers check every file with the server before reusing it, so an updated page is seen at the next load."""
+        response = await handler(request)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+    app = web.Application(middlewares=[revalidate])
     app[DATA_KEY] = data
     app.add_routes([web.get("/", index), web.get("/api/books", books), web.get("/api/book/{name}", book), web.get("/api/book/{name}/history", history),
                     web.get("/api/book/{name}/fills", fills), web.get("/api/book/{name}/live", live), web.get("/api/alerts", alerts), web.get("/api/system", system), web.static("/static", STATIC)])
