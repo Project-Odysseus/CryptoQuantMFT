@@ -69,8 +69,11 @@ async def system(request: web.Request) -> web.Response:
     return _json({"health": health, "research": research, "costs": costs})
 
 
-async def index(_request: web.Request) -> web.FileResponse:
-    return web.FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
+async def index(_request: web.Request) -> web.Response:
+    """The page, with its script's address carrying the script's modification time: a changed script is a new address, so no browser reuses an old copy."""
+    version = int((STATIC / "app.js").stat().st_mtime)
+    page = (STATIC / "index.html").read_text(encoding="utf-8").replace("/static/app.js", f"/static/app.js?v={version}")
+    return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 def build_app(data: DashboardData) -> web.Application:
