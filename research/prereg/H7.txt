@@ -1,0 +1,73 @@
+PRE-REGISTRATION H7: TREND RULES LOSE AFTER A FLAT STRETCH, SO HALVE THEM THERE
+Version 1. Written 2026-10-04, before any H7 test was run. Changes after results = a new version (lock it again), logged
+as extra trials.
+
+PRIOR EXPOSURE (what has already been looked at that bears on this)
+- 2026-10-04, regime_study.py on the multi-strategy book, 2022-10-10 to 2025-12-31: days labelled "flat" (definition
+  below) had the trend strategies at -24% to -78% a year (Sharpe -0.7 to -2.3) and the whole book at -36%; on
+  "trending" days they made +59% to +147%. By year, the whole book on flat days: -190%, +14%, -43%, -17%. This is
+  where the hypothesis comes from, so that window cannot test it.
+- The label's windows (60, 30, 365 days) were fixed before that look and are unchanged here.
+- Not looked at: the same split before 2022-10-10. That is the test sample.
+
+MARKET BEHAVIOUR
+After 60 days in which Bitcoin went nowhere through a lot of back and forth, trend and breakout rules keep losing:
+the state persists, and each false start costs a round trip.
+
+MECHANISM
+A trend rule earns from long moves and pays for every reversal. A range that has held for two months tends to hold a
+while longer, so the next signals are more likely false starts. The other side is whoever provides liquidity inside
+the range.
+
+OBSERVABLE PREDICTION AND EXPECTED SIGN
+On days labelled flat, the trend book's return is negative and lower than on other days.
+
+DATA
+- Kraken Futures BTC/USD and ETH/USD perpetual daily candles (the runtime's own series), through
+  src/portfolio/backtest.run_book with the config's costs and funding.
+- Strategies: btc_ma_1d, btc_keltner_ls, eth_ma_1d, eth_keltner_ls exactly as in config/portfolio.multi_paper.toml,
+  equal weight, no risk overlay. Their daily return is "the trend book".
+- Label input: Binance BTCUSDT perpetual daily closes (src/research/pit.py), from 2019-09.
+- TEST SAMPLE: the first day with a label to 2022-10-09. The later window is reported next to it, marked as the
+  window the hypothesis came from. The frozen holdout (2026 on) stays locked.
+
+LABEL (unchanged from regime_study.py)
+Efficiency ratio = |close - close 60 days earlier| / sum of the 60 absolute daily changes. Its percentile rank among
+its own previous 365 values (at least 182). "Flat" = rank <= 1/3. The label for a day uses closes up to two days
+before it, so it is known before that day's return starts.
+
+RULE
+Gated book: the trend book at half size on flat days, full size otherwise. Every change of size costs 0.05% of
+equity (half the book traded at 5 bps fee plus 5 bps slippage).
+
+PRIMARY OUTCOME
+The difference, in the test sample, between the trend book's mean daily return on flat days and on all other days,
+annualised, with a 95% interval from a circular block bootstrap of the daily series (20-day blocks, 2,000 draws,
+seed 0).
+
+SECONDARY OUTCOMES
+- The trend book's return and Sharpe on flat days, per strategy and per year.
+- Gated against ungated over the test sample: Sharpe, return, worst drawdown; the number of size changes.
+- The same numbers for 2022-10-10 to 2025-12-31 (seen before; for reference).
+
+PARAMETER GRID
+1 trial: the label and rule above. Nothing else is run.
+
+PASS CRITERIA (all three, on the test sample)
+1. The trend book's mean return on flat days is negative.
+2. The flat-minus-other difference is negative and its 95% interval excludes 0.
+3. The gated book's Sharpe is at least the ungated book's, after the switching cost.
+
+KILL IF
+The trend book's mean return on flat days is higher than on other days in the test sample.
+Between kill and pass: inconclusive, and the gate is not built.
+
+WHAT A PASS LEADS TO
+A gate in the portfolio engine is a change to how the paper books trade. A pass makes it a candidate: it is then
+added to a paper book only, as a config option that is off by default, and judged there. Not live.
+
+KNOWN RISKS AND BIASES
+- The test sample is about two years and is mostly one bull run and one bear market. Few flat stretches, so low power.
+- The label is one definition chosen without tuning; another reasonable one might disagree.
+- The four strategies are highly correlated: this is close to one series, not four.
+- Halving on flat days also halves the gains when a range ends in a breakout, which is when trend rules earn most.
