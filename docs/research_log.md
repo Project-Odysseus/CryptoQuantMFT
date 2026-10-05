@@ -6,6 +6,27 @@ accident.
 
 ---
 
+## 2026-10-05: The trend rules on 4-hour bars for BTC, ETH and SOL (a look, not a test)
+
+`python scripts/research/trend_4h_study.py`: each rule alone through `run_book` on Kraken perps, sized to 50%
+volatility; in-sample to 2024-09, holdout 2024-10 to 2025-12. Logged as 15 looks.
+
+| Rule (Sharpe in-sample / holdout) | BTC | ETH | SOL |
+| --- | --- | --- | --- |
+| Trend, daily 4/48 | 1.56 / 1.05 | 1.21 / 0.70 | 1.01 / 0.70 |
+| Trend, 4h faster (8/96 bars) | 1.57 / 0.19 | 1.29 / 0.06 | 1.37 / 0.09 |
+| Trend, 4h same horizon (24/288 bars) | 1.54 / 0.96 | 1.23 / 0.75 | 0.85 / 0.54 |
+| Breakout, daily 40 | 1.05 / 0.44 | 0.80 / 1.03 | 0.31 / 0.05 |
+| Breakout, 4h faster (40 bars) | 1.06 / -0.98 | 0.65 / 0.47 | 1.57 / -0.02 |
+| Breakout, 4h same horizon (240 bars) | 1.43 / 0.22 | 0.93 / 1.11 | 1.27 / 0.68 |
+
+The faster 4-hour rules look as good as the daily ones in-sample and fall apart in the holdout on all three coins,
+while trading 3 to 5 times as much (costs of 2-14% a year against 1-2.5%). The same horizon measured on 4-hour bars
+behaves like the daily rule: finer bars add nothing, it is the horizon that matters. Nothing changes in the configs.
+Not looked at before: SOL's daily breakout (0.31 / 0.05) is weak, which supports leaving it out of the books.
+
+---
+
 ## 2026-10-05: H9, a rank buffer on the taker basket: killed
 
 Pre-registered (`research/prereg/H9.txt`), report in `research/reports/H9.md`. Enter a side in the top (bottom) 20%,
