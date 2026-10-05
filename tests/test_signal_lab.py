@@ -56,3 +56,26 @@ def test_recorded_coverage_counts_files_and_days(tmp_path) -> None:
     table = lab.recorded_coverage(tmp_path)
     assert table.loc["Binance liquidations", ["files", "days", "first", "last"]].tolist() == [2, 2, "2026-10-01", "2026-10-02"]
     assert table.loc["Deribit BTC option chains", "days"] == 1 and table.loc["Bybit liquidations", "files"] == 0
+
+
+def test_a_buffered_ranking_keeps_a_coin_until_it_has_clearly_left_the_group() -> None:
+    days = pd.date_range("2024-01-01", periods=40, freq="D", tz="UTC")
+    coins = [f"C{i:02d}" for i in range(20)]
+    score = pd.DataFrame(np.tile(np.arange(20.0), (40, 1)), index=days, columns=coins)  # C19 ranks highest, C00 lowest
+    score.loc[days[10]:, "C16"] = 14.5   # slips from 4th to 6th: out of the top 20%, still in the top 35%
+    score.loc[days[20]:, "C17"] = 5.5    # falls to the lower half: clearly gone
+    universe = pd.DataFrame(True, index=days, columns=coins)
+    plain = lab.buffered_rank_weights(score, universe, entry=0.2, exit=0.2, rebalance_days=10, start=days[0])
+    buffered = lab.buffered_rank_weights(score, universe, entry=0.2, exit=0.35, rebalance_days=10, start=days[0])
+
+    def longs(frame: pd.DataFrame, day: int) -> list[str]:
+        return sorted(frame.columns[frame.iloc[day] > 0])
+
+    assert longs(plain, 0) == longs(buffered, 0) == ["C16", "C17", "C18", "C19"]
+    assert longs(plain, 10) == ["C15", "C17", "C18", "C19"]            # the plain rule swaps C16 for C15 at once
+    assert longs(buffered, 10) == ["C15", "C16", "C17", "C18", "C19"]  # the buffer keeps C16 and adds the newcomer
+    assert "C17" not in longs(buffered, 20) and "C17" not in longs(plain, 20)  # a coin that has clearly left goes either way
+    assert longs(buffered, 15) == longs(buffered, 10)  # nothing changes between rebalance days
+    for frame in (plain, buffered):
+        assert np.allclose(frame.sum(axis=1), 0.0) and np.allclose(frame.abs().sum(axis=1), 1.0)  # dollar-neutral, 1x gross
+    assert (lab.buffered_rank_weights(score, universe.iloc[:, :8].reindex(columns=coins, fill_value=False), rebalance_days=10, start=days[0]) == 0).all().all()  # too few names: flat

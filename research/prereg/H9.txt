@@ -1,0 +1,77 @@
+PRE-REGISTRATION H9: A RANK BUFFER CUTS THE TAKER BASKET'S TURNOVER WITHOUT COSTING IT RETURN
+Version 1. Written 2026-10-05, before any H9 test was run. Changes after results = a new version (lock it again), logged
+as extra trials.
+
+PRIOR EXPOSURE (what has already been looked at that bears on this)
+- The taker-buy basket itself has been studied on all of this data: 2026-09-26 (8 features, two universes), 2026-09-26
+  robustness (45 configurations of universe size, leg size and rebalance interval), 2026-09-29 (on Kraken prices
+  through the engine), 2026-10-03 (its two legs), 2026-10-04 (signal lab, H6 comparison: Sharpe 1.08 on the
+  point-in-time universe, 2022-03 to 2025).
+- No version with a buffer, or any other change to how coins enter and leave, has been run.
+- So the basket's level of return is known and is not what is tested. What is tested is the difference a buffer makes
+  on the same data, which has not been seen. A relative result on data the base rule was chosen on is weaker than a
+  test on new data: the paper book is where it is confirmed.
+
+MARKET BEHAVIOUR
+The basket's signal (the share of a coin's volume that was aggressive buying over 7 days) changes slowly. A coin that
+slips from just inside the top fifth to just outside it has barely changed, yet the basket sells it and buys its
+neighbour.
+
+MECHANISM
+Trades at the edge of the ranking carry almost no information and cost a full round trip. Holding a coin until it has
+clearly left the group keeps the positions that still have the property and skips the trades that don't change it.
+
+OBSERVABLE PREDICTION AND EXPECTED SIGN
+With a buffer the book trades clearly less, pays less in costs, and its return before costs falls by less than the
+costs saved: net return and Sharpe are not lower.
+
+DATA
+The signal lab's data and costs (src/research/signal_lab.py): Binance USDT-perp daily closes, volume, taker-buy volume
+and settled funding; the 30 most traded coins whose Kraken perp had opened by that day (point-in-time listing
+snapshot); 0.05% fee and slippage by liquidity tier per side; funding on every position. Window: the first day with
+at least 10 names, to 2025-12-31. The frozen holdout (2026 on) stays locked.
+
+RULE
+Score: taker-buy share of the last 7 days' volume. Every 10 days (counted from the window's first day):
+- Baseline (the rule in the paper book): long the top 20% of the universe by score, short the bottom 20%.
+- Buffered: a coin enters the long side when it is in the top 20%, and stays until it is no longer in the top 35% (or
+  leaves the universe). The short side mirrors it: enters in the bottom 20%, stays while in the bottom 35%.
+Both: equal weight within a side, half of gross long and half short, 1x gross, flat with fewer than 10 names in the
+universe. Between rebalance days the weights are held; a position is re-trimmed only when it has drifted more than 1%
+of equity from its weight (the paper book's band). Decided and traded at the day's close, as in the earlier studies.
+
+PRIMARY OUTCOME
+Two numbers, buffered against baseline over the whole window at 1x costs: turnover a year, and net return a year.
+
+SECONDARY OUTCOMES
+- Sharpe, worst drawdown, costs and funding a year, average names held per side, for both.
+- The difference in daily net returns, annualised, with a 95% interval (circular block bootstrap, 20-day blocks,
+  2,000 draws, seed 0).
+- Per calendar year, both.
+- The same comparison on today's Kraken list from 2020-06 (the universe of the original study). Reported, not judged.
+
+PARAMETER GRID (every configuration is a trial; count them)
+5 trials: the baseline as defined here (its 1%-band variant has not been run before); buffered with exit at 35%
+(primary); buffered with exit at 30% and at 45%; buffered 35% at 2x costs (with the baseline at 2x costs as its
+comparison, not counted). The today's-list comparison adds 2: 7 in total. Nothing else is run.
+
+PASS CRITERIA (all three)
+1. Turnover is at least 25% lower than the baseline's.
+2. Net return a year is not more than 1 percentage point below the baseline's.
+3. At 2x costs the buffered book's net return is above the baseline's.
+
+KILL IF (any)
+- Turnover is not lower.
+- Net return is more than 3 percentage points a year below the baseline's.
+Between kill and pass: inconclusive, and the paper book keeps its rule.
+
+WHAT A PASS LEADS TO
+The buffer becomes an option of the basket (`exit_quantile`), switched on in the multi-strategy paper book only, at
+the primary width. The paper book then shows whether turnover really falls.
+
+KNOWN RISKS AND BIASES
+- The base rule was selected on this data, so its return here is flattered; only the difference is new.
+- A buffer holds more names per side on average, so each position is smaller and the book is slightly more diversified:
+  part of any change in volatility comes from that, not from better selection.
+- Binance prices and funding stand in for Kraken's; delisted Kraken perps are missing.
+- One window of under four years.

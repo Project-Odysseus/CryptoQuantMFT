@@ -142,6 +142,41 @@ def cross_sectional_sleeve(name: str, score: pd.DataFrame, wide: Mapping[str, pd
     return Sleeve(name, returns, description, note=(note + " " if note else "") + f"Per year: {drags}.", parts=parts)
 
 
+def buffered_rank_weights(score: pd.DataFrame, universe: pd.DataFrame, *, entry: float = 0.2, exit: float = 0.35, rebalance_days: int = 10, min_names: int = 10,
+                          start: pd.Timestamp = START) -> pd.DataFrame:
+    """Long/short weights with a buffer on the ranking, decided every `rebalance_days` from `start` and held in between.
+
+    A coin enters the long side when its score ranks in the top `entry` share of the universe and stays until it
+    is out of the top `exit` share (or out of the universe); the short side mirrors it at the bottom. With
+    `exit == entry` this is the plain rule (in whenever in the top `entry`). Equal weight within a side, half long
+    and half short, 1x gross; flat on a rebalance day with fewer than `min_names` coins. Each decision uses that
+    day's close only.
+    """
+    weights = pd.DataFrame(0.0, index=score.index, columns=score.columns)
+    longs: set[str] = set()
+    shorts: set[str] = set()
+    current = pd.Series(0.0, index=score.columns)
+    first = int(score.index.searchsorted(start))
+    for position in range(first, len(score.index)):
+        if (position - first) % rebalance_days == 0:
+            ranked = score.iloc[position].where(universe.iloc[position]).dropna()
+            if len(ranked) < min_names:
+                longs, shorts = set(), set()
+            else:
+                pct = ranked.rank(pct=True, method="first")
+                longs = {coin for coin in longs if coin in pct.index and pct[coin] > 1.0 - exit} | set(pct.index[pct > 1.0 - entry])
+                shorts = {coin for coin in shorts if coin in pct.index and pct[coin] <= exit} | set(pct.index[pct <= entry])
+                both = longs & shorts  # only possible in a tiny universe: the newer rank decides
+                longs -= {coin for coin in both if pct[coin] <= 0.5}
+                shorts -= {coin for coin in both if pct[coin] > 0.5}
+            current = pd.Series(0.0, index=score.columns)
+            if longs and shorts:
+                current[sorted(longs)] = 0.5 / len(longs)
+                current[sorted(shorts)] = -0.5 / len(shorts)
+        weights.iloc[position] = current
+    return weights
+
+
 def carry_sleeve(wide: Mapping[str, pd.DataFrame], **settings: Any) -> Sleeve:
     """Funding carry: long the coins where longs are paid (or pay least), short the ones where longs pay most."""
     return cross_sectional_sleeve("carry", -features(wide)["funding_7d"], wide,
