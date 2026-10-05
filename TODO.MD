@@ -151,6 +151,9 @@ direction is in `aspirations.md`.
 - [ ] After two weeks of the paper book: read the maker results (share filled, seconds waited, drift paid on
   fallbacks) and the measured Kraken costs (`scripts/research/kraken_costs.py`), then set the basket's
   `slippage_bps` from the measurements instead of the assumed tiers
+- [x] Small-account paper book (2026-10-05, `config/portfolio.small_paper.toml`): the five daily trend rules on BTC, ETH
+  and SOL at 19 USD and scale 0.55, replacing the BTC-only paper book (state `data/portfolio/small-paper`). ETH and
+  SOL lots are small enough to track their targets; BTC is still held in one-lot steps (45% of the book)
 - [x] Signal lab (2026-10-04, `src/research/signal_lab.py`, `notebooks/signal_lab.ipynb`): five ideas side by side and combined
 - [x] Strategies by market state and H7, a flat-market gate on the trend rules (2026-10-04): the gate failed on the
   unseen 2020-2022 sample, not built. `scripts/research/regime_study.py`, `research/reports/H7.md`

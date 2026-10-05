@@ -1,0 +1,96 @@
+# The small account's paper book: about 200 NOK (19 USD), the size of the live Kraken account.
+# The five daily trend rules of the multi-strategy book on BTC, ETH and SOL, at the same 0.55 scale as the first live
+# book (a 30% drawdown limit). ETH's lot is about 2.70 USD and SOL's 1.20, so the book can hold close to what the rules
+# ask for; BTC's is about 8.50 USD (45% of the book), so BTC is held in steps of one lot.
+# Check:  python main.py --portfolio-check config/portfolio.small_paper.toml
+# Paper:  python main.py --runtime paper --portfolio config/portfolio.small_paper.toml --runtime-iterations 0 --runtime-interval 60
+# Paper only. The live config is config/portfolio.btc_live.toml, with its own one-lot money cap.
+
+[portfolio]
+name = "small-paper"
+base_currency = "USD"
+initial_equity = 19
+rebalance_band = 0.02
+scale = 0.55                      # a 30% drawdown limit with a 1.5x margin (risk budget, 2026-09-26)
+allocation = "equal"
+small_account_equity = 95         # below this, a target that rounds to zero lots holds one lot if that lot is at most...
+small_account_max_lot_weight = 0.5   # ...this share of equity (one BTC lot is about 45%)
+
+[risk]
+max_gross_exposure = 1.5
+max_net_exposure = 1.0
+max_instrument_weight = 1.0
+max_drawdown = 0.40               # kill: flatten and stay flat until --portfolio-reset-peak
+daily_loss_limit = 0.10
+stale_after_bars = 2
+rejection_cooldown_after = 3
+rejection_cooldown_hours = 24
+
+[instruments."kraken_futures:BTC/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.0001
+min_order_size = 0.0001
+slippage_bps = 5              # 24h volume 415,583,879 USD
+
+[instruments."kraken_futures:ETH/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.001
+min_order_size = 0.001
+slippage_bps = 5              # 24h volume 104,260,764 USD
+
+[instruments."kraken_futures:SOL/USD"]
+kind = "perp"
+max_leverage = 2.0
+lot_step = 0.01
+min_order_size = 0.01
+slippage_bps = 5              # 24h volume 60,077,925 USD
+
+[[sleeves]]
+id = "btc_ma_1d"
+instrument = "kraken_futures:BTC/USD"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+long_only = true
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[sleeves]]
+id = "btc_keltner_ls"
+instrument = "kraken_futures:BTC/USD"
+interval = "1d"
+strategy = "keltner_breakout"
+params = { window = 40, atr_multiplier = 2.0 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[sleeves]]
+id = "eth_ma_1d"
+instrument = "kraken_futures:ETH/USD"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+long_only = true
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[sleeves]]
+id = "eth_keltner_ls"
+instrument = "kraken_futures:ETH/USD"
+interval = "1d"
+strategy = "keltner_breakout"
+params = { window = 40, atr_multiplier = 2.0 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }
+
+[[sleeves]]
+id = "sol_ma_1d"
+instrument = "kraken_futures:SOL/USD"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+long_only = true
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.5 }

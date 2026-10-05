@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  The BTC book in PAPER mode (no orders, no keys used) as a macOS LaunchAgent: the paper soak before live. It starts
+  The small account's book in PAPER mode (no orders, no keys used) as a macOS LaunchAgent: BTC, ETH and SOL trend rules at 19 USD. It starts
   at login, is restarted if it exits or is killed, and keeps the Mac from idle-sleeping while it runs (`caffeinate -i`;
   closing the lid still sleeps the machine, and the book then catches up from the candles when it wakes).
   Same command and state folder as deploy/systemd/cryptoquant-paper.service, so the soak can move to the server with
-  its state (copy data/portfolio/btc-live-paper/).
+  its state (copy data/portfolio/small-paper/).
     install:  cp deploy/launchd/com.cryptoquant.paper.plist ~/Library/LaunchAgents/
               launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cryptoquant.paper.plist
     status:   launchctl print gui/$(id -u)/com.cryptoquant.paper | head -20
-              python main.py --portfolio config/portfolio.btc_live.toml --dashboard
+              python main.py --portfolio config/portfolio.small_paper.toml --dashboard
     remove:   launchctl bootout gui/$(id -u)/com.cryptoquant.paper && rm ~/Library/LaunchAgents/com.cryptoquant.paper.plist
   Paths are this machine's; edit them for another one. The code that runs is whatever is checked out in the folder.
 -->
@@ -23,8 +23,8 @@
     <string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin/python</string>
     <string>main.py</string>
     <string>--runtime</string><string>paper</string>
-    <string>--portfolio</string><string>config/portfolio.btc_live.toml</string>
-    <string>--portfolio-state-dir</string><string>data/portfolio/btc-live-paper</string>
+    <string>--portfolio</string><string>config/portfolio.small_paper.toml</string>
+    <string>--portfolio-state-dir</string><string>data/portfolio/small-paper</string>
     <string>--runtime-iterations</string><string>0</string>
     <string>--runtime-interval</string><string>60</string>
   </array>
