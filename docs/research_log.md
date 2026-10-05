@@ -6,6 +6,16 @@ accident.
 
 ---
 
+## 2026-10-05: H9, a rank buffer on the taker basket: killed
+
+Pre-registered (`research/prereg/H9.txt`), report in `research/reports/H9.md`. Enter a side in the top (bottom) 20%,
+stay while in the top (bottom) 35%; point-in-time Kraken list, top 30, every 10 days, 2022-03 to 2025-12. **Turnover
+51.4x to 40.2x a year (-22%), costs 7.2% to 5.7%, but net return +18.4% to +13.3% and Sharpe 0.72 to 0.57**; lower
+return at every buffer width and at 2x costs. The signal is in the extreme ranks; the coins a buffer keeps don't carry
+it. The paper book keeps its rule. The basket's cost lever is execution, not slower trading.
+
+---
+
 ## 2026-10-04: H8, pairs of Kraken-tradable perps by the distance method: killed
 
 Pre-registered (`research/prereg/H8.txt`), report in `research/reports/H8.md`. Every 30 days the 5 closest pairs among
