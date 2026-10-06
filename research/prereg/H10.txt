@@ -1,0 +1,80 @@
+PRE-REGISTRATION H10: THE US MORNING'S MOVE IN BTC AND ETH CONTINUES INTO THE US AFTERNOON
+Version 1. Written 2026-10-06, before any H10 test was run. Changes after results = a new version (lock it again), logged
+as extra trials.
+
+PRIOR EXPOSURE (what has already been looked at that bears on this)
+- 2026-09-26, intraday study (15m and 1h bars, BTC and ETH, all hours pooled): the last 4 hours' move predicted the
+  next 4 hours with a *negative* rank correlation (-0.03 to -0.046, same sign in 6-7 of 7 years), worth a few basis
+  points. That is reversal, measured over every hour of the day, not conditioned on the session. It points against
+  this hypothesis and is the reason the result is reported in both directions.
+- The same study: the 20:00-22:00 UTC hours were up a few basis points on average (a lead, 48 hour-coin cells tried).
+- 2026-10-06, volatility clock: the hours 13:00-16:00 UTC are the most volatile of the day, increasingly so since
+  2022. No return was looked at.
+- No test has conditioned a later return on the US morning's return.
+
+MARKET BEHAVIOUR
+In stocks the first half-hour's return predicts the last half-hour's (Gao, Han, Li and Zhou, 2018). Since US-listed
+bitcoin funds and macro news moved crypto's activity into US hours, the same may hold for BTC and ETH: the direction
+set in the first two hours after the US stock open carries through the rest of the US trading day.
+
+MECHANISM
+Large investors work orders through the day, and funds that must trade at the close do so in the direction of the
+day's flow. News that arrives around the open is absorbed over hours, not minutes. The other side is whoever
+provides liquidity intraday and is paid the spread and fees for it.
+
+OBSERVABLE PREDICTION AND EXPECTED SIGN
+On US weekdays, the return from 11:35 to 16:00 New York time has the same sign as the return from 09:30 to 11:30:
+positive mean of sign(morning) x afternoon return.
+
+DATA
+Binance USDT-perp 5-minute bars for BTC and ETH (src/research/pit.py), 2021-03-01 to 2025-12-31. Times are New York
+local time (so the US open stays at 09:30 through daylight saving). Weekdays only; US holidays are not removed.
+The frozen holdout (2026 on) stays locked.
+
+RULE
+- Signal: the log return from the open of the 09:30 bar to the close of the bar ending 11:30.
+- Position: long if it is positive, short if negative (flat if exactly zero), entered at the close of the bar ending
+  11:35 (five minutes after the signal is known) and closed at the close of the bar ending 16:00.
+- One trade per coin per weekday. BTC and ETH each get half of the capital.
+
+COSTS
+Round trip per trade: 11 basis points (Kraken's 0.05% taker fee each way plus 0.5 bp of spread each way, the spread
+from the first Kraken measurements). A maker case at 4 basis points (0.02% each way, no spread) is reported and is
+optimistic: a resting order is filled more often when the price is moving against it.
+
+PRIMARY OUTCOME
+The mean return per trade of the rule, net of 11 basis points, BTC and ETH pooled, over the whole window, with a 95%
+interval from a circular block bootstrap of the daily series (20-day blocks, 2,000 draws, seed 0).
+
+SECONDARY OUTCOMES
+- The gross mean per trade, and the net mean at 4 basis points.
+- Per coin, per year, per weekday; first half (to 2023-06-30) and second half.
+- The slope of the afternoon return on the morning return (Newey-West, 5 lags).
+- The rule only on days when the morning move is larger than its trailing 60-day median (known at 11:30).
+- The mirror rule (fade the morning), gross and net: the earlier study suggests reversal.
+
+PARAMETER GRID (every configuration is a trial; count them)
+6 trials, nothing else is run: signal window {first hour 09:30-10:30, first two hours 09:30-11:30} x exit {16:00, 20:00
+New York}, at 11 bp (4 cells; primary: two hours, 16:00); the primary at 4 bp; the primary on large-morning days only.
+The mirror rule is the same trades with the sign flipped and is not counted separately.
+
+PASS CRITERIA (all four)
+1. Net mean per trade at 11 bp is positive and its 95% interval is above 0.
+2. Positive net at 11 bp in both halves of the window.
+3. Positive net at 11 bp for BTC and for ETH separately.
+4. At least 3 of the 4 grid cells are positive net at 11 bp.
+
+KILL IF
+The gross mean per trade (before any cost) is below 5.5 basis points: then not even a maker on both legs with no
+adverse fills would keep half of it.
+Between kill and pass: inconclusive, and nothing is built.
+
+WHAT A PASS LEADS TO
+A candidate for a paper sleeve. The runtime would need an intraday decision clock in New York time first.
+
+KNOWN RISKS AND BIASES
+- The move this tries to capture is a few basis points in the literature; fees of 11 make a pass unlikely.
+- Our own earlier evidence at this horizon is reversal, not continuation.
+- US holidays are in the sample as ordinary weekdays (a small dilution).
+- Binance prices stand in for Kraken's. Funding over a 4.5-hour hold is ignored (about 0.2 bp at typical rates).
+- The mirror rule's result, if it looks good, is a lead from this data and needs its own test.
