@@ -6,6 +6,18 @@ accident.
 
 ---
 
+## 2026-10-06: H10, the US morning's move continues into the afternoon: inconclusive, the first intraday lead
+
+Pre-registered (`research/prereg/H10.txt`), report in `research/reports/H10.md`. BTC and ETH 5-minute bars, 1,263
+weekdays 2021-03 to 2025-12: direction of 09:30-11:30 New York, enter 11:35, close 16:00. **Gross +15.1 bp a trade,
+positive in all five years and all four pre-listed definitions; net of 11 bp taker costs +4.1 bp (interval -4.4 to
++12.8), Sharpe 0.40.** Net of 4 bp (maker, optimistic) +11.1; only after a larger-than-usual morning +10.8 net. The
+mirror (fade) loses 26 bp, so at this session it is continuation, unlike the pooled 4-hour reversal of 2026-09-26.
+Failed the one criterion that needs the interval above zero; passed the other three. Nothing is built. The clean
+next test is the frozen 2026 window, with the owner's approval.
+
+---
+
 ## 2026-10-06: Clock patterns in volatility by epoch folding (BTC, ETH)
 
 From an Instagram reel on "epoch folding". `python scripts/research/seasonality_study.py` (`src/research/seasonal.py`):
