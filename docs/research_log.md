@@ -6,6 +6,15 @@ accident.
 
 ---
 
+## 2026-10-06: H10 final holdout test (2026, one approved look): undecided, no sleeve
+
+Version 2 of the pre-registration, locked before the look. 195 weekdays of 2026: **gross +5.8 bp a trade (interval
+-5.7 to +17.5) against +15.1 in 2021-2025; net of 11 bp -5.2; the large-morning variant -0.9 bp net.** The sign was
+right on 48% of days and all of the gain came in February and March. The direction carried over, the size did not:
+about a third of the earlier effect, below any realistic cost. Closed; the 2026 window is used for this rule.
+
+---
+
 ## 2026-10-06: H10, the US morning's move continues into the afternoon: inconclusive, the first intraday lead
 
 Pre-registered (`research/prereg/H10.txt`), report in `research/reports/H10.md`. BTC and ETH 5-minute bars, 1,263

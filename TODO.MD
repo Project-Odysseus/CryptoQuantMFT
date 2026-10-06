@@ -159,8 +159,8 @@ direction is in `aspirations.md`.
   unseen 2020-2022 sample, not built. `scripts/research/regime_study.py`, `research/reports/H7.md`
 - [x] H10, the US morning's move continues into the afternoon (2026-10-06): inconclusive. Gross +15 bp a trade in every
   year, +4 bp after 11 bp of taker costs (interval includes zero). `research/reports/H10.md`
-- [ ] H10 follow-up (needs the owner's approval): one look at the frozen 2026 window for the primary rule and the
-  large-morning variant, with a version 2 of the pre-registration written first
+- [x] H10 final holdout test (2026-10-06, approved): gross +5.8 bp a trade in 2026 against +15.1 before; -5.2 net of
+  taker costs; the large-morning variant -0.9. Undecided by its own rules; no sleeve; the lead is closed
 - [x] H9, a rank buffer on the taker basket (2026-10-05): killed (turnover -22%, return -5 points a year). `research/reports/H9.md`
 - [x] H8, pairs of Kraken perps by the distance method (2026-10-04): killed (Sharpe -0.65, 12% of trades converged). `research/reports/H8.md`
 - [x] H6, cross-sectional funding carry with a point-in-time Kraken coin list (2026-10-04): inconclusive (Sharpe 0.52,
