@@ -34,11 +34,60 @@ def pooled(per_coin: dict[str, pd.Series]) -> pd.Series:
     return pd.DataFrame(per_coin).mean(axis=1, skipna=True)
 
 
+HOLDOUT_FROM, HOLDOUT_TO = pd.Timestamp("2026-01-01"), pd.Timestamp("2026-09-30")
+
+
+def holdout(args: argparse.Namespace, lock: dict) -> None:
+    """The final holdout test of version 2: rules A and B on 2026-01-01 to 2026-09-30, looked at once."""
+    if int(lock["version"]) < 2:
+        raise SystemExit("the holdout test is defined in version 2 of the pre-registration; lock that first")
+    out = Path("data/research") / f"h10_holdout_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
+    governance.write_manifest(out, args=args, extra={"prereg_version": lock["version"], "prereg_sha256": lock["sha256"]})
+    with governance.final_holdout("H10 final holdout test (pre-registration v2, approved by the owner 2026-10-06): rules A and B, 2026-01-01 to 2026-09-30"):
+        bars = {coin: pit.load_bars(coin, "5m") for coin in COINS}
+    trades = {coin: session_trades(bars[coin]) for coin in COINS}
+    window = lambda series: series[(series.index >= HOLDOUT_FROM) & (series.index <= HOLDOUT_TO)]  # noqa: E731
+    gross = {coin: window(rule_returns(trades[coin])) for coin in COINS}
+    net = {coin: window(rule_returns(trades[coin], cost_bps=TAKER_BPS)) for coin in COINS}
+    large = {}
+    for coin in COINS:
+        size = trades[coin]["signal"].abs()
+        usual = size.rolling(60, min_periods=30).median().shift(1)
+        large[coin] = window(rule_returns(trades[coin][size > usual], cost_bps=TAKER_BPS))
+    book_gross, book_net, book_large = pooled(gross), pooled(net), pooled(large)
+    book_maker = pooled({coin: window(rule_returns(trades[coin], cost_bps=MAKER_BPS)) for coin in COINS})
+    _estimate, low, high = block_bootstrap_ci(book_gross.to_numpy(), block=20, runs=2000, seed=0)
+    _estimate_b, low_b, high_b = block_bootstrap_ci(book_large.to_numpy(), block=20, runs=2000, seed=0)
+
+    def bp(series: pd.Series) -> float:
+        return float(series.mean() * BPS)
+
+    verdict = "REJECTED" if bp(book_gross) <= 0 else "SURVIVES" if bp(book_gross) >= TAKER_BPS and bp(book_large) > 0 else "UNDECIDED"
+    monthly = pd.DataFrame({"gross bp": book_gross.groupby(book_gross.index.month).mean() * BPS, "days": book_gross.groupby(book_gross.index.month).size()})
+    report = [f"# H10 final holdout test, pre-registration v{lock['version']} ({lock['sha256'][:12]})", "",
+              f"{len(book_gross)} weekdays, {book_gross.index[0]:%Y-%m-%d} to {book_gross.index[-1]:%Y-%m-%d}.", "",
+              f"**Rule A:** gross {bp(book_gross):+.1f} bp a trade (95% interval {low * BPS:+.1f} to {high * BPS:+.1f}); net of 11 bp {bp(book_net):+.1f}; net of 4 bp {bp(book_maker):+.1f}. "
+              f"Right sign on {float(pooled({coin: (gross[coin] > 0).astype(float) for coin in COINS}).mean()):.0%} of days.",
+              f"Per coin, gross: " + "; ".join(f"{coin} {bp(gross[coin]):+.1f}" for coin in COINS) + ".",
+              f"**Rule B** (larger-than-usual mornings, {int(book_large.notna().sum())} days): net of 11 bp {bp(book_large):+.1f} bp (95% interval {low_b * BPS:+.1f} to {high_b * BPS:+.1f}).", "",
+              "## Per month (rule A, gross)", "", md_table(monthly, digits=1), "", f"**{verdict}**"]
+    (out / "report.md").write_text("\n".join(report))
+    pd.DataFrame({"gross": book_gross, "net_11bp": book_net, "large_net_11bp": book_large}).to_csv(out / "daily.csv")
+    if not args.no_ledger:
+        governance.record_trials("h10_holdout", 2, family=HYPOTHESIS, data="binance perp 5m, BTC and ETH, 2026-01-01 to 2026-09-30 (final holdout)", details={"verdict": verdict, "gross_bp": bp(book_gross)})
+    print("\n".join(report))
+    print(f"\nWrote {out}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--no-ledger", action="store_true")
+    parser.add_argument("--holdout", action="store_true", help="The one approved look at the frozen 2026 window (version 2 of the pre-registration)")
     args = parser.parse_args()
     lock = governance.require_prereg(HYPOTHESIS)
+    if args.holdout:
+        holdout(args, lock)
+        return
     out = Path("data/research") / f"h10_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     governance.write_manifest(out, args=args, extra={"prereg_version": lock["version"], "prereg_sha256": lock["sha256"]})
 

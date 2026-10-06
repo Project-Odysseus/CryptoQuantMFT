@@ -1,6 +1,7 @@
 PRE-REGISTRATION H10: THE US MORNING'S MOVE IN BTC AND ETH CONTINUES INTO THE US AFTERNOON
-Version 1. Written 2026-10-06, before any H10 test was run. Changes after results = a new version (lock it again), logged
-as extra trials.
+Version 2. Version 1 was written 2026-10-06 before any H10 test was run, and is unchanged below. Version 2 adds the
+section "FINAL HOLDOUT TEST" at the end, written the same day after the version 1 result and before any 2026 data was
+looked at for this rule. Changes after results = a new version (lock it again), logged as extra trials.
 
 PRIOR EXPOSURE (what has already been looked at that bears on this)
 - 2026-09-26, intraday study (15m and 1h bars, BTC and ETH, all hours pooled): the last 4 hours' move predicted the
@@ -78,3 +79,30 @@ KNOWN RISKS AND BIASES
 - US holidays are in the sample as ordinary weekdays (a small dilution).
 - Binance prices stand in for Kraken's. Funding over a 4.5-hour hold is ignored (about 0.2 bp at typical rates).
 - The mirror rule's result, if it looks good, is a lead from this data and needs its own test.
+
+
+FINAL HOLDOUT TEST (version 2; approved by the owner on 2026-10-06; one look)
+What is known when this is written: the version 1 result on 2021-03 to 2025-12 (research/reports/H10.md): gross +15.1 bp
+a trade, net of 11 bp +4.1 bp (interval -4.4 to +12.8); only after a larger-than-usual morning, net +10.8 bp. Nothing
+from 2026 has been looked at for this rule.
+
+Window: US weekdays from 2026-01-01 to 2026-09-30 (about 195), BTC and ETH, half each. Rules, unchanged from version 1:
+ A. the primary rule (direction of 09:30-11:30 New York, enter 11:35, close 16:00);
+ B. the same on days when the morning's absolute move is above the median of the 60 mornings before it (the median
+    runs across the turn of the year, so the first 2026 days use late-2025 mornings).
+Costs: 11 bp a round trip. 2 trials.
+
+What this look can and cannot show: a trade's net return has a standard deviation of about 160 bp, so over 195 days
+the mean is known to about +-23 bp (95%). An effect of +4 bp, or of +11 bp, cannot be confirmed by this window. The
+look can show that the effect is absent or reversed out of sample, and that is what it is for.
+
+Outcomes, fixed now:
+- REJECTED if rule A's gross mean per trade is zero or negative: the direction itself did not carry over. The idea
+  is dropped.
+- SURVIVES if rule A's gross mean is at least 11 bp (it covers taker costs) AND rule B's net mean at 11 bp is
+  positive. It then goes to a prospective record: the rule's trades are logged daily without trading for at least
+  three months, and judged on that record plus this window.
+- Otherwise UNDECIDED: the direction carried over but not by enough to cover costs. No sleeve; the lead is recorded
+  and revisited only if costs fall (a maker implementation or a lower fee tier).
+Reported next to it, not judged: the 95% bootstrap interval, each coin, each month, and the 4 bp case.
+
