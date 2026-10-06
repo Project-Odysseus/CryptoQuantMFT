@@ -6,6 +6,34 @@ accident.
 
 ---
 
+## 2026-10-06: Clock patterns in volatility by epoch folding (BTC, ETH)
+
+From an Instagram reel on "epoch folding". `python scripts/research/seasonality_study.py` (`src/research/seasonal.py`):
+hourly realized variance from 5-minute Binance perp bars, 2021-03 to 2025-12, folded on the clock. Earlier work looked
+at the hour of day in *returns* (intraday study) and scored *daily* volatility forecasts; the clock pattern of
+volatility had not been measured. 6 looks (family "volatility"); the run was repeated once after a labelling fix.
+
+- **Profile (BTC; ETH is the same within 0.03):** busiest 13-16 UTC (14:00 is 1.37x the average hour), calmest 03-06
+  UTC (0.78-0.83x). Weekdays 1.08-1.12x, Saturday 0.73x, Sunday 0.79x. The 00:00 UTC hour, when the books decide and
+  trade, is 1.11x.
+- **It has moved, in one direction.** The 00:00 hour fell from 1.24x (2021) to 1.05x (2025); the US-open hours rose
+  from 1.13x to 1.44x, and the peak from 1.24x to 1.60x. Year-to-year correlation of the profile rose from 0.75 to
+  0.98: it is now stable and US-hours driven.
+- **It is real.** Fold statistic 110 (daily) and 41 (weekly) for BTC against a largest value of 11 and 2.9 in 300
+  block shuffles that keep volatility clustering (2.1 and 1.4 for the naive shuffle). Over trial periods 2-200 h the
+  tests flag about 60-70 periods, every one sharing a factor with a week (echoes of the same daily and weekly
+  rhythm). Of the 57 periods that can't be an echo, both tests flag **none**: there is no other cycle.
+- **Forecast:** a one-hour-ahead volatility forecast with a causal hour-of-week factor has a QLIKE 13% lower than
+  without for BTC (6% in 2022, 20% in 2025) and 7% lower for ETH. Hour-of-day alone: 9% and 6%. The reel reported
+  about a quarter on 2024-2026 data; we see 18-20% for BTC in 2024-2025.
+
+**Use here:** none for direction. It does not change daily sizing (a daily forecast averages the clock away). It
+bears on *when* to trade: the books trade at 00:00 UTC, an hour that is slightly busier than average and far from
+the calmest (03-06 UTC) or the weekend. Whether Kraken's spreads follow the same clock is what the spread collector
+will show; if they do, the time of the daily trade is a free parameter worth testing for the basket.
+
+---
+
 ## 2026-10-05: The trend rules on 4-hour bars for BTC, ETH and SOL (a look, not a test)
 
 `python scripts/research/trend_4h_study.py`: each rule alone through `run_book` on Kraken perps, sized to 50%
