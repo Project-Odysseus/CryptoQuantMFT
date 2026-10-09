@@ -305,6 +305,18 @@ columns the desk's system wants.
       (the Canadian dollar contract, how the yen contract settles, Eurex last trading times). Liquid windows and
       costs in ticks are assumptions until measured.
 
+- [x] First part of the futures package, `src/futures/` (2026-10-09), tested in `tests/test_futures_contracts.py`:
+      `contracts.py` (the table, contract codes, last trading days, roll day, volume-based earlier roll),
+      `sessions.py` (exchange holidays, liquid windows, release of orders at the first slot inside the window),
+      `liquidity.py` (participation cap and volume floor), `quotes.py` (daily bars of live contracts, a store, latest
+      price), `order_file.py` (the CSV for the desk's system and the fills file back). The desk uploads the file to
+      SimCorp Dimension, so the exchange and broker do not matter here. `exchange_calendars` added to `environment.yml`.
+- [ ] Not built yet: the daily recorder script and its background job; the engine side (instrument kind `future`,
+      a feed of daily bars, the session-bound adapter that queues orders until a slot and writes the order file or
+      fills on paper, rolls booked in the book, NOK as base currency with zero foreign cash at the start, futures
+      kept out of the tax ledger); a paper book config; the backtest in whole contracts. Design notes: the engine
+      already accepts orders that fill later (`SUBMITTED`, then `settle_orders`), which is the seam for the adapter.
+
 ### Next
 
 B1 to B3 on free data: the history series per market from index or spot plus interest rates, the liquidity rules,
