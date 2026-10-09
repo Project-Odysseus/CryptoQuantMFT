@@ -346,10 +346,11 @@ engine work only if the result holds. The plan has the phases, the gaps in the e
 - [x] Phase 1, first pass on free data (2026-10-09): market table, daily loader, cost model, pre-registered study H11.
       Inconclusive: Sharpe 0.32 after costs over 2000-2025, 0.04 since 2013; unrelated to equities.
       `research/reports/H11.md`. Open: proper futures data with rolls, and what to test next (owner decides)
-- [ ] Phase 2: `future` (and maybe `etf`) instruments, exchange calendars, rolls, currencies in the engine
-- [ ] Phase 3: paper futures broker and a paper book
-- [ ] Phase 4: daily target file, reconciliation against the fund's fills, risk report, method document
-- [ ] Phase 5: the pilot
+- [ ] Build plan, second version (2026-10-09), in the plan file: continue in this repository with the futures parts in
+      separate modules. A: data and contract table; B: continuous series with rolls, liquidity model, session-aware
+      backtest, new ideas; C: engine (markets and contracts, calendars and decision slots, rolls, currencies);
+      D: paper futures broker, order file for the desk, risk report; E: the pilot. Start: the contract table, and
+      the owner's answer on data
 
 ## 7. Other venues (API keys)
 

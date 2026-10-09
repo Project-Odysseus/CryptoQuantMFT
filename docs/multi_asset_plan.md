@@ -127,80 +127,168 @@ Daily bars are small (a few megabytes for fifty markets over thirty years), so t
 Rule: the first look at any of this data happens after the idea is pre-registered. All of it is unseen today,
 which is an advantage we lose the moment we plot it.
 
-## Phases
+## Build plan, second version (2026-10-09)
 
-### Phase 0. Answers and checks (owner; blocks the pilot, not the research)
+The owner's direction after H11: use micro futures, build the system out properly (real contracts and rolls, trading
+hours around the world, liquidity as an input), horizon days to weeks, then look at other strategies. This replaces
+the earlier phase list. Nothing below is started.
 
-- [ ] The questions at the end of this file
-- [ ] The fund's mandate: which instruments, which markets, leverage and shorting limits
-- [ ] Compliance on both sides: whether the owner may supply a model to the fund, in what role, and who owns it
-- [ ] Whether running an algorithm brings the fund under algorithmic-trading rules (testing, kill switch, records).
-      This is for the fund's compliance officer to answer, not something this plan can decide.
-- [ ] Data licence: what the fund has, or a budget for a vendor
+### New project or continue here: continue here, in separate modules
 
-### Phase 1. The research result (start here; no engine changes)
+What was checked: the portfolio engine is about 6,400 lines in 22 files. Kraken is named in 8 of them and funding
+in 6, and almost all of that sits in three files (`engine.py`, `feed.py`, `backtest.py`). Allocation, netting, the
+risk overlay, the order planner, the risk model, exposure limits and the tearsheet do not mention a venue at all.
 
-- [ ] M1 (S) Market list and contract table: multiplier, tick, currency, exchange, roll rule, typical spread and
-      commission, for about 20 to 50 liquid futures depending on the mandate
-- [ ] M2 (M) Daily loader into the research layer, with an exchange calendar and a continuous series built two
-      ways (back-adjusted for signals, actual contracts for profit and loss). Tests on roll days.
-- [ ] M3 (S) Cost model: commission, half-spread, roll cost, return in excess of cash
-- [ ] M4 (S) Pre-register H11: the trend rules already in use, the market list, volatility target, cost
-      assumptions, pass and kill criteria, the holdout. Locked before any chart is drawn.
-- [ ] M5 (M) Run it: full history, by sector, by decade, the frozen 2026 window once with approval. Bootstrap
-      interval on the Sharpe ratio. Correlation with equities, bonds and a 60/40 mix.
-- [ ] M6 (S) Report `research/reports/H11.md` and a tearsheet.
+| | Continue here | New project |
+|---|---|---|
+| Reused as is | Sleeves, allocation, netting, risk overlay, order planner, crash safety and restart drills, research governance, dashboard, 900+ tests | Nothing; each is rewritten or copied |
+| New work | Contracts and rolls, calendars and sessions, liquidity, order file, paper futures broker | The same, plus everything in the row above |
+| Risk | The new parts get tangled with crypto assumptions (365-day years, 00:00 UTC closes, funding) | Months before the first paper trade; the crash-safety work is the slowest part to redo |
+| Handing it to the fund | Needs the futures parts to be separable | Clean from the start |
 
-**Gate:** if the lower end of the interval is not above zero after costs, or the result depends on one sector or
-one decade, stop and say so. Do not build phases 2 to 4 on an inconclusive result.
+**Recommendation: continue here, with one rule.** Everything new goes in modules that import nothing crypto-specific
+(a `src/futures/` package for contracts, calendars, rolls and liquidity; the order file and the paper broker as
+adapters). The engine reaches them through the seams it already has: the instrument table, the feed and the adapter.
+If the fund later wants its own repository without the crypto books and the Norwegian tax ledger, those modules and
+the engine core lift out; the old single-strategy runtime (`main.py`, `src/runtime`) stays behind.
 
-### Phase 2. Engine support (M to L in total)
+The one reason to start a new project now would be ownership: if the employer will own this, it should not live
+beside the owner's personal trading code. That is question 2 below, and it decides this more than any technical point.
 
-- [ ] E1 (M) Instrument kind `future` in config and book: multiplier, currency, expiry, profit and loss per contract
-- [ ] E2 (M) Exchange calendars: per-instrument sessions, holidays that are not faults, a year length per
-      instrument for risk numbers
-- [ ] E3 (M) Rolls: the roll schedule as planned orders through the normal order planner, crash-safe like any other
-      plan, roll cost in the attribution
-- [ ] E4 (S) Currencies: per-currency cash and margin, daily conversion, FX exposure of margin shown in risk
-- [ ] E5 (S) Cost fields per contract, and interest on cash
-- [ ] E6 (S) Instrument kind `etf` only if phase 0 says ETFs are needed
-- [ ] E7 (S) Backtest-engine equality: the portfolio backtest and the engine give the same numbers on the same data,
-      as they do for crypto today
+### What is different about futures, and the design for each
 
-### Phase 3. Paper trading (M)
+**1. A future is a series of contracts, not one instrument.**
+- A *market* (for example `cme:MES`) is what strategies, risk and limits see. A *contract* (`cme:MESZ6`) is what is
+  held and traded. The book holds contracts; exposure per market is the sum over its contracts.
+- A contract table gives each market its multiplier, tick size, currency, contract months, last trading day and
+  exchange. It is data, not code, so adding a market is adding a row.
+- Signals run on a continuous series built from the individual contracts (back-adjusted, so a roll is not a price
+  jump). Profit and loss always uses the real contract's prices.
+- Rolling: a market switches to the next contract when the next one trades more than the current one, with a
+  fallback of a fixed number of days before the last trading day. The roll is two planned orders (close one, open the
+  other) through the normal order planner, so it is crash-safe like any other plan. Its cost is booked and shown.
+- H11 had none of this: it used index closes and a flat cost per roll.
 
-- [ ] P1 (M) Paper futures broker: fills at the next session's price plus half the spread, margin per contract,
-      contract months, expiry
-- [ ] P2 (S) Daily price feed with a fixed decision time after the last market closes
-- [ ] P3 (S) Restart drill extended to a roll day and a holiday
-- [ ] P4 (S) Dashboard: contracts held, days to roll, exposure by sector and currency
-- [ ] P5 A paper book on a LaunchAgent, read against its backtest after 4 and 12 weeks
+**2. Markets are open at different hours, and liquid for only part of them.**
+- Most index and currency futures trade nearly around the clock, but the order book is thin outside the home
+  market's day. So "is it open" is the wrong question; "is it liquid now" is the right one.
+- Each market gets an exchange calendar (holidays, half days) and a *liquid window* in local time, for example the
+  hours its cash market is open.
+- The daily bar of a market ends at that exchange's settlement time, not at 00:00 UTC. Every bar carries the time it
+  became known, and a signal may only use bars known at decision time.
+- The engine gets several decision slots a day instead of one, for example one each for Asia, Europe and the
+  Americas. At each slot it recomputes targets from everything known and trades only the markets whose liquid window
+  is open; the rest wait for their own slot. A holiday is not a fault; a missing bar on a trading day is.
+- Risk is checked on the whole book at every slot, using the latest known price for markets that are closed.
 
-### Phase 4. The fund pack (M)
+**3. Liquidity is an input to sizing and to costs.**
+- Static: a cost per market in ticks (half the spread plus commission), from the contract table.
+- Measured, when a quote feed exists: spread and depth by hour of day, recorded the way the Kraken collector does now.
+- In sizing: an order may not exceed a set share of the contract's average daily volume, and a market whose front
+  contract trades below a floor is skipped. A micro contract can be thin even when its full-size sibling is deep, so
+  volume is read per contract.
+- In the backtest: the same cost and participation rules, so the backtest and the engine agree.
 
-- [ ] F1 (S) Daily target file: contracts per market, change since yesterday, the reason in one line. The fund's
-      own desk trades it. This is the recommended handover: no order ever leaves this code, which keeps the fund's
-      controls intact and the regulatory surface small.
-- [ ] F2 (S) Reconciliation the other way: read the fund's fills and positions, compare with the targets, report
-      the difference and the cost actually paid
-- [ ] F3 (M) Risk report in the fund's terms: volatility against budget, value-at-risk, beta to equities and bonds,
-      correlation with the fund's book, stress dates
-- [ ] F4 (S) Method document: what the model does, how it was tested, what was tried and dropped, known weaknesses
-- [ ] F5 (S) Stop rules agreed in advance: the drawdown or behaviour at which the pilot is cut, and who decides
+**4. Money.** Margin per contract instead of leverage as a multiple of equity; profit in the contract's currency
+converted to NOK daily; interest on cash; years of 252 trading days per market instead of 365.
 
-### Phase 5. The pilot
+**5. Output.** No order leaves this code. Each slot writes an order file (market, contract, side, quantity, order
+type, limit, valid-until, reason) for the desk's system, and reads a fills file back. Until fills arrive the book
+treats the orders as pending, as it does today for resting orders.
 
-- [ ] Small risk budget, daily targets, weekly reconciliation
-- [ ] Review after three and six months against the backtest's expected range, using the same check as paper
-- [ ] Scale up, hold or stop on the rules from F5
+**6. Restrictions later.** The risk overlay already takes limits per instrument, per group and for the book. Added
+here: a maximum number of contracts per market, a list of markets that may not be traded, and allowed slots per
+market. All in config, all optional.
 
-## Order and where to start
+### Micro contracts
 
-Start with **M1 and M4**: the market list and the pre-registration. Both are cheap, neither touches the engine, and
-both need the answers to questions 1 to 4 below. M2 follows as soon as the data source is known.
+Using micros is right, and it narrows the list. From memory and to be verified against each exchange before use:
+micro S&P 500, Nasdaq 100, Russell 2000 and Dow on CME; micro DAX, Euro Stoxx 50 and SMI on Eurex; micro Nikkei on
+Osaka; mini Hang Seng in Hong Kong; micro EUR, GBP, AUD, JPY, CAD and CHF against the dollar on CME. No micro for
+the FTSE 100, CAC 40, NOK, SEK or NZD that I know of.
 
-The research (phase 1) can run on ETF and free data first to shake out the code, as long as the pre-registered
-result is run on proper futures data.
+Two consequences:
+- **History.** Most micros are recent (the CME equity micros date from 2019). Research uses the full-size contract's
+  price history, which is the same price, and the micro's own volume for the liquidity rules.
+- **Size is still a problem.** A micro equity index contract is roughly 290,000 to 350,000 NOK and a micro currency
+  contract 70,000 to 150,000 NOK. H11 in whole micro contracts on 1,000,000 NOK of capital lost half its positions.
+  This works only if the budget is the risk the fund accepts, not the capital. Question 1 below.
+
+### Phases
+
+Ordered so that research can use each piece as soon as it exists. The paper broker and the order file come last,
+because they are only worth building for a strategy that has passed.
+
+**Phase A. Data and contracts (blocks everything; M once the data source is known)**
+- [ ] A1 (owner) Choose the data source: daily open, high, low, settlement, volume and open interest per individual
+      contract, for the full-size and micro contracts. Question 3 below.
+- [ ] A2 (S) Contract table: market, exchange, multiplier, tick, currency, months, last trading day rule, liquid
+      window, cost in ticks. Every row checked against the exchange's own specification.
+- [ ] A3 (M) Loader for individual contracts into a local store, with the time each bar became known
+- [ ] A4 (S) Exchange calendars: holidays and half days per exchange (a maintained library, pinned)
+
+**Phase B. Research layer for futures (M)**
+- [ ] B1 (M) Continuous series with volume-based rolls; tests on roll days; roll dates saved so the engine uses the
+      same ones
+- [ ] B2 (S) Liquidity model: cost in ticks, participation cap, volume floor
+- [ ] B3 (M) Session-aware backtest: decision slots, liquid windows, bars known at decision time, whole contracts,
+      roll costs, margin, NOK conversion. Checked against a hand-worked example.
+- [ ] B4 (S) Rerun H11 unchanged on this data as a check of the free-data result (a new version of its
+      pre-registration, counted as trials)
+- [ ] B5 New strategy ideas, each pre-registered. Candidates are listed under "Strategies to look at" below.
+
+**Gate:** phases C and D start when one idea passes its pre-registered test on phase B. Phase C1 to C3 may start
+earlier if the owner wants the engine ready in advance; they are useful to any futures strategy.
+
+**Phase C. Engine (L)**
+- [ ] C1 (M) Markets and contracts in config and book: instrument kind `future`, profit per contract, margin
+- [ ] C2 (M) Calendars and decision slots in the runtime; holiday handling; per-market year length in risk numbers
+- [ ] C3 (M) Rolls as planned orders; roll cost in the attribution
+- [ ] C4 (S) Currencies and interest on cash
+- [ ] C5 (S) Liquidity rules in the order planner; the new optional limits
+- [ ] C6 (S) The portfolio backtest and the engine give the same numbers on the same data, as they do for crypto
+
+**Phase D. Paper and handover (M to L)**
+- [ ] D1 (M) Paper futures broker: fills inside the liquid window at the recorded price plus cost in ticks, margin,
+      contract expiry
+- [ ] D2 (S) Order file writer and fills file reader, in the desk system's format
+- [ ] D3 (S) Restart drill on a roll day, a holiday and across two slots
+- [ ] D4 (S) Dashboard: contracts held, days to roll, exposure by region and currency, next slot
+- [ ] D5 (M) Risk report and method document for the fund
+- [ ] D6 A paper book, read against its backtest after 4 and 12 weeks
+
+**Phase E. The pilot.** As before: small risk budget, weekly reconciliation, stop rules agreed in advance.
+
+### Strategies to look at (after phase B; none tested, each needs its own pre-registration)
+
+- The currency half of H11 alone, at a slower pace. It was the stronger half; the 1.4% a year in costs came mostly
+  from the fast trend rule and weekly resizing.
+- Calendar effects in equity index futures: the days around month-end, and the days of central-bank decisions.
+- The overnight and daytime parts of the index return, which behave differently. This is where knowing each
+  market's session matters, and it fits a horizon of days.
+- Lead and lag between regions: whether a large move in one region's session carries into the next region's open.
+- Volatility-managed exposure: holding less when volatility is high.
+
+These are less crowded than the textbook strategies of H11, and I have not checked whether any holds up.
+
+### Where to start
+
+**A2, the contract table, and question 3, the data.** The table is a day's work and forces every later decision
+(which markets, which contracts, which hours). The data source decides how A3 is written and is the only thing here
+that costs money. B1 follows.
+
+### Questions
+
+1. **Is the 1,000,000 NOK the capital, or the risk the fund accepts?** With micros the plan works for the second and
+   barely for the first.
+2. **Who will own this, you or your employer?** It decides whether this continues in your repository or starts in a
+   new one, and what data may be used.
+3. **What data may we use?** Individual-contract daily history needs a paid source or the fund's own. If the fund has
+   a terminal, may its data leave the office, or would the work have to happen on an office machine?
+4. **Which exchanges and which broker does the fund trade futures through?** That sets the list of markets.
+5. **What does the desk's system accept?** A file format, how often, and how fills come back.
+6. **When is the desk staffed?** If only in Oslo office hours, the Asia slot has to trade at the European open or use
+   orders left overnight, which changes the design of the slots.
 
 ## What this does not change
 
