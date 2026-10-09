@@ -1,0 +1,15 @@
+market,name,sector,region,exchange,root,multiplier,tick_size,tick_value,currency,settlement,months,last_trade_rule,liquid_from,liquid_to,timezone,history_proxy,free_quote_symbol,cost_ticks_per_side,spec_status
+cme:MES,Micro E-mini S&P 500,equity,americas,CME,MES,5,0.25,1.25,USD,cash,HMUZ,third Friday of the month 09:30 New York,09:30,16:00,America/New_York,^GSPC,MES=F,1,checked 2026-10-09
+cme:MNQ,Micro E-mini Nasdaq-100,equity,americas,CME,MNQ,2,0.25,0.50,USD,cash,HMUZ,third Friday of the month 09:30 New York,09:30,16:00,America/New_York,^NDX,MNQ=F,1,checked 2026-10-09
+cme:M2K,Micro E-mini Russell 2000,equity,americas,CME,M2K,5,0.10,0.50,USD,cash,HMUZ,third Friday of the month 09:30 New York,09:30,16:00,America/New_York,^RUT,M2K=F,1,checked 2026-10-09
+cbot:MYM,Micro E-mini Dow,equity,americas,CBOT,MYM,0.5,1,0.50,USD,cash,HMUZ,third Friday of the month 09:30 New York,09:30,16:00,America/New_York,^DJI,MYM=F,1,checked 2026-10-09
+cme:MNI,Micro Nikkei 225 (yen),equity,asia,CME,MNI,50,5,250,JPY,cash,HMUZ,Thursday before the second Friday of the month 16:00 Chicago,09:30,16:00,America/New_York,^N225,MNI=F,2,checked 2026-10-09; liquid hours are a guess
+eurex:FDXS,Micro-DAX,equity,europe,Eurex,FDXS,1,1,1,EUR,cash,HMUZ,third Friday of the month,09:00,17:30,Europe/Berlin,^GDAXI,,1,checked 2026-10-09; last trading time not checked
+eurex:FSXE,Micro-EURO STOXX 50,equity,europe,Eurex,FSXE,1,0.5,0.5,EUR,cash,HMUZ,third Friday of the month,09:00,17:30,Europe/Berlin,^STOXX50E,,1,checked 2026-10-09; last trading time not checked
+eurex:FSMS,Micro-SMI,equity,europe,Eurex,FSMS,1,1,1,CHF,cash,HMUZ,third Friday of the month,09:00,17:30,Europe/Zurich,^SSMI,,1,checked 2026-10-09; last trading time not checked
+cme:M6E,Micro EUR/USD,fx,americas,CME,M6E,12500,0.0001,1.25,USD,physical,HMUZ,second business day before the third Wednesday 09:16 Chicago,08:00,16:00,America/New_York,EUR,M6E=F,1,checked 2026-10-09
+cme:M6B,Micro GBP/USD,fx,americas,CME,M6B,6250,0.0001,0.625,USD,physical,HMUZ,second business day before the third Wednesday 09:16 Chicago,08:00,16:00,America/New_York,GBP,M6B=F,2,checked 2026-10-09
+cme:M6A,Micro AUD/USD,fx,americas,CME,M6A,10000,0.0001,1.00,USD,physical,HMUZ,second business day before the third Wednesday 09:16 Chicago,08:00,16:00,America/New_York,AUD,M6A=F,2,checked 2026-10-09
+cme:MJY,Micro JPY/USD,fx,americas,CME,MJY,1250000,0.000001,1.25,USD,check,HMUZ,second business day before the third Wednesday 09:16 Chicago,08:00,16:00,America/New_York,JPY,MJY=F,2,size and tick checked 2026-10-09; settlement type unclear
+cme:MCD,Micro CAD/USD,fx,americas,CME,MCD,10000,0.0001,1.00,USD,physical,HMUZ,business day before the third Wednesday 09:16 Chicago,08:00,16:00,America/New_York,CAD,MCD=F,2,not confirmed: size and last trading day from memory
+cme:MSF,Micro CHF/USD,fx,americas,CME,MSF,12500,0.0001,1.25,USD,physical,HMUZ,second business day before the third Wednesday 09:16 Chicago,08:00,16:00,America/New_York,CHF,MSF=F,2,checked 2026-10-09

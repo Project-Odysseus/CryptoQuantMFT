@@ -271,24 +271,45 @@ earlier if the owner wants the engine ready in advance; they are useful to any f
 
 These are less crowded than the textbook strategies of H11, and I have not checked whether any holds up.
 
-### Where to start
+### Decisions (owner, 2026-10-09) and what follows from them
 
-**A2, the contract table, and question 3, the data.** The table is a day's work and forces every later decision
-(which markets, which contracts, which hours). The data source decides how A3 is written and is the only thing here
-that costs money. B1 follows.
+- **Size: 10,000,000 NOK.** At that size whole micro contracts work: a micro equity index contract is 130,000 to
+  345,000 NOK and a micro currency contract 80,000 to 150,000 NOK, so a typical position is several contracts. The
+  H11 book in whole contracts loses 9% of its positions at 10,000,000 NOK against 49% at 1,000,000.
+- **Ownership: the owner's, in this repository.** The futures parts stay in separate modules so they can be split
+  off if that changes.
+- **Data: only what is free, at daily frequency.** Three consequences:
+  - Expired contracts are not available for free; only the contracts trading now are. So history cannot be built
+    from real contracts. The backtest history is the index or spot rate plus interest rates (as in H11), and the
+    engine works with real contracts from today on. Real roll data builds up from when recording starts; each
+    contract's history disappears from the free source when it expires, so recording should begin before December.
+  - The free source carries the CME contracts but not Eurex. The three European micros are in the table, but they
+    cannot be paper traded on real quotes until there is another source. Without them the list is four US indices
+    (which move together), the Nikkei and six currencies.
+  - Volume in the free source looks right for the micros and wrong for some full-size currency contracts, so the
+    liquidity rules use the micros' own volume.
+- **Order file: CSV**, with an Excel copy if the desk wants one.
+- **Hours: Oslo, with automatic sending possible later in the day.** Two decision times inside Oslo office hours
+  cover every market in the table: about 10:00 Oslo for the European contracts, and about 16:00 Oslo (half an hour
+  after the US open) for the US indices, the Nikkei contract and the currencies, which all trade on CME. No Asian
+  session is needed. The slots stay configurable.
 
-### Questions
+Still open: which exchanges and broker the fund uses (decides whether the European micros are in), and the exact
+columns the desk's system wants.
 
-1. **Is the 1,000,000 NOK the capital, or the risk the fund accepts?** With micros the plan works for the second and
-   barely for the first.
-2. **Who will own this, you or your employer?** It decides whether this continues in your repository or starts in a
-   new one, and what data may be used.
-3. **What data may we use?** Individual-contract daily history needs a paid source or the fund's own. If the fund has
-   a terminal, may its data leave the office, or would the work have to happen on an office machine?
-4. **Which exchanges and which broker does the fund trade futures through?** That sets the list of markets.
-5. **What does the desk's system accept?** A file format, how often, and how fills come back.
-6. **When is the desk staffed?** If only in Oslo office hours, the Asia slot has to trade at the European open or use
-   orders left overnight, which changes the design of the slots.
+### Progress
+
+- [x] A2 (2026-10-09) Contract table `config/futures_markets.csv`: 14 micro contracts with multiplier, tick,
+      currency, settlement, months, last trading day, liquid window, the series used for history and the free quote
+      symbol. Sizes and ticks checked against CME and Eurex material; the status column says what is not confirmed
+      (the Canadian dollar contract, how the yen contract settles, Eurex last trading times). Liquid windows and
+      costs in ticks are assumptions until measured.
+
+### Next
+
+B1 to B3 on free data: the history series per market from index or spot plus interest rates, the liquidity rules,
+and the session-aware backtest in whole contracts and NOK. Then A3 as a daily recorder of the live contracts, so
+real rolls accumulate. Then new strategy ideas.
 
 ## What this does not change
 
