@@ -338,6 +338,17 @@ is sized in contracts, not as a share of equity. Both tracks need the same new t
 Not before a strategy has passed its test: C4, B4's sleeves, and anything live. The engine work is worth doing only
 if it ends with something to run in it; if H4 and H5 both fail and no option study passes, stop after step 2.
 
+## 6c. FX, equity futures and ETFs for a fund pilot (plan: `docs/multi_asset_plan.md`; written 2026-10-09; nothing started)
+
+**Goal:** a model credible enough for a colleague's multi-asset fund to give it a small risk budget. Research first,
+engine work only if the result holds. The plan has the phases, the gaps in the engine and the open questions.
+- [ ] Phase 0: answers to the questions in the plan, mandate, compliance, data licence (owner)
+- [ ] Phase 1: market list, daily loader with calendars and rolls, cost model, pre-registered trend study H11
+- [ ] Phase 2: `future` (and maybe `etf`) instruments, exchange calendars, rolls, currencies in the engine
+- [ ] Phase 3: paper futures broker and a paper book
+- [ ] Phase 4: daily target file, reconciliation against the fund's fills, risk report, method document
+- [ ] Phase 5: the pilot
+
 ## 7. Other venues (API keys)
 
 Kraken spot and Kraken Futures keys are configured (2026-09-26). Put keys in `.env` only, with no withdrawal
