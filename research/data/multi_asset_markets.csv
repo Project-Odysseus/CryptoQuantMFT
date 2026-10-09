@@ -1,0 +1,22 @@
+market,sector,name,currency,price_source,price_symbol,rate_area,dividend_yield,liquid,contract,contract_exchange,contract_size,contract_currency,verified
+SPX,equity,S&P 500,USD,yahoo,^GSPC,USA,0.025,major,Micro E-mini S&P 500 (MES),CME,5,USD,no
+DAX,equity,DAX (total return index),EUR,yahoo,^GDAXI,EA20,0.0,major,Micro-DAX (FDXS),Eurex,1,EUR,no
+FTSE,equity,FTSE 100,GBP,yahoo,^FTSE,GBR,0.025,major,FTSE 100 (Z),ICE Europe,10,GBP,no
+CAC,equity,CAC 40,EUR,yahoo,^FCHI,EA20,0.025,minor,CAC 40 (FCE),Euronext,10,EUR,no
+SMI,equity,SMI,CHF,yahoo,^SSMI,CHE,0.025,minor,SMI (FSMI),Eurex,10,CHF,no
+AEX,equity,AEX,EUR,yahoo,^AEX,EA20,0.025,minor,Mini AEX (MFA),Euronext,20,EUR,no
+IBEX,equity,IBEX 35,EUR,yahoo,^IBEX,EA20,0.025,minor,Mini IBEX 35,MEFF,1,EUR,no
+MIB,equity,FTSE MIB,EUR,yahoo,FTSEMIB.MI,EA20,0.025,minor,Mini FTSE MIB,Borsa Italiana,1,EUR,no
+NIKKEI,equity,Nikkei 225,JPY,yahoo,^N225,JPN,0.025,major,Nikkei 225 mini,Osaka,100,JPY,no
+HSI,equity,Hang Seng,HKD,yahoo,^HSI,USA,0.025,minor,Mini Hang Seng,HKEX,10,HKD,no
+ASX,equity,S&P/ASX 200,AUD,yahoo,^AXJO,AUS,0.025,minor,SPI 200 (AP),ASX,25,AUD,no
+TSX,equity,S&P/TSX Composite (stands in for the TSX 60 future),CAD,yahoo,^GSPTSE,CAN,0.025,minor,S&P/TSX 60 (SXF) scaled to the composite,Montreal,12,CAD,no
+EUR,fx,Euro against the US dollar,EUR,norges_bank,EUR,EA20,,major,Micro EUR/USD (M6E),CME,12500,EUR,no
+JPY,fx,Japanese yen against the US dollar,JPY,norges_bank,JPY,JPN,,major,Micro JPY/USD (MJY),CME,1250000,JPY,no
+GBP,fx,British pound against the US dollar,GBP,norges_bank,GBP,GBR,,major,Micro GBP/USD (M6B),CME,6250,GBP,no
+CHF,fx,Swiss franc against the US dollar,CHF,norges_bank,CHF,CHE,,major,Micro CHF/USD (MSF),CME,12500,CHF,no
+AUD,fx,Australian dollar against the US dollar,AUD,norges_bank,AUD,AUS,,major,Micro AUD/USD (M6A),CME,10000,AUD,no
+CAD,fx,Canadian dollar against the US dollar,CAD,norges_bank,CAD,CAN,,major,Micro CAD/USD (MCD),CME,10000,CAD,no
+NZD,fx,New Zealand dollar against the US dollar,NZD,norges_bank,NZD,NZL,,minor,NZD/USD (6N),CME,100000,NZD,no
+SEK,fx,Swedish krona against the US dollar,SEK,norges_bank,SEK,SWE,,minor,SEK/USD (SEK),CME,2000000,SEK,no
+NOK,fx,Norwegian krone against the US dollar,NOK,norges_bank,NOK,NOR,,minor,NOK/USD (NOK),CME,2000000,NOK,no

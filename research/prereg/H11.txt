@@ -1,0 +1,111 @@
+PRE-REGISTRATION H11: TREND, CARRY AND RELATIVE MOMENTUM ON EQUITY INDEX FUTURES AND CURRENCIES EARN A POSITIVE RETURN AFTER COSTS
+Version 1. Written 2026-10-09 before any price, return or signal of these markets was looked at in this project.
+Changes after results = a new version (lock it again), logged as extra trials.
+
+PURPOSE
+A proof of concept for a multi-asset fund: equity index futures and currencies only (bonds and commodities are outside
+the mandate). The fund already runs technical indicators on futures with a discretionary overlay, and trend followers
+on bonds. So the book tested here is half directional (trend) and half relative (long some markets, short others),
+and the relative half is the part the fund does not have.
+
+PRIOR EXPOSURE
+- None in this project: only the first and last dates and the row counts of each series were read (2026-10-09), to
+  choose the window. No price, return or chart.
+- The ideas come from published work, which is itself a selection: time-series momentum (Moskowitz, Ooi and Pedersen,
+  2012), value and momentum across markets (Asness, Moskowitz and Pedersen, 2013), carry (Koijen, Moskowitz, Pedersen
+  and Vrugt, 2018). Those samples end between 2009 and 2012; most of the window here after 2012 is new to them.
+- The moving-average rule (4 and 48 days) was chosen on BTC, ETH and SOL in this project, not on these markets.
+
+MARKET BEHAVIOUR AND MECHANISM
+- Trend: markets that have risen keep rising for some months, because news is absorbed slowly and investors adjust
+  positions gradually. The other side is whoever takes profit early or hedges.
+- Carry: currencies with high interest rates do not fall by enough to cancel the rate difference. The return pays for
+  the risk of sharp losses when risk appetite drops.
+- Relative momentum: the markets that did best over the last year keep doing better than the rest for the next month.
+
+DATA (research/data/multi_asset_markets.csv lists every market)
+- 12 equity indices, daily closes from Yahoo: S&P 500, DAX, FTSE 100, CAC 40, SMI, AEX, IBEX 35, FTSE MIB, Nikkei 225,
+  Hang Seng, S&P/ASX 200, S&P/TSX Composite.
+- 9 currencies against the US dollar: EUR, JPY, GBP, CHF, AUD, CAD, NZD, SEK, NOK. Daily fixings from Norges Bank
+  (quoted against NOK; the rate against the dollar is the ratio of two fixings taken at the same time).
+- 3-month interbank rates per currency, monthly, from the OECD. A month's rate is used from the following month on.
+  Japan before 2002-04 (not in the source): 0.1%. Hong Kong uses the US rate (the currency is pegged).
+- Calendar: Monday to Friday. A market with no price that day keeps its last price (a zero return).
+- Window: returns from 2000-02-01 to 2025-12-31. The euro starts in 1999, which sets the start. 2026 stays frozen.
+
+RETURN OF ONE MARKET (what a futures position earns above cash)
+- Currency: the day's change of the spot rate against the dollar, plus (its interest rate minus the US rate) / 252.
+- Equity index: the day's change of the index, plus (dividend yield minus the local interest rate) / 252. The dividend
+  yield is a flat 2.5% a year for price indices and 0 for the DAX, which already includes dividends.
+
+SIGNALS (each computed from data up to and including day t; nothing is fitted)
+- Trend, per market: the average of two signs, each +1 or -1: (a) the 4-day average of the market's cumulative return
+  index against its 48-day average; (b) the return over the last 252 days.
+- Carry, currencies only: rank the 9 currencies by interest rate minus the US rate; weight = rank minus the average
+  rank, scaled so the absolute weights sum to 1.
+- Relative momentum, within currencies and within equity indices separately: rank by the return from 252 days ago to
+  21 days ago; weights as for carry.
+
+POSITIONS
+- Volatility of a market: the standard deviation of its last 60 daily returns, as a yearly figure, never below 2%.
+- A sleeve's raw position in a market is its signal (trend: divided by the number of markets) divided by that
+  market's volatility.
+- A sleeve is scaled to 10% expected yearly volatility, using the covariance of the last 126 daily returns.
+- Five sleeves: currency trend, currency carry, currency momentum, equity trend, equity momentum.
+- Currency book = the average of its three sleeves, scaled to 10%. Equity book = the average of its two, scaled to
+  10%. The book = the average of the two, scaled to 10%.
+- Decided on the last trading day of each week (day t). Traded at the close of the next trading day (t+1), so the
+  new positions earn from day t+2. Held unchanged for a week. This also covers markets that close at different hours.
+
+COSTS
+- Per side: 1.5 basis points of the amount traded for major markets, 3 for minor ones (the table marks each).
+- Rolling to the next contract: 4 times a year at 1 basis point of the position.
+- A doubled-cost case is reported.
+
+PRIMARY OUTCOME
+The yearly Sharpe ratio of the book's daily returns after costs, 2000-02-01 to 2025-12-31, with a 95% interval from a
+circular block bootstrap (60-day blocks, 2,000 draws, seed 0).
+
+SECONDARY OUTCOMES
+- Sortino ratio, yearly return, volatility and worst drawdown of the book, of each sector book and of each sleeve.
+- Each half: 2000-02 to 2012-12 and 2013-01 to 2025-12. By calendar year.
+- Correlation of monthly returns with the S&P 500 and with an equal-weight basket of the 12 indices; the book's
+  return in the months when that basket fell by more than 5%.
+- Correlations between the five sleeves.
+- Whole contracts: the same book held in whole contracts (the smallest listed contract per market, sizes in the
+  table, not yet verified against the exchanges) for 1,000,000 NOK and for 100,000 NOK run at 10% volatility.
+  Reported: Sharpe ratio and the share of positions that round to zero.
+- Turnover per year and the share of gross return lost to costs.
+
+TRIALS (every configuration is a trial; count them)
+11, nothing else is run: 5 sleeves, 2 sector books, the book (primary), the book at doubled costs, the book in whole
+contracts at two sizes. No parameter is varied.
+
+PASS CRITERIA (all four)
+1. The book's Sharpe ratio after costs is positive and its 95% interval is above 0.
+2. Sharpe and Sortino ratios after costs are positive in both halves.
+3. Each sector book has a positive Sharpe ratio after costs over the whole window.
+4. The book's Sharpe ratio is still positive at doubled costs.
+
+KILL IF
+The book's Sharpe ratio after costs in 2013-01 to 2025-12 is zero or negative. That is the period closest to the one
+it would be traded in, and the one the published studies did not see.
+Between kill and pass: inconclusive.
+
+WHAT EACH RESULT LEADS TO
+- Pass: one look at the frozen 2026 window with the owner's approval, then engine support for futures and a paper book.
+- Inconclusive with a positive Sharpe ratio in both halves: the owner's stated bar for a proof of concept (Sharpe and
+  Sortino not negative) is met, so the owner decides whether to go on to paper; it is reported as inconclusive.
+- Kill: nothing is built for this book.
+
+KNOWN RISKS AND BIASES
+- Free data. Index closes stand in for futures prices; the dividend yield is a flat assumption, which matters most
+  for positions held long or short for years. A pilot needs proper futures data and this test rerun on it.
+- The S&P/TSX Composite stands in for the TSX 60 future. NOK, SEK and NZD futures are thinly traded; a fund would
+  more likely use forwards, at costs not measured here.
+- The universe is today's list of liquid markets. All 21 were liquid in 2000, so the selection effect is small.
+- Costs are assumptions, not measurements.
+- Profit is earned in each contract's currency and the fund counts in NOK. That exposure is on the profit only, not
+  on the position, and is ignored.
+- Interest earned on the cash is not counted: all returns are above cash.
+- Published strategies tend to earn less after publication. The second half is the honest read.
