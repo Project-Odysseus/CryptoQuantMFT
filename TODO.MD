@@ -346,11 +346,14 @@ engine work only if the result holds. The plan has the phases, the gaps in the e
 - [x] Phase 1, first pass on free data (2026-10-09): market table, daily loader, cost model, pre-registered study H11.
       Inconclusive: Sharpe 0.32 after costs over 2000-2025, 0.04 since 2013; unrelated to equities.
       `research/reports/H11.md`. Open: proper futures data with rolls, and what to test next (owner decides)
-- [ ] Build plan, second version (2026-10-09), in the plan file: continue in this repository with the futures parts in
-      separate modules. A: data and contract table; B: continuous series with rolls, liquidity model, session-aware
-      backtest, new ideas; C: engine (markets and contracts, calendars and decision slots, rolls, currencies);
-      D: paper futures broker, order file for the desk, risk report; E: the pilot. Start: the contract table, and
-      the owner's answer on data
+- [x] Futures package and engine support (2026-10-09): `src/futures/` (contracts and rolls, sessions and slots,
+      liquidity rules, daily recorder, order file), instrument kind `future`, NOK base currency, a session-bound
+      ledger that fills on paper or writes the order file, `config/portfolio.futures_paper.toml`. Runbook: "A futures book"
+- [ ] Start the futures paper book as a background job (owner's call: it is a test of the setup, not a tested strategy)
+- [ ] Full-size currency futures in the contract table: at 10,000,000 NOK the micro currency contracts are too thin
+- [ ] Dashboard page for a futures book; portfolio backtest on futures data; restart drill on a roll day; 252-day
+      years in sizing; the order file matched to SimCorp's import format
+- [ ] New strategy ideas on these markets, each pre-registered (list in the plan)
 
 ## 7. Other venues (API keys)
 

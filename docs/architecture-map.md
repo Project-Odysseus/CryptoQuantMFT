@@ -243,6 +243,27 @@ Plan and status: `docs/portfolio_plan.md`.
   and `_book_stop_fills` books stops that fired, even during downtime. `_reconcile_account_log` corrects estimated fees
   and funding from Kraken's account log each decision bar (`KrakenFuturesCrossMarginAdapter.account_log`, `recent_fills`).
 
+### Listed futures (`src/futures/`; nothing in it knows about crypto)
+
+- `contracts.py`: the contract table `config/futures_markets.csv` as `Market` objects; contract codes, last trading
+  days, roll days, and the contract to hold (the calendar, or earlier when the next month trades more).
+- `sessions.py`: exchange holidays (`exchange_calendars`), each market's liquid window, the desk's slots, and whether
+  an order may go out now.
+- `liquidity.py`: the cap on an order as a share of average daily volume and the volume floor.
+- `quotes.py`: daily bars and the latest price of live contracts from the free source; `DailyStore` keeps them
+  (`scripts/collectors/futures_daily.py`).
+- `order_file.py`: the order CSV for the desk's system and the reader of its fills files.
+- `adapter.py`: `ContractBoard` (which contract month each market is in) and `SessionFuturesAdapter`, the ledger
+  the engine trades through. It queues each order until a slot, fills it on paper or writes it to the order file,
+  and rolls positions; the engine learns of fills through `settle_orders` and of rolls through `on_market_update`.
+- `feed.py`: `FuturesFeed`, the runtime's feed for a futures book: the held contract's bars with scaled front-month
+  history before them, flat bars on holidays, and exchange rates into the base currency.
+- `wiring.py`: builds the board, the feed and one ledger per venue for a config.
+
+In the engine: instrument kind `future` (`src/portfolio/config.py`, with `[futures]` settings), a `cash` venue that
+keeps a futures book's capital in the base currency and `PortfolioBook.roll` (`book.py`), sizing in the base
+currency for instruments priced in another (`orders.plan_orders(value_rates=...)`), and `_book_roll` in `engine.py`.
+
 ## 4. How the pieces actually work together
 
 ### A. Market data -> bars -> signals

@@ -311,11 +311,25 @@ columns the desk's system wants.
       `liquidity.py` (participation cap and volume floor), `quotes.py` (daily bars of live contracts, a store, latest
       price), `order_file.py` (the CSV for the desk's system and the fills file back). The desk uploads the file to
       SimCorp Dimension, so the exchange and broker do not matter here. `exchange_calendars` added to `environment.yml`.
-- [ ] Not built yet: the daily recorder script and its background job; the engine side (instrument kind `future`,
-      a feed of daily bars, the session-bound adapter that queues orders until a slot and writes the order file or
-      fills on paper, rolls booked in the book, NOK as base currency with zero foreign cash at the start, futures
-      kept out of the tax ledger); a paper book config; the backtest in whole contracts. Design notes: the engine
-      already accepts orders that fill later (`SUBMITTED`, then `settle_orders`), which is the seam for the adapter.
+- [x] The engine side (2026-10-09), tested in `tests/test_futures_engine.py`; the full suite passes (961 tests).
+      - Instrument kind `future` and `[futures]` settings in the portfolio config; contract size from the table.
+      - `src/futures/adapter.py`: the ledger that queues orders until a slot, fills on paper or writes the order
+        file, reads fills files, applies the volume rules and optional limits, and rolls contracts.
+      - `src/futures/feed.py`: daily bars of the held contract with scaled history, holidays as flat bars, exchange rates.
+      - NOK as base currency: capital stays in NOK, each ledger holds only its profit and loss, orders are sized
+        through the exchange rate, and a roll is booked without counting the gap between contract months as profit.
+      - Futures stay out of the personal tax ledger. Restarts keep queued orders and repeat a lost fill.
+- [x] The daily recorder `scripts/collectors/futures_daily.py`, running with the other collectors since 2026-10-09.
+- [x] `config/portfolio.futures_paper.toml`: 11 CME micros, 10,000,000 NOK, the 4/48-day trend rule. One cycle on
+      real data worked (2026-10-09): 11 orders in whole contracts, queued for the 16:00 Oslo slot. Not started as a
+      background job.
+- Found on real data: at 10,000,000 NOK the micro currency contracts are too thin for the 1% volume rule (the yen
+  micro trades about 400 contracts a day against a wanted position of 19). Full-size currency futures are the right
+  contract at this size; micros fit the equity indices.
+- [ ] Not built yet: starting the paper book as a background job; the dashboard page for contracts held, orders
+      waiting and days to roll (the data is in the book's snapshot under `futures`); the portfolio backtest on
+      futures data, checked equal to the engine; a restart drill on a roll day; 252-day years in sizing and risk
+      numbers; mixing futures and crypto in one book; the order file's columns matched to SimCorp's import format.
 
 ### Next
 

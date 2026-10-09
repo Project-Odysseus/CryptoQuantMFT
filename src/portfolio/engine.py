@@ -1426,6 +1426,7 @@ class PortfolioEngine:
                        "exposure": risk.exposure, "max_average_correlation": risk.max_average_correlation, "min_effective_bets": risk.min_effective_bets},
             "exposure": exposure, "strategy_correlation": self.unit_returns.summary(), "exposure_breaches": self.exposure_breaches(equity),
             "instruments": instruments, "contracts": contracts, "sleeves": sleeves,
+            "futures": {venue: adapter.describe() for venue, adapter in self.adapters.items() if getattr(adapter, "session_bound", False)},  # contracts held, orders waiting for a slot, rolls under way
             "contract_sleeves": {sleeve_id: {"venue": spec.venue, "strategy": spec.strategy, "budget": spec.budget * equity,
                                              "at_risk": sum(float(self.book.positions[instrument].avg_entry) * float(units) if units > 0 else (1.0 - float(self.book.positions[instrument].avg_entry)) * -float(units)
                                                             for instrument, owner in self.contract_owner.items() if owner == sleeve_id and (units := self.book.units().get(instrument))),

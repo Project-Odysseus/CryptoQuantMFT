@@ -27,5 +27,7 @@ forever option_chains "$PY" main.py --record-option-chains BTC ETH --option-chai
 forever kraken_spreads "$PY" scripts/collectors/kraken_spreads.py config/portfolio.multi_paper.toml &
 # Prediction-market quotes and order books (Kalshi, Polymarket; BTC and ETH price markets), every 10 min: ~10 MB a day
 forever prediction_books "$PY" scripts/collectors/prediction_books.py &
+# Daily bars of the futures contracts trading now (the free source drops a contract when it expires), every 6 h: a few kB a day
+forever futures_daily "$PY" scripts/collectors/futures_daily.py --every 21600 &
 trap 'kill 0' INT TERM
 wait

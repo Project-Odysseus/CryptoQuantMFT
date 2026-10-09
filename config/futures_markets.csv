@@ -3,7 +3,7 @@ cme_usd:MES,Micro E-mini S&P 500,equity,americas,CME,MES,5.0,0.25,1.25,USD,cash,
 cme_usd:MNQ,Micro E-mini Nasdaq-100,equity,americas,CME,MNQ,2.0,0.25,0.5,USD,cash,HMUZ,third_friday,3,XNYS,09:30,16:00,America/New_York,^NDX,MNQ=F,CME,1,checked 2026-10-09
 cme_usd:M2K,Micro E-mini Russell 2000,equity,americas,CME,M2K,5.0,0.1,0.5,USD,cash,HMUZ,third_friday,3,XNYS,09:30,16:00,America/New_York,^RUT,M2K=F,CME,1,checked 2026-10-09
 cme_usd:MYM,Micro E-mini Dow,equity,americas,CBOT,MYM,0.5,1.0,0.5,USD,cash,HMUZ,third_friday,3,XNYS,09:30,16:00,America/New_York,^DJI,MYM=F,CBT,1,checked 2026-10-09
-cme_jpy:MNI,Micro Nikkei 225 (yen),equity,asia,CME,MNI,50.0,5.0,250.0,JPY,cash,HMUZ,thursday_before_second_friday,3,CMES,09:30,16:00,America/New_York,^N225,MNI=F,CME,2,checked 2026-10-09; liquid hours are a guess
+cme_jpy:MNI,Micro Nikkei 225 (yen),equity,asia,CME,MNI,50.0,5.0,250.0,JPY,cash,HMUZ,thursday_before_second_friday,3,CMES,09:30,16:00,America/New_York,^N225,NIY=F,CME,2,checked 2026-10-09; liquid hours are a guess; history is the full-size yen contract (NIY)
 eurex_eur:FDXS,Micro-DAX,equity,europe,Eurex,FDXS,1.0,1.0,1.0,EUR,cash,HMUZ,third_friday,3,XEUR,09:00,17:30,Europe/Berlin,^GDAXI,,,1,checked 2026-10-09; last trading time not checked
 eurex_eur:FSXE,Micro-EURO STOXX 50,equity,europe,Eurex,FSXE,1.0,0.5,0.5,EUR,cash,HMUZ,third_friday,3,XEUR,09:00,17:30,Europe/Berlin,^STOXX50E,,,1,checked 2026-10-09; last trading time not checked
 eurex_chf:FSMS,Micro-SMI,equity,europe,Eurex,FSMS,1.0,1.0,1.0,CHF,cash,HMUZ,third_friday,3,XSWX,09:00,17:30,Europe/Zurich,^SSMI,,,1,checked 2026-10-09; last trading time not checked

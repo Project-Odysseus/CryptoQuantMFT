@@ -635,6 +635,54 @@ pre-registered test. The kill switch withdraws resting bets and leaves held ones
 count in the `[risk.exposure]` check. The dashboard shows a "Bets and options" card for a book that has any.
 `python scripts/drills/restart_drill.py <config> --bets` runs the crash drill with a betting sleeve added.
 
+## A futures book (`kind = "future"`, `[futures]`)
+
+A book of listed futures runs through the same engine as the crypto books, on paper or as an order file for a
+trading desk. It never sends an order itself. The example is `config/portfolio.futures_paper.toml` (11 CME micro
+contracts, 10,000,000 NOK, the 4/48-day trend rule: a test of the setup, not a tested strategy).
+
+    python main.py --portfolio-check config/portfolio.futures_paper.toml
+    python main.py --runtime paper --portfolio config/portfolio.futures_paper.toml --runtime-iterations 0 --runtime-interval 300
+
+How a day goes:
+
+1. The day's bar of each market is complete half an hour after the exchange's trade date ends (17:30 New York for
+   CME). The engine then decides, in whole contracts, sized in the base currency at the day's exchange rates.
+2. Each order waits in the futures ledger for the first slot inside its market's liquid hours. The default slots are
+   10:00 and 16:00 Oslo time; the liquid hours are in `config/futures_markets.csv`. An order decided after a slot,
+   while the market is still liquid, goes out at once.
+3. `mode = "paper"`: the order fills at the contract's latest traded price (10 to 15 minutes delayed, at most 45
+   minutes old) moved by the market's cost in ticks. With no fresh price it waits.
+   `mode = "file"`: the orders are written to `data/portfolio/<book>/orders/orders_<book>_<ledger>_<date>_<time>_<slot>.csv`
+   for upload to the desk's system. The book changes only when a file `fills*.csv` with the columns
+   `order_id, contract, side, quantity, price` (and optionally `fee, filled_utc`) appears in
+   `data/portfolio/<book>/fills/`. An order with no complete fill two hours after its market's liquid hours is
+   written off with a warning; a fill reported later is still booked.
+4. Before a contract's last trading day the position moves to the next contract month: three trading days before
+   for cash-settled contracts, five for delivered ones, earlier when the next month already trades more. On paper
+   the roll is booked at both contracts' prices; in file mode it is two orders with ids starting `roll-`.
+
+Things to know:
+
+- **Order size follows volume.** An order is at most 1% of the contract's average daily volume, and nothing new is
+  opened in a contract trading fewer than 200 contracts a day (`max_participation`, `min_daily_volume`). Volumes come
+  from the daily recorder below; the rest of a cut order is planned again at the next decision. At 10,000,000 NOK the
+  micro currency contracts for the yen, franc and pound are cut by this rule.
+- **Limits.** `[futures] max_contracts` caps a market's position in contracts and `no_trade` allows only reductions.
+  The usual weight limits in `[risk]` and `[risk.groups]` apply as for any book.
+- **Money.** The capital stays in the base currency; each ledger (one per exchange and currency, such as `cme_usd`)
+  holds only what its contracts have earned or lost. No fee is booked on paper: the cost is in the fill price.
+- **Volatility targets use 365-day years**, as for crypto, so a target of 10% is about 8.3% on a 252-day basis.
+- **Not on free data:** the Eurex micro contracts (no quotes), and adjusted history across old rolls.
+- A futures book cannot be mixed with crypto instruments in one portfolio yet, and `--runtime live` refuses it.
+
+### Recording futures contracts
+
+`scripts/collectors/futures_daily.py --every 21600` (part of `scripts/collectors/run_collectors.sh`) saves the daily
+bars of each market's held and next contract to `data/market_data/futures/daily/<contract>.csv`, a few kilobytes a
+day. The free source drops a contract's history when it expires, so this is the only record of real roll gaps and of
+volume per contract.
+
 ## Recording prediction-market order books
 
 `scripts/collectors/prediction_books.py` stores, every 10 minutes, the quotes and the top five order-book levels of
