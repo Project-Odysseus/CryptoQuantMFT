@@ -6,6 +6,19 @@ accident.
 
 ---
 
+## 2026-10-09: H11, trend, carry and relative momentum on equity index futures and currencies: inconclusive
+
+The first test outside crypto, for the fund pilot (`docs/multi_asset_plan.md`). 12 equity indices and 9 currencies,
+2000-02 to 2025-12, free data, pre-registered before any price was looked at, 11 trials. Half currencies (trend,
+carry, relative momentum), half equity indices (trend, relative momentum), 10% volatility, weekly decisions.
+**Sharpe 0.32 after costs (interval -0.03 to 0.68), Sortino 0.44; 0.62 in 2000-2012 and 0.04 in 2013-2025.** The
+currency book 0.42 (carry the best sleeve at 0.36), the equity book 0.07; equity trend -0.27 since 2013. Unrelated
+to equities (correlation 0.00 with the S&P 500; +1.3% on average in the 30 months equities fell more than 5%). Costs
+take 1.4% a year at 57 times turnover. In whole contracts at 1,000,000 NOK of capital 49% of positions round to
+zero, at 100,000 NOK 93%: the budget only works if it is a risk budget, not the capital. Not a credible stand-alone
+model; nothing built. Leads, untested: the currency book alone, a slower book, proper futures data.
+`research/reports/H11.md`, `src/research/multi_asset.py`, `scripts/research/h11_study.py`.
+
 ## 2026-10-06: H10 final holdout test (2026, one approved look): undecided, no sleeve
 
 Version 2 of the pre-registration, locked before the look. 195 weekdays of 2026: **gross +5.8 bp a trade (interval

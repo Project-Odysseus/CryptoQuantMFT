@@ -343,7 +343,9 @@ if it ends with something to run in it; if H4 and H5 both fail and no option stu
 **Goal:** a model credible enough for a colleague's multi-asset fund to give it a small risk budget. Research first,
 engine work only if the result holds. The plan has the phases, the gaps in the engine and the open questions.
 - [ ] Phase 0: answers to the questions in the plan, mandate, compliance, data licence (owner)
-- [ ] Phase 1: market list, daily loader with calendars and rolls, cost model, pre-registered trend study H11
+- [x] Phase 1, first pass on free data (2026-10-09): market table, daily loader, cost model, pre-registered study H11.
+      Inconclusive: Sharpe 0.32 after costs over 2000-2025, 0.04 since 2013; unrelated to equities.
+      `research/reports/H11.md`. Open: proper futures data with rolls, and what to test next (owner decides)
 - [ ] Phase 2: `future` (and maybe `etf`) instruments, exchange calendars, rolls, currencies in the engine
 - [ ] Phase 3: paper futures broker and a paper book
 - [ ] Phase 4: daily target file, reconciliation against the fund's fills, risk report, method document

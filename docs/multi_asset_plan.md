@@ -2,6 +2,24 @@
 
 Written 2026-10-09. Nothing here is started. Sizes: S = a day or less, M = a few days, L = a week or more.
 
+## Answers from the owner (2026-10-09) and where this stands
+
+- **Instruments:** futures, and ETFs if an edge can be shown. Currencies are allowed. Bonds and commodities are
+  covered by other strategies or not permitted, so the universe is equity index futures and currencies.
+- **Credible means:** a good backtest, then a paper record, with Sharpe and Sortino ratios that are not negative.
+- **Base currency NOK; budget 1,000,000 or 100,000 NOK.** No other restrictions now, but the code must allow adding
+  them later (the risk overlay already takes limits per instrument, per group and for the book).
+- **Handover:** a file of orders, fed to a system that sends it to the trading desk (phase 4, F1).
+- **The fund today:** technical indicators on futures with mixed results and a discretionary overlay; trend followers
+  on bonds; spread trading. The portfolio manager sits next to the owner at work. This is a proof of concept.
+- **Not answered:** what data may be used. The first pass used free data.
+
+Because the fund already runs technical indicators on futures, the first test was not trend alone but a book that is
+half trend and half relative (carry and relative momentum), on equity indices and currencies. **Result (H11,
+`research/reports/H11.md`): inconclusive.** Sharpe 0.32 after costs over 2000-2025, but 0.04 since 2013. Unrelated to
+equities. In whole contracts the 100,000 NOK budget is too small for futures and 1,000,000 NOK loses half the
+positions, unless the figure is a risk budget and not the capital. Phases 2 to 4 are not started, by the gate below.
+
 ## Goal
 
 Show a colleague who runs a multi-asset fund a model credible enough to be given a small risk budget. That needs
