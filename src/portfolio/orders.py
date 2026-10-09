@@ -117,6 +117,7 @@ def plan_orders(
     instruments: Mapping[str, InstrumentSpec],
     band: float = 0.0,
     small_lot_cap: float | None = None,
+    value_rates: Mapping[str, float] | None = None,
 ) -> OrderPlan:
     """Plan the orders that move `current_units` to `target_weights` (signed shares of `equity`).
 
@@ -131,6 +132,9 @@ def plan_orders(
         small_lot_cap: Set while the account is small: a nonzero target that
             rounds to zero lots holds one lot, if one lot is at most this share
             of equity (see rule 4). None rounds toward zero as usual.
+        value_rates: Base currency per unit of the instrument's own currency, for
+            instruments priced in another currency than `equity` (a dollar future
+            in a NOK book). Missing means 1. The order keeps the instrument's price.
     """
     plan = OrderPlan()
     reducing: list[PlannedOrder] = []
@@ -147,7 +151,8 @@ def plan_orders(
             if current != 0 or target_weight != 0.0:
                 plan.skipped.append(SkippedChange(instrument, "no_price", float("nan"), target_weight))
             continue
-        current_weight = float(current) * price / equity if equity > 0 else 0.0
+        worth = price * float((value_rates or {}).get(instrument, 1.0))  # one unit in the base currency
+        current_weight = float(current) * worth / equity if equity > 0 else 0.0
         if target_weight < 0 and not spec.can_short:
             plan.skipped.append(SkippedChange(instrument, "no_short", current_weight, target_weight))
             target_weight = 0.0
@@ -157,8 +162,8 @@ def plan_orders(
                 plan.skipped.append(SkippedChange(instrument, "within_band", current_weight, target_weight))
             continue
 
-        raw_target = _decimal(target_weight) * _decimal(max(equity, 0.0)) / _decimal(price)
-        target = lot_target_units(target_weight, equity=equity, price=price, spec=spec, small_lot_cap=small_lot_cap)
+        raw_target = _decimal(target_weight) * _decimal(max(equity, 0.0)) / _decimal(worth)
+        target = lot_target_units(target_weight, equity=equity, price=worth, spec=spec, small_lot_cap=small_lot_cap)
         if target == current:
             if raw_target != current:
                 plan.skipped.append(SkippedChange(instrument, "below_lot_step", current_weight, target_weight))

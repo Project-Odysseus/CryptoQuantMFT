@@ -1,0 +1,198 @@
+# A paper book of micro futures, 10,000,000 NOK: a test of the futures setup, not a tested strategy.
+# The rule is the 4/48-day trend rule the crypto books run, on the eleven CME micro contracts the free data source
+# quotes (four US indices, the Nikkei, six currencies). The first multi-asset test (research/reports/H11.md) was
+# inconclusive, so read this book for whether orders, rolls, sessions and NOK accounting behave, not for its return.
+# Orders are decided when the day's bars are complete (about 23:30 Oslo) and wait for the 16:00 Oslo slot of the
+# next trading day, half an hour after the US open. Each sleeve aims at 10% yearly volatility on its own market.
+# Check:  python main.py --portfolio-check config/portfolio.futures_paper.toml
+# Paper:  python main.py --runtime paper --portfolio config/portfolio.futures_paper.toml --runtime-iterations 0 --runtime-interval 300
+# For the desk: set [futures] mode = "file"; order files appear in data/portfolio/futures-paper/orders and the book
+# changes only from fills files put in data/portfolio/futures-paper/fills.
+
+[portfolio]
+name = "futures-paper"
+base_currency = "NOK"
+initial_equity = 10000000
+rebalance_band = 0.02
+scale = 2.0                       # eleven sleeves share the book equally; 2.0 brings a typical position to several contracts
+allocation = "equal"
+
+[risk]
+max_gross_exposure = 4.0          # futures need only margin; position values are several times a low-volatility book
+max_net_exposure = 3.0
+max_instrument_weight = 1.0
+max_drawdown = 0.20               # kill: flatten and stay flat until --portfolio-reset-peak
+daily_loss_limit = 0.04
+stale_after_bars = 4              # a daily bar on Friday must last through the weekend and a Monday holiday
+rejection_cooldown_after = 3
+rejection_cooldown_hours = 24
+
+[risk.groups.equity]
+max_gross = 2.0
+max_net = 1.5
+
+[risk.groups.fx]
+max_gross = 3.0
+max_net = 2.0
+
+[futures]
+mode = "paper"                    # "file" writes the order CSV for the desk's system instead of filling here
+max_participation = 0.01          # an order is at most 1% of the contract's average daily volume
+min_daily_volume = 200            # nothing new is opened in a contract trading fewer contracts a day than this
+slots = [ { name = "europe", at = "10:00", timezone = "Europe/Oslo" }, { name = "americas", at = "16:00", timezone = "Europe/Oslo" } ]
+# max_contracts = { "cme_usd:MES" = 20 }   # optional hard cap per market, in contracts
+# no_trade = ["cme_usd:M2K"]               # optional: these may only be reduced
+
+[instruments."cme_usd:MES"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+[instruments."cme_usd:MNQ"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+[instruments."cme_usd:M2K"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+[instruments."cme_usd:MYM"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+[instruments."cme_jpy:MNI"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+[instruments."cme_usd:M6E"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[instruments."cme_usd:M6B"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[instruments."cme_usd:M6A"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[instruments."cme_usd:MJY"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[instruments."cme_usd:MCD"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[instruments."cme_usd:MSF"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[[sleeves]]
+id = "mes_trend"
+instrument = "cme_usd:MES"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }
+
+[[sleeves]]
+id = "mnq_trend"
+instrument = "cme_usd:MNQ"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }
+
+[[sleeves]]
+id = "m2k_trend"
+instrument = "cme_usd:M2K"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }
+
+[[sleeves]]
+id = "mym_trend"
+instrument = "cme_usd:MYM"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }
+
+[[sleeves]]
+id = "mni_trend"
+instrument = "cme_jpy:MNI"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }
+
+[[sleeves]]
+id = "m6e_trend"
+instrument = "cme_usd:M6E"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }
+
+[[sleeves]]
+id = "m6b_trend"
+instrument = "cme_usd:M6B"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }
+
+[[sleeves]]
+id = "m6a_trend"
+instrument = "cme_usd:M6A"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }
+
+[[sleeves]]
+id = "mjy_trend"
+instrument = "cme_usd:MJY"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }
+
+[[sleeves]]
+id = "mcd_trend"
+instrument = "cme_usd:MCD"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }
+
+[[sleeves]]
+id = "msf_trend"
+instrument = "cme_usd:MSF"
+interval = "1d"
+strategy = "moving_average_crossover"
+params = { short_window = 4, long_window = 48 }
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.10 }

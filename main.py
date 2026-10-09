@@ -1679,8 +1679,17 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
         if refusal:
             print(f"Refusing to start the live portfolio: {refusal}")
             return 2
+    from src.futures import wiring as futures_wiring
+
+    futures_book = futures_wiring.is_futures_book(config)
+    if futures_book and live:
+        print("A futures book runs on paper or writes an order file for the desk ([futures] mode); --runtime live is for Kraken only.")
+        return 2
+    if futures_book and any(spec.kind != "future" for spec in config.instruments.values()):
+        print("This portfolio mixes listed futures with other instruments; the runtime has one price feed per book. Use separate portfolios for now.")
+        return 1
     foreign = sorted({VENUE_CURRENCY.get(spec.venue, config.base_currency) for spec in config.instruments.values()} - {config.base_currency})
-    if foreign:
+    if foreign and not futures_book:
         print(f"This portfolio has venues in {foreign} and base {config.base_currency}; the runtime has no live FX feed yet. Use one currency per portfolio for now.")
         return 1
     if args.runtime_iterations < 0:
@@ -1695,7 +1704,16 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
         state_dir = Path("data/portfolio") / (f"{config.name}-live" if live else config.name)  # live never shares state with paper
     trade_logger = TradeLogger(database_path=settings.database_path)
     notifier = TelegramNotifier()
-    book = PortfolioBook.from_config(config)
+    futures_parts = None
+    if futures_book:
+        from src.futures.quotes import DailyStore, LastPrices
+
+        # Mock runs fill at the engine's own price and read no volumes, so they never touch the network
+        futures_parts = futures_wiring.build(config, state_dir, prices=None if mock else LastPrices(), store=None if mock else DailyStore())
+        rates = futures_wiring.MOCK_RATES if mock else asyncio.run(futures_parts.feed.rates())
+        book = PortfolioBook.from_config(config, fx=rates)
+    else:
+        book = PortfolioBook.from_config(config)
     if live:
         config, adapter = build_live_portfolio_adapter(config)
         adapters = {"kraken_futures": adapter}
@@ -1712,7 +1730,8 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
             from src.portfolio.contracts import VenueBooks
 
             contract_books = VenueBooks()  # paper bets fill against the venues' real order books
-        adapters = build_paper_adapters(config, book, state_dir=state_dir, quote_source=quotes, funding_source=funding, contract_books=contract_books)
+        adapters = build_paper_adapters(config, book, state_dir=state_dir, quote_source=quotes, funding_source=funding, contract_books=contract_books,
+                                        futures_ledger=futures_parts.ledger if futures_parts else None)
     engine = PortfolioEngine(config, adapters=adapters, book=book, trade_logger=trade_logger, notifier=notifier, mode=args.runtime,
                              state_path=state_dir / "engine.json", record_tax=live, contract_books=None if live else contract_books)
     if config.contract_sleeves and not live:
@@ -1727,7 +1746,13 @@ def run_portfolio_runtime(args: argparse.Namespace) -> int:
     if args.portfolio_reset_peak:
         old_peak = engine.reset_peak(now=datetime.now(timezone.utc))
         print(f"Equity peak reset from {old_peak:,.2f} to {float(engine.book.peak_equity):,.2f}")
-    feed = MockCandleFeed(config.instruments, grid_interval=engine.grid_interval) if mock else CandleFeed(config.instruments)
+    if mock:
+        feed = MockCandleFeed(config.instruments, grid_interval=engine.grid_interval)
+    else:
+        feed = futures_parts.feed if futures_parts else CandleFeed(config.instruments)
+    if futures_parts and config.futures.mode == "file":
+        print(f"ORDER FILE MODE: orders are written to {state_dir / config.futures.order_dir} and nothing is sent until a file is uploaded to the desk's system; "
+              f"the book changes only from fills files in {state_dir / config.futures.fills_dir}.")
     if mock and config.baskets:
         engine.basket_source = feed.basket_panel  # synthetic basket data: a mock run never calls Binance
     # The dead-man's switch pings an outside monitor; never from mock runs, which would hide a dead real runtime

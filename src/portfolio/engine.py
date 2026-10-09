@@ -92,6 +92,7 @@ def build_paper_adapters(
     quote_source: Callable[[str], tuple[float, float] | None] | None = None,
     funding_source: Callable[[str], float | None] | None = None,
     contract_books: Callable[[str], Any] | None = None,
+    futures_ledger: Callable[[str, list[Any]], Any] | None = None,
 ) -> dict[str, ExecutionAdapter]:
     """Sandbox adapters for paper trading a config, funded with the book's cash per venue.
 
@@ -120,6 +121,10 @@ def build_paper_adapters(
                 quote_source=quote_source if venue == "kraken_futures" else None,  # real bid and ask for resting maker orders
                 funding_source=funding_source if venue == "kraken_futures" else None,  # Kraken's real funding per coin
             )
+        elif all(spec.kind == "future" for spec in specs):
+            if futures_ledger is None:
+                raise ValueError(f"venue {venue} holds futures; pass futures_ledger (src/futures/wiring.py builds it)")
+            adapters[venue] = futures_ledger(venue, specs)  # queues each order for its market's slot; paper fills or an order file
         elif all(spec.kind == "spot" for spec in specs):
             if len({spec.taker_fee_pct for spec in specs}) > 1:
                 raise ValueError(f"spot instruments on {venue} have different fees; the spot sandbox takes one fee rate")
@@ -413,6 +418,15 @@ class PortfolioEngine:
     def _weights(self) -> dict[str, float]:
         return {instrument: weight for instrument, weight in self.book.weights().items() if instrument in self.config.instruments}
 
+    def _value_rates(self) -> dict[str, float]:
+        """Base currency per unit of an instrument's own currency, for the instruments priced in another currency."""
+        rates = {}
+        for instrument, spec in self.config.instruments.items():
+            currency = self.book.venue_currency.get(spec.venue, self.book.base_currency)
+            if currency != self.book.base_currency:
+                rates[instrument] = float(self.book.fx[currency])
+        return rates
+
     def _mark_contracts(self, now: datetime) -> None:
         """Value every held contract at the middle of its order book (left at its last mark when the book can't be read)."""
         marks = {}
@@ -548,7 +562,7 @@ class PortfolioEngine:
                 self.notifier.send_alert(event_type="portfolio_sleeve_disabled", message=f"Sleeve {sleeve_id} failed {count} cycles in a row and is held flat until restart.",
                                          metadata={"sleeve": sleeve_id, "error": message})
 
-    def _mark_adapters(self, prices: Mapping[str, float], now: datetime) -> list[dict[str, Any]]:
+    def _mark_adapters(self, prices: dict[str, float], now: datetime) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         for venue, adapter in self.adapters.items():
             symbols = {spec.symbol: instrument for instrument, spec in self.config.instruments.items() if spec.venue == venue}
@@ -572,6 +586,16 @@ class PortfolioEngine:
                     seen[symbol] = total
             elif isinstance(adapter, SandboxBinaryAdapter):
                 adapter.on_market_update(timestamp=now)  # fills resting bets the book has come to; `settle_orders` reports them
+            elif getattr(adapter, "session_bound", False):
+                # A futures ledger: releases the orders whose market has reached a slot, and rolls contracts near expiry
+                for event in adapter.on_market_update(prices={symbol: prices[instrument] for symbol, instrument in symbols.items() if instrument in prices}, timestamp=now):
+                    event = {**event, "venue": venue, "instrument": symbols.get(event.get("symbol"), event.get("symbol"))}
+                    if event["type"] == "roll":
+                        self._book_roll(event, now)
+                        prices[event["instrument"]] = float(event["to_price"])  # this cycle's mark is the new contract's
+                    else:
+                        self._event("WARNING" if event.get("problem") else "INFO", f"portfolio_futures_{event['type']}", str(event.get("message", event["type"])), event, now)
+                    events.append(event)
             elif getattr(adapter, "live", False):
                 for event in adapter.on_market_update(prices={symbol: prices[instrument] for symbol, instrument in symbols.items() if instrument in prices}, timestamp=now):
                     event = {**event, "venue": venue, "instrument": symbols.get(event.get("symbol"), event.get("symbol"))}
@@ -581,6 +605,20 @@ class PortfolioEngine:
                                                  "Only reductions until resolved (--portfolio-adopt-exchange).", metadata=event)
                     events.append(event)
         return events
+
+    def _book_roll(self, event: Mapping[str, Any], now: datetime) -> None:
+        """Book a futures roll the ledger carried out: realise the old contract's P&L and carry on at the new one's price.
+
+        The next bar's return is measured from the new contract, so the last close is moved by the same ratio as the
+        price; without that the gap between two contract months would count as a market move.
+        """
+        instrument = event["instrument"]
+        from_price, to_price = float(event["from_price"]), float(event["to_price"])
+        realized = self.book.roll(instrument, from_price, to_price, float(event.get("fee", 0.0)))
+        if instrument in self.last_grid_close and from_price > 0:
+            self.last_grid_close[instrument] *= to_price / from_price
+        self._event("INFO", "portfolio_roll", f"{instrument}: rolled {event.get('units', 0):+g} units from {event['from_contract']} at {from_price:g} "
+                    f"to {event['to_contract']} at {to_price:g}", {**event, "realized": float(realized)}, now)
 
     def _book_liquidation(self, event: dict[str, Any], symbols: Mapping[str, str], now: datetime) -> None:
         """A sandbox liquidation closed positions on the exchange; close them in the book at the same fills."""
@@ -599,6 +637,8 @@ class PortfolioEngine:
         if not self.record_tax:
             return
         spec = self.book.instruments.get(instrument) or self.config.instruments[instrument]
+        if spec.kind == "future":
+            return  # the tax ledger is the owner's personal crypto record; a fund's futures do not belong in it
         if spec.kind in ("perp", "option", "binary"):  # derivatives: realized P&L and fees (opening an option isn't a taxable event)
             if realized:
                 self._tax_derivative(instrument, "REALIZED_PNL", realized, now, {"order_id": order_id})
@@ -673,7 +713,7 @@ class PortfolioEngine:
             groups=self.config.groups(), underlyings=self.config.underlyings(), estimate=self.risk_model.estimate(),
         )
         plan = plan_orders(self._units(), report.adjusted, prices=prices, equity=equity, instruments=self.config.instruments, band=self.config.rebalance_band,
-                           small_lot_cap=self.config.small_lot_cap(equity))
+                           small_lot_cap=self.config.small_lot_cap(equity), value_rates=self._value_rates())
         busy = {meta["instrument"] for meta in self.pending_orders.values()}
         cooling = self._cooldowns(now)
         orders = []
@@ -1436,7 +1476,7 @@ class PortfolioEngine:
             adapter = self.adapters[spec.venue]
             if any(meta["instrument"] == instrument for meta in self.pending_orders.values()):
                 continue  # a fill is in flight: compare once it has settled
-            if isinstance(adapter, SandboxCrossMarginPerpAdapter) or getattr(adapter, "live", False):
+            if isinstance(adapter, SandboxCrossMarginPerpAdapter) or getattr(adapter, "live", False) or getattr(adapter, "session_bound", False):
                 exchange = adapter.position_size(spec.symbol)
             else:
                 exchange = float(adapter.get_account_snapshot().get("positions", {}).get(adapter._position_symbol(spec.symbol), 0.0))

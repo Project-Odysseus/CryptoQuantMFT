@@ -138,3 +138,19 @@ def release_time(market: LiquidHours, after: datetime, slots: Sequence[Slot], se
         if is_liquid(market, moment, sessions):
             return moment, slot
     return None
+
+
+def releasable(market: LiquidHours, now: datetime, slots: Sequence[Slot], sessions: Sessions) -> Slot | None:
+    """The slot that lets an order for this market go out at `now`, or None.
+
+    An order may go out when the market is liquid and a slot has already come up inside the same liquid window. So
+    an order decided after a slot (a late start, a restart) still goes out that day, and one decided overnight waits
+    for the slot.
+    """
+    moment = now.astimezone(timezone.utc)
+    window = liquid_window(market, moment.astimezone(ZoneInfo(market.timezone)).date(), sessions)
+    if window is None or not window[0] <= moment < window[1]:
+        return None
+    passed = [slot for slot in slots for day in (moment.date() - timedelta(days=1), moment.date(), moment.date() + timedelta(days=1))
+              if window[0] <= slot.on(day) <= moment]
+    return max(passed, key=lambda slot: slot.at) if passed else None

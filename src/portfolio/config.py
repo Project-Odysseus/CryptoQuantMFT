@@ -17,7 +17,8 @@ import re
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from src.portfolio.allocation import ALLOCATION_METHODS
 from src.portfolio.basket import BasketSpec
@@ -29,6 +30,7 @@ from src.runtime.config import BAR_INTERVALS
 INTERVALS = tuple(BAR_INTERVALS)  # the runtime's bar lengths, so a config never asks for one it can't build
 _SLUG = re.compile(r"^[a-z0-9_]+$")
 DEFAULT_FEE_PCT = {"perp": 0.05, "spot": 0.40,  # Kraken taker, entry tier
+                   "future": 0.0,  # a listed future's cost is in ticks, charged by its adapter (src/futures/contracts.py)
                    "option": 0.03}  # Deribit: 0.03% of the underlying per option (capped at 12.5% of its price)
 
 
@@ -66,7 +68,8 @@ class InstrumentSpec:
 
     Attributes:
         id: "<venue>:<symbol>".
-        kind: "perp" or "spot".
+        kind: "perp", "spot" or "future" (a listed futures market from `config/futures_markets.csv`; its lot
+            step and smallest order are one contract, filled in from that table).
         allow_short: Defaults to True for perps and False for spot.
         max_leverage: Largest position as a multiple of this venue's equity (perps).
         fee_pct: Taker fee per side in % (research costs); defaults by kind.
@@ -100,7 +103,7 @@ class InstrumentSpec:
     @property
     def can_short(self) -> bool:
         """Whether a net short position is allowed."""
-        return self.allow_short if self.allow_short is not None else self.kind == "perp"
+        return self.allow_short if self.allow_short is not None else self.kind in ("perp", "future")
 
     @property
     def taker_fee_pct(self) -> float:
@@ -113,6 +116,33 @@ class InstrumentSpec:
         from src.portfolio.exposure_limits import base_coin
 
         return base_coin(self.symbol)
+
+
+@dataclass(frozen=True, slots=True)
+class FuturesSettings:
+    """`[futures]`: how orders for listed futures leave the book.
+
+    Attributes:
+        mode: "paper" fills each order here at the market's latest price plus its cost in ticks. "file" writes an
+            order file for the desk's system and books what its fills file reports; no order leaves this code.
+        slots: Times of day at the desk when orders are released, as ({"name", "at", "timezone"}, ...). An order
+            waits for the first slot inside its market's liquid window. Empty means 10:00 and 16:00 in Oslo.
+        max_participation: The largest order as a share of the contract's average daily volume.
+        min_daily_volume: Below this average volume (contracts a day) nothing new is opened in a contract.
+        order_dir, fills_dir: Where order files are written and fills files are read ("file" mode). Relative
+            paths are inside the book's state directory.
+        max_contracts: Optional cap on the position per market, in contracts ({"cme_usd:MES": 20}).
+        no_trade: Markets that may only be reduced.
+    """
+
+    mode: str = "paper"
+    slots: tuple[dict[str, str], ...] = ()
+    max_participation: float = 0.01
+    min_daily_volume: float = 200.0
+    order_dir: str = "orders"
+    fills_dir: str = "fills"
+    max_contracts: dict[str, int] = field(default_factory=dict)
+    no_trade: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +172,7 @@ class PortfolioConfig:
     contract_sleeves: tuple[ContractSleeveSpec, ...] = ()  # [[contract_sleeves]]: bets under a loss budget (src/portfolio/contracts.py)
     execution_policy: str = "taker"
     maker_timeout_seconds: float = 120.0
+    futures: FuturesSettings = field(default_factory=lambda: FuturesSettings())  # [futures]: only read when the book holds futures
     path: str | None = None
 
     def small_lot_cap(self, equity: float) -> float | None:
@@ -200,9 +231,58 @@ class PortfolioConfig:
 
 _PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "scale", "allocation", "allocation_lookback_days", "allocation_refit_days",
                    "small_account_equity", "small_account_max_lot_weight"}
-_TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves", "review", "baskets", "execution", "contract_sleeves"}
+_TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves", "review", "baskets", "execution", "contract_sleeves", "futures"}
 _EXECUTION_KEYS = {"policy", "maker_timeout_seconds"}
 EXECUTION_POLICIES = ("taker", "maker_first")
+
+
+def _futures_markets(errors: list[str]) -> dict[str, Any]:
+    """The futures contract table, or an empty one (with the reason added to `errors`) when it cannot be read."""
+    from src.futures.contracts import load_markets
+
+    try:
+        return load_markets()
+    except (OSError, ValueError, KeyError) as exc:
+        message = f"the futures contract table cannot be read: {exc}"
+        if message not in errors:
+            errors.append(message)
+        return {}
+
+
+def _parse_futures(table: dict[str, Any], instruments: Mapping[str, InstrumentSpec], errors: list[str]) -> FuturesSettings:
+    """`[futures]` as settings; every problem is added to `errors`."""
+    for key in sorted(set(table) - _known(FuturesSettings)):
+        errors.append(f"[futures] unknown key '{key}'; allowed: {sorted(_known(FuturesSettings))}")
+    if table.get("mode", "paper") not in ("paper", "file"):
+        errors.append("[futures] mode must be 'paper' or 'file'")
+    slots = tuple(dict(item) for item in table.get("slots", ()) or ())
+    for item in slots:
+        try:
+            hour, minute = (int(part) for part in str(item["at"]).split(":"))
+            if not item.get("name") or not (0 <= hour < 24 and 0 <= minute < 60):
+                raise ValueError
+            ZoneInfo(str(item.get("timezone", "Europe/Oslo")))
+        except (KeyError, ValueError, ZoneInfoNotFoundError):
+            errors.append(f"[futures] slot {item} needs a name, a time 'HH:MM' and, if given, a real timezone")
+    futures = {instrument_id for instrument_id, spec in instruments.items() if spec.kind == "future"}
+    caps = dict(table.get("max_contracts", {}) or {})
+    for market, cap in caps.items():
+        if market not in futures or not isinstance(cap, int) or cap < 0:
+            errors.append(f"[futures] max_contracts '{market}' must name a futures instrument of this book with a whole number")
+    no_trade = tuple(table.get("no_trade", ()) or ())
+    for market in no_trade:
+        if market not in futures:
+            errors.append(f"[futures] no_trade '{market}' is not a futures instrument of this book")
+    try:
+        participation, floor = float(table.get("max_participation", 0.01)), float(table.get("min_daily_volume", 200.0))
+        if not 0.0 < participation <= 1.0 or floor < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        errors.append("[futures] max_participation must be in (0, 1] and min_daily_volume 0 or more")
+        participation, floor = 0.01, 200.0
+    return FuturesSettings(mode=str(table.get("mode", "paper")), slots=slots, max_participation=participation, min_daily_volume=floor,
+                           order_dir=str(table.get("order_dir", "orders")), fills_dir=str(table.get("fills_dir", "fills")),
+                           max_contracts={str(market): int(cap) for market, cap in caps.items() if isinstance(cap, int)}, no_trade=tuple(str(m) for m in no_trade))
 
 
 def _known(cls: type) -> set[str]:
@@ -272,9 +352,19 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         unknown = sorted(set(table) - (_known(InstrumentSpec) - {"id"}))
         for key in unknown:
             errors.append(f"{label} unknown key '{key}'; allowed: {sorted(_known(InstrumentSpec) - {'id'})}")
-        if table.get("kind", "perp") not in ("perp", "spot"):
-            errors.append(f"{label} kind must be 'perp' or 'spot' (option contracts are added by option sleeves, not listed here)")
+        if table.get("kind", "perp") not in ("perp", "spot", "future"):
+            errors.append(f"{label} kind must be 'perp', 'spot' or 'future' (option contracts are added by option sleeves, not listed here)")
             continue
+        if table.get("kind") == "future":
+            market = _futures_markets(errors).get(instrument_id)
+            if market is None:
+                errors.append(f"{label} is not in the futures contract table (config/futures_markets.csv)")
+                continue
+            one_contract = float(market.multiplier)  # the book counts units of the underlying; one contract is `multiplier` of them
+            if table.get("lot_step", one_contract) != one_contract or table.get("min_order_size", one_contract) != one_contract:
+                errors.append(f"{label} lot_step and min_order_size come from the contract table ({one_contract:g}); leave them out")
+                continue
+            table = {**table, "lot_step": one_contract, "min_order_size": one_contract}
         if not unknown:
             instruments[instrument_id] = InstrumentSpec(id=instrument_id, **table)
     if not instruments:
@@ -423,6 +513,14 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
     if maker_timeout is not None and not 10 <= maker_timeout <= 3600:
         errors.append("[execution] maker_timeout_seconds must be between 10 and 3600 (an order still resting when the next bar closes blocks that bar's trade)")
 
+    futures = _parse_futures(dict(raw.get("futures", {}) or {}), instruments, errors)
+    venue_kinds: dict[str, set[str]] = {}
+    for spec in instruments.values():
+        venue_kinds.setdefault(spec.venue, set()).add("future" if spec.kind == "future" else "other")
+    for venue, kinds in sorted(venue_kinds.items()):
+        if len(kinds) > 1:
+            errors.append(f"venue {venue} mixes futures with other instruments; a futures ledger holds only futures")
+
     if errors:
         source = f" in {path}" if path else ""
         raise PortfolioConfigError(f"{len(errors)} problem(s){source}:\n" + "\n".join(f"  - {error}" for error in errors))
@@ -445,6 +543,7 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         contract_sleeves=tuple(contract_sleeves),
         execution_policy=str(execution.get("policy", "taker")),
         maker_timeout_seconds=float(maker_timeout),
+        futures=futures,
         path=path,
     )
 

@@ -138,7 +138,7 @@ class PortfolioRuntime:
             if missing:
                 raise RuntimeError(f"no candles yet for {missing}")
             stale = self._stale(result, now)
-            report = self.engine.run_cycle(result.bars, now=result.now, stale=stale)
+            report = self.engine.run_cycle(result.bars, now=result.now, fx=getattr(result, "fx", None), stale=stale)
         except Exception as exc:  # noqa: BLE001 - the loop must survive a bad cycle
             self.consecutive_errors += 1
             logger.exception("portfolio cycle failed")

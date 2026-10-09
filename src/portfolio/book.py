@@ -49,7 +49,10 @@ from typing import Any
 from src.portfolio.config import InstrumentSpec, PortfolioConfig
 
 VENUE_CURRENCY = {"kraken": "EUR", "kraken_futures": "USD", "deribit": "USD",  # Deribit linear options settle in USDC, counted 1:1
-                  "kalshi": "USD", "polymarket": "USD"}  # Polymarket settles in USDC, counted 1:1
+                  "kalshi": "USD", "polymarket": "USD",  # Polymarket settles in USDC, counted 1:1
+                  # Listed futures: one ledger per exchange and currency, holding only what the contracts earned
+                  "cme_usd": "USD", "cme_jpy": "JPY", "eurex_eur": "EUR", "eurex_chf": "CHF"}
+CASH_VENUE = "cash"  # where a futures book keeps its capital, in the base currency
 BINARY_VENUES = ("kalshi", "polymarket")
 ZERO = Decimal(0)
 
@@ -119,13 +122,19 @@ class PortfolioBook:
         budgets: dict[str, Decimal] = {}
         for sleeve in getattr(config, "contract_sleeves", ()):
             budgets[sleeve.venue] = budgets.get(sleeve.venue, ZERO) + _d(config.initial_equity) * _d(sleeve.budget)
-        share = (_d(config.initial_equity) - sum(budgets.values(), ZERO)) / len(venues)
+        # A futures ledger starts empty: the capital stays in the base currency (as collateral does at a fund), so
+        # only what the contracts earn or lose is exposed to the contract's currency. Its share goes to `CASH_VENUE`.
+        futures_venues = {spec.venue for spec in config.instruments.values() if spec.kind == "future"}
+        funded = [venue for venue in venues if venue not in futures_venues] + ([CASH_VENUE] if futures_venues else [])
+        share = (_d(config.initial_equity) - sum(budgets.values(), ZERO)) / len(funded)
         cash = dict(budgets)
         for venue in venues:
             currency = VENUE_CURRENCY.get(venue, config.base_currency)
             if currency not in rates:
                 raise ValueError(f"venue {venue} keeps {currency}; pass fx={{'{currency}': <{config.base_currency} per {currency}>}}")
-            cash[venue] = share / rates[currency]
+            cash[venue] = ZERO if venue in futures_venues else share / rates[currency]
+        if futures_venues:
+            cash[CASH_VENUE] = share
         return cls(base_currency=config.base_currency, instruments=dict(config.instruments), cash=cash, fx=rates)
 
     # --- updates -------------------------------------------------------------------------------------------------
@@ -253,6 +262,32 @@ class PortfolioBook:
         position.units = new_units
         position.realized_pnl += realized
         position.fees += fee
+        return realized
+
+    def roll(self, instrument: str, from_price: Decimal | float, to_price: Decimal | float, fee: Decimal | float = ZERO) -> Decimal:
+        """Move a futures position to the next contract: close at `from_price`, reopen the same units at `to_price`.
+
+        The two contracts trade at different prices, so the position's entry price and the mark move to the new
+        contract's price; what the old contract earned up to `from_price` is realised. Returns that realised P&L, in
+        the venue's currency. The size does not change, so this is not a fill.
+        """
+        spec = self._spec(instrument)
+        old, new, fee = _d(from_price), _d(to_price), _d(fee)
+        if old <= 0 or new <= 0:
+            raise ValueError(f"a roll needs positive prices (got {old} and {new})")
+        position = self.positions.setdefault(instrument, BookPosition())
+        realized = position.units * (old - position.avg_entry)
+        self.cash[spec.venue] = self.cash.get(spec.venue, ZERO) + realized - fee
+        position.realized_pnl += realized
+        position.fees += fee
+        if position.units != 0:
+            position.avg_entry = new
+        for sleeve in self.sleeves.values():
+            if sleeve.instrument == instrument:
+                if sleeve.last_price:
+                    sleeve.pnl += sleeve.units * (old - sleeve.last_price)
+                sleeve.last_price = new
+        self.marks[instrument] = new
         return realized
 
     def apply_funding(self, instrument: str, rate: Decimal | float, *, mark: Decimal | float | None = None) -> Decimal:

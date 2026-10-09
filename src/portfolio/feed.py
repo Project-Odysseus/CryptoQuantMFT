@@ -46,6 +46,7 @@ class FeedResult:
     now: datetime
     bars: dict[Key, list[Any]] = field(default_factory=dict)
     failed: dict[Key, str] = field(default_factory=dict)
+    fx: dict[str, float] | None = None  # base currency per unit of each foreign currency, when the feed has rates
 
 
 def kraken_history_loader(spec: InstrumentSpec, interval: str, *, start: datetime = PERP_HISTORY_START, cache_dir: str = "data/historical_cache") -> list[Any]:

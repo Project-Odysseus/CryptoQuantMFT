@@ -93,7 +93,7 @@ def test_defaults_fill_in_what_the_file_leaves_out() -> None:
         ({"portfolio": {"initial_equity": "10k"}}, "[portfolio] initial_equity must be a number"),
         ({"sleeve0": {"budget": "half"}}, "[[sleeves]] 'btc_ma' budget must be a number"),
         ({"risk": {"max_drawdown": 0.1, "drawdown_derisk_start": 0.2}}, "[risk] risk.drawdown_derisk_start must be above 0 and below risk.max_drawdown"),
-        ({"instruments": {"kraken:ETH/EUR": {"kind": "option"}}}, "kind must be 'perp' or 'spot'"),
+        ({"instruments": {"kraken:ETH/EUR": {"kind": "option"}}}, "kind must be 'perp', 'spot' or 'future'"),
         ({"instruments": {"BTCUSD": {"kind": "perp"}}}, 'id must be "venue:symbol"'),
         ({"sleeves": [{"id": "x", "instrument": "kraken_futures:BTC/USD"}]}, "is missing ['interval', 'strategy']"),
         ({"sleeves": []}, "no enabled sleeves"),
