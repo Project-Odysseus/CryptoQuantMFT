@@ -615,3 +615,200 @@ def require_card(name: str, hypothesis: str | None = None) -> dict[str, Any]:
     governance._append({"type": "signal_card_override", "study": f"signal_card_override:{name}", "family": hypothesis or name,  # not a trial: a record that the gate was passed by hand
                         "details": {"override": override, "verdict": details.get("verdict")}})
     return {**details, "override": override}
+
+
+# --- checks that rerun the code that builds the signal ----------------------------------------------------------------
+
+@dataclass(slots=True)
+class PipelineChecks:
+    """What rerunning a signal's own code shows.
+
+    Attributes:
+        table: One row per check with its value and whether it passes.
+        leak: True when the signal still predicts returns whose order in time was scrambled: the code lets a
+            return reach the signal that is meant to predict it.
+        hindsight: True when later data changed earlier values of the signal.
+        noise: The IC this code gets when there is nothing to find: its mean (a bias), its standard deviation and
+            the 95th percentile of its size.
+        z: The real IC in noise standard deviations above the noise mean.
+    """
+
+    table: pd.DataFrame
+    leak: bool
+    hindsight: bool
+    noise: dict[str, float]
+    z: float
+    replay: pd.DataFrame
+
+    @property
+    def ok(self) -> bool:
+        """No leak and no hindsight."""
+        return not self.leak and not self.hindsight
+
+    def __repr__(self) -> str:
+        state = "clean" if self.ok else " and ".join(name for name, bad in (("a leak", self.leak), ("hindsight", self.hindsight)) if bad)
+        return f"PipelineChecks({state}; real IC {self.z:+.1f} noise standard deviations from the noise mean {self.noise['mean']:+.3f})"
+
+
+def _pipeline_ic(signal: Data, close: Data, horizon: int, min_markets: int) -> float:
+    forward = forward_returns(close, horizon)
+    if isinstance(signal, pd.DataFrame):
+        return float(ic_by_date(signal.reindex(close.index), forward, min_markets).mean())
+    return ic(signal.reindex(close.index), forward)
+
+
+def shuffled_prices(close: Data, rng: np.random.Generator) -> Data:
+    """Prices with the same returns in a random order (the same order for every market, which keeps how they move together)."""
+    logs = np.log(close.astype(float)).ffill().bfill().to_numpy()
+    steps = np.diff(logs, axis=0)[rng.permutation(len(logs) - 1)]
+    path = np.exp(np.concatenate([logs[:1], logs[:1] + np.cumsum(steps, axis=0)]))
+    if isinstance(close, pd.DataFrame):
+        return pd.DataFrame(path, index=close.index, columns=close.columns)
+    return pd.Series(path, index=close.index, name=close.name)
+
+
+def pipeline_checks(build: Callable[[Data], Data], close: Data, *, horizon: int = 1, runs: int = 20, replay_at: Sequence[float] = (0.5, 0.7, 0.9),
+                    min_markets: int = 5, seed: int = 0, tolerance: float = 1e-9) -> PipelineChecks:
+    """Rerun the code that builds a signal, to find what the finished series cannot show.
+
+    `build(close)` returns the signal for those prices. Anything else it reads must be cut to the prices' index, so
+    that a replay on earlier data really sees less.
+
+    1. **Scrambled returns.** The price path is rebuilt with its returns in a random order and the signal is built
+       again, `runs` times. There is nothing to predict, so the IC should be near zero. A clearly positive average
+       means the code hands the signal a return it should not know. The spread of these ICs is also the noise
+       benchmark: what this code scores without skill.
+    2. **Replay.** The signal is built on the first 50%, 70% and 90% of the data and compared with the full run on
+       the same dates. Any difference means later data changed earlier values (a whole-sample average, a refit).
+
+    A plain feature passes both trivially. They matter for anything fitted: forecasts, conditional scores, regimes.
+    """
+    close = _trim(close)
+    real_signal = build(close)
+    real = _pipeline_ic(real_signal, close, horizon, min_markets)
+    rng = np.random.default_rng(seed)
+    scrambled = []
+    for _ in range(runs):
+        fake = shuffled_prices(close, rng)
+        scrambled.append(_pipeline_ic(build(fake), fake, horizon, min_markets))
+    values = np.asarray([value for value in scrambled if np.isfinite(value)], dtype=float)
+    mean, spread = (float(values.mean()), float(values.std(ddof=1))) if len(values) > 1 else (float("nan"), float("nan"))
+    error = spread / np.sqrt(len(values)) if len(values) > 1 else float("nan")
+    leak = bool(np.isfinite(error) and error > 0 and mean / error > 3.0 and mean > 0.01)
+    z = float((real - mean) / spread) if spread and np.isfinite(spread) and spread > 0 else float("nan")
+
+    rows = {}
+    full = real_signal.reindex(close.index)
+    for share in replay_at:
+        cut = int(len(close) * share)
+        early = build(close.iloc[:cut]).reindex(close.index[:cut])
+        then, now = np.asarray(early, dtype=float), np.asarray(full.iloc[:cut], dtype=float)
+        both = np.isfinite(then) & np.isfinite(now)
+        scale = np.nanmax(np.abs(now)) if np.isfinite(now).any() else 1.0
+        rows[f"first {share:.0%}"] = {"bars": cut, "largest difference": float(np.max(np.abs(then[both] - now[both])) / max(scale, 1e-12)) if both.any() else 0.0,
+                                      "values only in one run": int((np.isfinite(then) != np.isfinite(now)).sum())}
+    replay = pd.DataFrame(rows).T
+    hindsight = bool((replay["largest difference"] > tolerance).any() or (replay["values only in one run"] > 0).any())
+    table = pd.DataFrame({
+        "value": {"IC on the real data": _fmt(real), "IC on scrambled returns, mean": _fmt(mean), "IC on scrambled returns, standard deviation": _fmt(spread),
+                  "IC on scrambled returns, 95% of sizes below": _fmt(float(np.quantile(np.abs(values), 0.95)) if len(values) else float("nan")),
+                  "real IC, noise standard deviations above the noise mean": _fmt(z, 1), "replay: largest difference (share of the signal's size)": _fmt(float(replay["largest difference"].max()), 6),
+                  "replay: values present in only one run": str(int(replay["values only in one run"].sum()))},
+        "passes": {"IC on scrambled returns, mean": not leak, "replay: largest difference (share of the signal's size)": bool((replay["largest difference"] <= tolerance).all()),
+                   "replay: values present in only one run": bool((replay["values only in one run"] == 0).all())}})
+    table.index.name = "check"
+    noise = {"mean": mean, "sd": spread, "p95": float(np.quantile(np.abs(values), 0.95)) if len(values) else float("nan"), "runs": float(len(values))}
+    return PipelineChecks(table=table, leak=leak, hindsight=hindsight, noise=noise, z=z, replay=replay)
+
+
+# --- many signals at once ----------------------------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class Board:
+    """Several signals for the same market or markets, side by side.
+
+    Attributes:
+        table: One row per signal: IC, interval, placebo p, verdict, and whether its IC is above the luck threshold.
+        redundant: Groups of signals that rank the bars almost the same way; each group is one idea, not several.
+        luck_threshold: The IC the best of these signals reaches by chance 5% of the time. With many candidates the
+            best one always looks good; only above this is it more than the best of a lucky bunch.
+        cards: Each signal's card.
+    """
+
+    table: pd.DataFrame
+    redundant: list[list[str]]
+    luck_threshold: float
+    cards: dict[str, SignalCard]
+
+
+def redundant_groups(signals: Mapping[str, Data], threshold: float = 0.80) -> list[list[str]]:
+    """Groups of signals linked by a rank correlation of `threshold` or more in size (largest group first)."""
+    flat = pd.DataFrame({name: (item.stack(future_stack=True) if isinstance(item, pd.DataFrame) else item) for name, item in signals.items()})
+    linked = flat.corr(method="spearman", min_periods=30).abs()
+    parent = {name: name for name in linked.columns}
+
+    def find(name: str) -> str:
+        while parent[name] != name:
+            parent[name] = parent[parent[name]]
+            name = parent[name]
+        return name
+
+    names = list(linked.columns)
+    for i, first in enumerate(names):
+        for second in names[i + 1:]:
+            if linked.at[first, second] >= threshold:
+                parent[find(first)] = find(second)
+    groups: dict[str, list[str]] = {}
+    for name in names:
+        groups.setdefault(find(name), []).append(name)
+    return sorted((group for group in groups.values() if len(group) > 1), key=len, reverse=True)
+
+
+def luck_threshold(signals: Mapping[str, Data], forward: Data, horizon: int, *, runs: int = 200, min_markets: int = 5, seed: int = 0, level: float = 0.95) -> float:
+    """The size of IC the best of `signals` shows against returns from other dates, at the `level` quantile.
+
+    Every signal is moved by the same shift, so signals that resemble each other stay alike and do not count as
+    separate chances.
+    """
+    away = int(max(2 * horizon, 20))
+    if isinstance(forward, pd.DataFrame):
+        count = len(forward)
+        if count <= 4 * away:
+            return float("nan")
+        shifts = np.random.default_rng(seed).integers(away, count - away, size=runs)
+        best = [max(abs(float(ic_by_date(pd.DataFrame(np.roll(item.reindex(forward.index).to_numpy(), int(k), axis=0), index=forward.index, columns=item.columns), forward, min_markets).mean()))
+                    for item in signals.values()) for k in shifts]
+        return float(np.quantile(best, level))
+    frame = pd.DataFrame({**{name: item for name, item in signals.items()}, "__forward": forward}).replace([np.inf, -np.inf], np.nan).dropna()
+    count = len(frame)
+    if count <= 4 * away:
+        return float("nan")
+    b = _centred_ranks(frame["__forward"])
+    spectrum = np.fft.rfft(b)
+    every = []
+    for name in signals:
+        a = _centred_ranks(frame[name])
+        every.append(np.abs(np.fft.irfft(spectrum * np.conj(np.fft.rfft(a)), count) / np.sqrt((a @ a) * (b @ b))))
+    return float(np.quantile(np.max(every, axis=0)[away: count - away], level))
+
+
+def compare(signals: Mapping[str, Data], close: Data | None = None, *, horizon: int = 1, forward: Data | None = None, direction: Mapping[str, int] | int | None = None,
+            round_trip_bps: float | None = None, family: str = "", min_markets: int = 5, standard: Standard | None = None, ledger: bool = True, seed: int = 0) -> Board:
+    """A card for each of several candidate signals, plus what only shows when they are seen together.
+
+    Each signal costs a trial, as if its card had been run alone. `direction` is one value for all or one per name.
+    """
+    standard = standard or load_standard()
+    cards = {name: signal_card(item, close, horizons=[horizon], name=name, forward=forward, round_trip_bps=round_trip_bps, family=family, min_markets=min_markets,
+                               direction=direction.get(name) if isinstance(direction, Mapping) else direction, standard=standard, ledger=ledger, seed=seed)
+             for name, item in signals.items()}
+    trimmed = {name: _trim(item) for name, item in signals.items()}
+    target = _trim(forward) if forward is not None else forward_returns(_trim(close), horizon)
+    threshold = luck_threshold(trimmed, target, horizon, runs=standard.placebo_runs, min_markets=min_markets, seed=seed, level=standard.level)
+    rows = {name: {"IC": card.by_horizon.at["IC", horizon], "interval low": card.by_horizon.at["interval low", horizon], "interval high": card.by_horizon.at["interval high", horizon],
+                   "placebo p": card.by_horizon.at["placebo p", horizon], "independent observations": card.by_horizon.at["independent observations", horizon],
+                   "above the luck threshold": bool(abs(card.by_horizon.at["IC", horizon]) > threshold) if np.isfinite(threshold) else None, "verdict": card.verdict}
+            for name, card in cards.items()}
+    table = pd.DataFrame(rows).T.sort_values("IC", key=lambda column: column.astype(float).abs(), ascending=False)
+    table.index.name = "signal"
+    return Board(table=table, redundant=redundant_groups(trimmed, standard.redundant_above), luck_threshold=threshold, cards=cards)

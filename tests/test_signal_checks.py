@@ -246,3 +246,64 @@ def test_card_saves_a_page_tables_and_a_chart(tmp_path) -> None:
     assert (out / "card.md").read_text().startswith("# Signal card: Planted signal!") and (out / "card.png").stat().st_size > 10_000
     signal, panel_close = panel(31, strength=0.25, days=400)
     assert sc.signal_card(signal, panel_close, horizons=[1], ledger=False).save(tmp_path / "panel").joinpath("card.png").exists()
+
+
+# --- rerunning the builder, and many signals -----------------------------------------------------------------------
+
+def momentum(close: pd.Series | pd.DataFrame) -> pd.Series | pd.DataFrame:
+    return np.log(close).diff(20)
+
+
+def test_pipeline_checks_pass_a_clean_builder() -> None:
+    _returns, close = market(40)
+    result = sc.pipeline_checks(momentum, close, horizon=5, runs=12)
+    assert result.ok and not result.leak and not result.hindsight and abs(result.noise["mean"]) < 0.03 and "clean" in repr(result)
+    assert result.table.loc["IC on scrambled returns, mean", "passes"] and (result.replay["largest difference"] == 0).all()
+
+
+def test_pipeline_checks_catch_a_leak_of_the_next_return() -> None:
+    _returns, close = market(41)
+    result = sc.pipeline_checks(lambda prices: np.log(prices).diff().shift(-1) + np.log(prices).diff(20) * 0.01, close, horizon=1, runs=12)
+    assert result.leak and result.noise["mean"] > 0.5  # it "predicts" returns that were put in a random order
+    assert result.hindsight and (result.replay["values only in one run"] > 0).all()  # and each replay lacks the last value the full run has
+
+
+def test_pipeline_checks_catch_a_whole_sample_average() -> None:
+    _returns, close = market(42)
+
+    def standardised(prices: pd.Series) -> pd.Series:
+        change = np.log(prices).diff(20)
+        return (change - change.mean()) / change.std()  # the mean and the spread of the whole sample: hindsight
+
+    result = sc.pipeline_checks(standardised, close, horizon=5, runs=8)
+    assert result.hindsight and not result.leak and (result.replay["largest difference"] > 1e-6).any()
+
+
+def test_pipeline_checks_work_on_a_panel() -> None:
+    _signal, close = panel(43, strength=0.0, days=500)
+    result = sc.pipeline_checks(momentum, close, horizon=3, runs=6)
+    assert result.ok and np.isfinite(result.z)
+    mixed = sc.shuffled_prices(close, np.random.default_rng(0))
+    assert mixed.shape == close.shape and np.allclose(mixed.iloc[0], close.iloc[0])
+    assert np.allclose(np.sort(np.log(mixed).diff().iloc[1:, 0]), np.sort(np.log(close).diff().iloc[1:, 0]))  # the same returns, another order
+
+
+def test_compare_groups_copies_and_sets_a_luck_threshold() -> None:
+    returns, close = market(44)
+    good = planted(returns, 0.35, 45)
+    signals = {"good": good, "good_again": good * 2.0 + 0.001 * slow_noise(46), **{f"noise_{i}": slow_noise(600 + i) for i in range(8)}}
+    board = sc.compare(signals, close, horizon=5, round_trip_bps=2.0, ledger=False)
+    assert board.redundant == [["good", "good_again"]]
+    assert set(board.table.index[:2]) == {"good", "good_again"} and board.table.loc["good", "above the luck threshold"]
+    assert not board.table.loc[[f"noise_{i}" for i in range(8)], "above the luck threshold"].any()
+    alone = sc.shift_placebo(signals["noise_0"], sc.forward_returns(close, 5), 5)["placebo_95"]
+    assert board.luck_threshold > alone  # the best of ten needs more than one alone
+    assert board.cards["good"].verdict == "worth a strategy test" and len(board.cards) == 10
+
+
+def test_compare_on_a_panel() -> None:
+    signal, close = panel(47, strength=0.35, days=500)
+    noise, _close = panel(48, strength=0.0, days=500)
+    board = sc.compare({"knows": signal, "noise": noise}, close, horizon=3, round_trip_bps=2.0, ledger=False)
+    assert board.table.index[0] == "knows" and board.table.loc["knows", "above the luck threshold"] and not board.table.loc["noise", "above the luck threshold"]
+    assert board.redundant == []
