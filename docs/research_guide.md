@@ -7,7 +7,8 @@ Four ways in, all built on the same code:
 
 | Entry point | Use it for |
 | --- | --- |
-| `notebooks/signal_research.ipynb` | **Start here for a new signal**: feature check, strategy, backtest, scorecard, sweep and portfolio fit on the perps from 2020 |
+| `notebooks/signal_card.ipynb` | **Start here for a new signal**: the signal card, the first screen before any trading rule (see "The signal card" below) |
+| `notebooks/signal_research.ipynb` | The step after a card that is not "no evidence": strategy, backtest, scorecard, sweep and portfolio fit on the perps from 2020 |
 | `notebooks/strategy_research.ipynb` | Older playground on Kraken spot (720 candles): single backtests, sweeps, heatmaps |
 | `python scripts/research/research.py ...` | Repeatable runs that save CSVs, a markdown summary and heatmaps |
 | `python scripts/research/portfolio_backtest.py CONFIG` | A whole portfolio config: each sleeve alone, the book per allocation method, sleeve correlations |
@@ -343,6 +344,69 @@ recording_gaps()                                                            # ex
   publishes all of them.
 - Book samples are snapshots every second, not every change, which is enough for imbalance features at minute
   horizons and up.
+
+## The signal card: the first screen (2026-10-11)
+
+A strategy is a signal plus trading rules plus costs. The card looks at the signal alone and asks whether it predicts
+the return that follows, and whether that could be luck, a leak or one lucky stretch. It comes after the idea and
+its pre-registration and before any strategy test. `src/research/signal_checks.py`; worked examples in
+`notebooks/signal_card.ipynb`; the method's origin and the notes on each check in `docs/signal_checks_plan.md`.
+
+```python
+from src.research import signal_checks as sc
+
+card = sc.signal_card(signal, close, horizons=[7, 1, 30], name="funding_z", direction=1, family="H12")
+card.table      # one row per check: the number, what it is compared with, pass or fail
+card.verdict    # "worth a strategy test", "weak", "no evidence" or "short history"
+card.plot(); card.save()
+```
+
+- `signal` is what is known at each bar's close; `close` the prices on the same index. A Series is one market. A
+  DataFrame of dates by markets is a ranking, scored per date across markets.
+- Each horizon is a trial. The verdict is for the first one (or `primary=`), chosen before looking.
+- `direction` is +1 when a high signal should be followed by a high return, -1 for the opposite. Leave it out when
+  there is no view; the tests are then two-sided.
+- `forward=` in place of `close` when the return that follows is not a fixed number of bars (an afternoon after a
+  morning). The two checks that need prices are then marked as not applicable.
+- `round_trip_bps` when the market's cost is not the standard's 20 basis points.
+
+| Check | Passes when (`research/signal_standard.toml`, version 1) |
+| --- | --- |
+| IC and its interval | The 95% interval, from the independent observations, excludes zero (and has the stated sign) |
+| Placebo p | Fewer than 5% of time shifts of the signal show an IC as large |
+| IC kept 1 bar late | At least half of the IC is left when the signal is acted on one bar later |
+| Blocks with the same sign | At least 70% of calendar years (quarters on short samples), with 3 or more blocks |
+| IC without the best block, without the best market | Still the same sign |
+| Baseline IC | The trailing 20-bar return predicts less than the signal does |
+| Best bucket | The best fifth of bars beats the average by more than one round trip |
+| Independent observations | 30 or more, else "short history" and no verdict |
+
+Verdicts: **worth a strategy test** (every check that applies passes), **weak** (the interval and the placebo
+pass, something else fails), **no evidence** (either of those two fails), **short history**.
+
+Three things worth knowing when reading a card:
+
+- **Independent observations are far fewer than bars.** A slow signal against overlapping forward returns can have
+  a few hundred independent observations in 50,000 bars. Counting every bar calls most persistent noise significant;
+  the tests include that case.
+- **A ranking can pass by dates and fail the placebo.** That means it predicts as well at any other date: it favours
+  the same markets throughout and those did better, a fixed tilt and not timing. The card then says so, and shows the
+  IC of the signal measured against each market's own history.
+- **The card is a screen at the 5% level, not proof.** A few noise signals in a hundred get the top verdict. That is
+  why every card is written to the trial ledger and why the strategy test, the frozen window and paper come after.
+
+Two more tools in the same module:
+
+- `sc.compare({name: signal, ...}, close, horizon=7)`: a card per candidate (each costs a trial), the groups that are
+  the same idea (`board.redundant`), and the IC the best of the bunch reaches by luck (`board.luck_threshold`).
+- `sc.pipeline_checks(build, close, horizon=5)` for anything fitted: `build(prices)` is rebuilt on prices whose
+  returns were put in a random order (a positive IC there is a leak, and its spread is what the code scores without
+  skill), and on the first 50%, 70% and 90% of the data (any difference from the full run is hindsight).
+
+**The gate.** A strategy test starts with `sc.require_card("funding_z", "H12")`. It raises when there is no card or
+the card says "no evidence" or "short history". The owner can override by writing a line
+`SIGNAL CARD OVERRIDE: <reason>` into the hypothesis's pre-registration before the test; the use of an override is
+recorded in the ledger.
 
 ## From a hypothesis to a report: the standard path (2026-10-03)
 

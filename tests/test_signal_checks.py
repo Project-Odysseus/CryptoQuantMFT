@@ -161,7 +161,8 @@ def test_forward_returns_can_be_given_directly() -> None:
     morning = pd.Series(rng.normal(0.0, 0.01, 600), index=days)
     afternoon = 0.4 * morning + pd.Series(rng.normal(0.0, 0.01, 600), index=days)
     card = sc.signal_card(morning, forward=afternoon, name="morning", direction=1, round_trip_bps=5.0, ledger=False)
-    assert card.table.loc["IC", "passes"] and card.table.loc["baseline IC", "passes"] is None and card.verdict == "weak"  # no prices: the baseline is not checked
+    assert card.table.loc["IC", "passes"] and card.table.loc["baseline IC", "passes"] is None and card.table.loc["IC kept 1 bar late", "passes"] is None
+    assert card.verdict == "worth a strategy test" and "not applicable here: IC kept 1 bar late, baseline IC" in card.reason  # no prices: two checks cannot apply
     with pytest.raises(ValueError, match="one of them"):
         sc.signal_card(morning, ledger=False)
     with pytest.raises(ValueError, match="primary"):
@@ -307,3 +308,17 @@ def test_compare_on_a_panel() -> None:
     board = sc.compare({"knows": signal, "noise": noise}, close, horizon=3, round_trip_bps=2.0, ledger=False)
     assert board.table.index[0] == "knows" and board.table.loc["knows", "above the luck threshold"] and not board.table.loc["noise", "above the luck threshold"]
     assert board.redundant == []
+
+
+def test_a_fixed_tilt_between_markets_is_named_as_such() -> None:
+    """Some markets always score high and happened to rise more: a ranking with no timing in it."""
+    days, markets = 900, 12
+    index = pd.date_range("2021-01-01", periods=days, freq="D")
+    rng = np.random.default_rng(50)
+    drift = np.linspace(-0.004, 0.004, markets)
+    returns = pd.DataFrame(drift + rng.normal(0.0, 0.02, (days, markets)), index=index, columns=[f"m{i}" for i in range(markets)])
+    signal = pd.DataFrame(np.arange(markets) + rng.normal(0.0, 0.5, (days, markets)), index=index, columns=returns.columns)
+    card = sc.signal_card(signal, np.exp(returns.cumsum()), horizons=[5], round_trip_bps=2.0, ledger=False)
+    assert card.table.loc["IC", "passes"] and not card.table.loc["placebo p", "passes"]  # dates say yes, the placebo says the date does not matter
+    assert card.verdict == "no evidence" and "fixed tilt" in card.reason
+    assert abs(float(card.table.loc["IC of the signal against each market's own history", "value"])) < 0.03

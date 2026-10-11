@@ -185,6 +185,34 @@ then C4 and C5. C1 to C3 with C6 is the useful core and is about three days.
 - With few independent observations no check can pass. The card says "short history" in that case instead of
   giving a verdict.
 
+## Built (2026-10-11)
+
+All seven steps: `src/research/signal_checks.py` (`signal_card`, `pipeline_checks`, `compare`, `require_card`),
+`research/signal_standard.toml` (version 1), `tests/test_signal_checks.py` (26 tests on synthetic data with known
+answers), `notebooks/signal_card.ipynb`, the section "The signal card" in `docs/research_guide.md`, and
+`scripts/research/signal_card_check.py` with its result in `docs/research_log.md`.
+
+What changed from the plan while building:
+
+- **A fixed tilt is named.** For a ranking of markets the card also reports the placebos' average and the IC of the
+  signal against each market's own history, and says "a fixed tilt, not timing" when the ranking does as well at
+  other dates. This came out of the check on the taker-buy basket.
+- **Checks that cannot apply do not count against a signal.** With `forward=` given there are no prices, so acting
+  a bar late and the trailing-return baseline are left blank and named in the reason.
+- **The scrambled-returns run is both the leak test and the noise benchmark.** One procedure gives the IC the code
+  scores when there is nothing to find, and flags a leak when that IC is clearly positive.
+- **Every circular shift is computed at once** for one market, so its placebo is exact, not a sample of 500.
+
+Known limits:
+
+- **"Without the best block" has little power.** The rest only has to keep the IC's sign, and noise does that half
+  the time. A stricter mark (keep half the size, as the delay check does) would be version 2 of the standard; it is
+  the owner's call.
+- **The card is at the 5% level.** About 3% of persistent noise signals get the top verdict in the tests.
+- **A ranking card takes several seconds** on 2,000 dates by 120 markets (332 cross-sections are ranked).
+- **The example notebook is committed without its outputs**: the notebook library is not installed in the
+  `CryptoArb` environment, so its cells were run as a script to check them.
+
 ## Decisions (owner, 2026-10-11)
 
 1. **The pass thresholds in the table above are accepted** as the first version of

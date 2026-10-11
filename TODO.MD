@@ -203,40 +203,25 @@ direction is in `aspirations.md`.
 - [ ] The rest of the review, after weeks of fills: slippage vs decision price, trade durations, alpha decay
 - [x] Strategy design notes for options, options + perps and spot: `docs/options_plan.md`, section 8 (2026-09-26). Next from it: the tail-hedge vs lower-scale study and the spot-vs-perp venue rule for long holds
 
-## 5b. Statistical checks for signals, taken from QuantTAA (plan: `docs/signal_checks_plan.md`; written 2026-10-11; nothing started)
+## 5b. Statistical checks for signals, taken from QuantTAA (plan: `docs/signal_checks_plan.md`; built 2026-10-11)
 
-**Goal:** every new signal gets the same first screen, from one call in a notebook, before any trading rule is
-written. The checks are the ones QuantTAA's IC audit used; the plan has the notes on each and what exists here.
-
-Missing here, to add (tier 1: from the signal and the price series alone):
-- [ ] Effective sample size for an IC of two autocorrelated series, and its 95% interval (Fisher transform)
-- [ ] Non-overlapping IC averaged over all h starting points
-- [ ] Hit rate and positive-minus-negative spread with a Newey-West t-statistic (h - 1 lags)
-- [ ] Delay test: the IC with the signal delayed by 1 to k bars
-- [ ] Placebo on the signal: permutations and circular shifts, with a p-value
-- [ ] Rolling IC (IC by year exists)
-- [ ] Concentration: the result without the best market and without the best year
-- [ ] Naive baseline for a signal: the sign of the trailing return
-- [ ] Expanding (point-in-time) buckets in place of whole-sample quantiles
-- [ ] Cross-sectional IC per date as a reusable series, with its mean tested by Newey-West
-
-Missing here, to add (tier 2: needs the function that builds the signal):
-- [ ] Placebo through the whole pipeline: rerun on a target shuffled in time (finds leaks in fitted models)
-- [ ] Noise benchmark: the pipeline on synthetic random walks; the IC of no skill, its spread, the best of N
-- [ ] Replay: scores as of earlier dates equal the full run's
-
-Missing here, to add (many signals at once):
-- [ ] Distribution of single-signal ICs and the best-of-N luck threshold
-- [ ] Redundancy groups: signals with a rank correlation of 0.8 or more count as one
-
-Build steps (sizes and order in the plan):
-- [ ] C1 `src/research/signal_checks.py`, tier 1 statistics; C2 tests on synthetic data with known answers
-- [ ] C3 `signal_card(...)`: table, verdict against `research/signal_standard.toml`, plots, ledger entry
-- [ ] C6 `notebooks/signal_card.ipynb` and a section in `docs/research_guide.md`
-- [ ] C7 Run it on three signals whose answer is known (taker flow, H6, H10) and compare with the research log
-- [ ] C4 `pipeline_checks(...)`; C5 `compare(...)`
-- [x] Owner (2026-10-11): the pass thresholds in the plan are accepted; a card's "no evidence" blocks the strategy
-      test unless an override with its reason is written into the pre-registration first
+Every new signal gets the same first screen from one call in a notebook, before any trading rule is written.
+Guide: "The signal card" in `docs/research_guide.md`; examples in `notebooks/signal_card.ipynb`.
+- [x] `src/research/signal_checks.py`: `signal_card` (IC with effective sample size and interval, non-overlapping
+      IC, hit rate and spread with Newey-West errors, time-shift placebo, delay, rolling IC and IC by block,
+      without the best block and market, trailing-return baseline, point-in-time buckets against a round trip),
+      for one market or a ranking of markets
+- [x] `pipeline_checks` (scrambled returns as leak test and noise benchmark; replay) and `compare` (a card per
+      candidate, redundancy groups, the luck threshold for the best of N)
+- [x] `research/signal_standard.toml` version 1, accepted by the owner; `require_card` blocks a strategy test on
+      "no evidence" unless the pre-registration has a written override
+- [x] Checked on five known signals (`scripts/research/signal_card_check.py`): four agree with the research log;
+      the taker-buy ranking turns out to be a fixed tilt between coins, not timing (research log, 2026-10-11)
+- [ ] Use it: the next H-numbered study starts with a card and calls `require_card` in its script
+- [ ] Owner: version 2 of the standard? "Without the best block" only asks for the same sign, which noise gives
+      half the time
+- [ ] Lead from the check: a slow taker-buy basket (long average, monthly rebalance); needs a pre-registration
+- [ ] Install `nbformat`/`nbconvert` in `CryptoArb` if notebooks should be committed with their outputs
 
 ## 6. Options (plan: `docs/options_plan.md`)
 

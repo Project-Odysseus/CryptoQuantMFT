@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import tomllib
+import warnings
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -246,13 +247,27 @@ def ic_by_block(signal: pd.Series, forward: pd.Series, horizon: int = 1, block: 
 
 # --- cross-section: a ranking of markets on each date ----------------------------------------------------------------
 
+def _row_ic(signal: np.ndarray, forward: np.ndarray, min_markets: int) -> np.ndarray:
+    """Rank correlation along each row of two arrays (dates by markets), over the markets both have."""
+    from scipy.stats import rankdata
+
+    both = np.isfinite(signal) & np.isfinite(forward)
+    count = both.sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # a date with no market at all has no mean: it comes out as NaN, as intended
+        a = rankdata(np.where(both, signal, np.nan), axis=1, nan_policy="omit")
+        b = rankdata(np.where(both, forward, np.nan), axis=1, nan_policy="omit")
+        a, b = a - np.nanmean(a, axis=1, keepdims=True), b - np.nanmean(b, axis=1, keepdims=True)
+        top = np.nansum(a * b, axis=1)
+        scale = np.sqrt(np.nansum(a * a, axis=1) * np.nansum(b * b, axis=1))
+        out = np.where(scale > 0, top / scale, np.nan)
+    return np.where(count >= min_markets, out, np.nan)
+
+
 def ic_by_date(signal: pd.DataFrame, forward: pd.DataFrame, min_markets: int = 5) -> pd.Series:
     """Per date: the rank correlation across markets between the signal and the forward return."""
-    both = signal.notna() & forward.notna()
-    a, b = signal.where(both).rank(axis=1), forward.where(both).rank(axis=1)
-    a, b = a.sub(a.mean(axis=1), axis=0), b.sub(b.mean(axis=1), axis=0)
-    scale = np.sqrt((a**2).sum(axis=1) * (b**2).sum(axis=1))
-    return ((a * b).sum(axis=1) / scale.where(scale > 0)).where(both.sum(axis=1) >= min_markets).rename("ic")
+    forward = forward.reindex(index=signal.index, columns=signal.columns)
+    return pd.Series(_row_ic(signal.to_numpy(dtype=float), forward.to_numpy(dtype=float), min_markets), index=signal.index, name="ic")
 
 
 def top_minus_rest(signal: pd.DataFrame, forward: pd.DataFrame, buckets: int = 5, min_markets: int = 5) -> pd.DataFrame:
@@ -278,6 +293,9 @@ class SignalCard:
         by_horizon: The same values for every horizon asked for, one column each.
         verdict, reason: The reading at the primary horizon, and why in one line.
         details: The series behind the plots: the IC by delay, by block and rolling, bucket edges, per-market ICs.
+
+    A check that cannot apply (no prices given, too few markets) is left blank and named in the reason; it does not
+    count against the signal.
     """
 
     name: str
@@ -406,7 +424,8 @@ def _checks_one(signal: pd.Series, forward: pd.Series, close: pd.Series | None, 
     passes = {"independent observations": bool(n_eff >= standard.min_independent),
               "IC": bool(np.isfinite(low) and (low > 0 or high < 0) and right_way),
               "placebo p": bool(np.isfinite(placebo["p"]) and placebo["p"] < standard.placebo_p),
-              f"IC kept {standard.delay_bars} bar late": bool(np.isfinite(kept) and kept >= standard.delay_keep),
+              # With the forward return given directly, one row later is another event, not the same trade a bar late
+              f"IC kept {standard.delay_bars} bar late": bool(np.isfinite(kept) and kept >= standard.delay_keep) if close is not None else None,
               "blocks with the same sign": bool(len(blocks) >= standard.min_blocks and same >= standard.stable_share),
               "IC without the best block": _same_sign(without, value),
               "baseline IC": bool(abs(value) > abs(baseline)) if np.isfinite(baseline) and np.isfinite(value) else None,
@@ -431,9 +450,15 @@ def _checks_panel(signal: pd.DataFrame, forward: pd.DataFrame, close: pd.DataFra
     count, away = len(signal), int(max(2 * horizon, 20))
     rng = np.random.default_rng(seed)
     shifts = rng.integers(away, max(away + 1, count - away), size=standard.placebo_runs) if count > 4 * away else np.array([], dtype=int)
-    placebos = np.array([abs(float(ic_by_date(pd.DataFrame(np.roll(signal.to_numpy(), int(k), axis=0), index=signal.index, columns=signal.columns), forward, min_markets).mean()))
-                         for k in shifts])
+    grid, ahead = signal.to_numpy(dtype=float), forward.reindex(index=signal.index, columns=signal.columns).to_numpy(dtype=float)
+    with np.errstate(invalid="ignore"):
+        shifted = np.array([float(np.nanmean(_row_ic(np.roll(grid, int(k), axis=0), ahead, min_markets))) for k in shifts])
+    placebos = np.abs(shifted)
     p = float(np.mean(placebos >= abs(mean))) if len(placebos) else float("nan")
+    # A ranking that barely changes predicts as well at any date: then what it has is which markets it favours,
+    # not when. Measured two ways: the placebos' own average, and the signal against each market's own history.
+    own_history = signal - signal.expanding(min_periods=max(min(len(signal) // 5, 60), 10)).mean()
+    against_own = float(ic_by_date(own_history, forward, min_markets).mean())
     placebo_95 = float(np.quantile(placebos, 0.95)) if len(placebos) else float("nan")
 
     delays = pd.Series({delay: float(ic_by_date(signal.shift(delay), forward, min_markets).mean()) for delay in sorted({0, standard.delay_bars, 2, 3, 5, 10})}, name="ic")
@@ -443,7 +468,9 @@ def _checks_panel(signal: pd.DataFrame, forward: pd.DataFrame, close: pd.DataFra
     blocks = grouped.mean()[grouped.count() >= max(20, 3 * horizon)].rename("ic")
     same = float((np.sign(blocks) == sign).mean()) if len(blocks) else float("nan")
     without_block = float(series[labels != (blocks * sign).idxmax()].mean()) if len(blocks) >= 2 else float("nan")
-    per_market = pd.Series({market: float(ic_by_date(signal.drop(columns=market), forward.drop(columns=market), min_markets).mean()) for market in signal.columns}) if signal.shape[1] > min_markets else pd.Series(dtype=float)
+    keep = ~np.eye(signal.shape[1], dtype=bool)
+    per_market = (pd.Series({market: float(np.nanmean(_row_ic(grid[:, keep[position]], ahead[:, keep[position]], min_markets))) for position, market in enumerate(signal.columns)})
+                  if signal.shape[1] > min_markets else pd.Series(dtype=float))
     without_market = float((per_market * sign).min() * sign) if len(per_market) else float("nan")
     groups = top_minus_rest(signal, forward, standard.buckets, min_markets).dropna()
     top, bottom = (float(groups["top"].mean() * BPS), float(groups["bottom"].mean() * BPS)) if len(groups) else (float("nan"), float("nan"))
@@ -455,7 +482,9 @@ def _checks_panel(signal: pd.DataFrame, forward: pd.DataFrame, close: pd.DataFra
         baseline = float(ic_by_date(np.log(close.astype(float)).diff(standard.baseline_lookback), forward, min_markets).mean())
     values = {"bars": len(series), "independent observations": n_eff, "IC": mean, "interval low": low, "interval high": high,
               "IC on non-overlapping bars": float(np.mean([series.iloc[start::horizon].mean() for start in range(max(horizon, 1))])) if len(series) else float("nan"),
-              "placebo p": p, "placebo 95%": placebo_95, "hit rate": float((spread * sign > 0).mean()) if len(spread) else float("nan"),
+              "placebo p": p, "placebo 95%": placebo_95, "placebo mean": float(shifted.mean()) if len(shifted) else float("nan"),
+              "IC of the signal against each market's own history": against_own,
+              "hit rate": float((spread * sign > 0).mean()) if len(spread) else float("nan"),
               "spread bps": float(spread_mean * BPS) if np.isfinite(spread_mean) else float("nan"),
               "spread t": float(spread_mean / spread_error) if spread_error and np.isfinite(spread_error) else float("nan"),
               f"IC kept {standard.delay_bars} bar late": kept, "blocks": len(blocks), "blocks with the same sign": same,
@@ -464,7 +493,7 @@ def _checks_panel(signal: pd.DataFrame, forward: pd.DataFrame, close: pd.DataFra
     passes = {"independent observations": bool(n_eff >= standard.min_independent),
               "IC": bool(np.isfinite(low) and (low > 0 or high < 0) and right_way),
               "placebo p": bool(np.isfinite(p) and p < standard.placebo_p),
-              f"IC kept {standard.delay_bars} bar late": bool(np.isfinite(kept) and kept >= standard.delay_keep),
+              f"IC kept {standard.delay_bars} bar late": bool(np.isfinite(kept) and kept >= standard.delay_keep) if close is not None else None,
               "blocks with the same sign": bool(len(blocks) >= standard.min_blocks and same >= standard.stable_share),
               "IC without the best block": _same_sign(without_block, mean),
               "IC without the best market": _same_sign(without_market, mean) if len(per_market) else None,
@@ -489,12 +518,16 @@ def _verdict(values: Mapping[str, Any], passes: Mapping[str, Any], standard: Sta
     not_run = [check for check, ok in passes.items() if ok is None]
     if not passes["IC"] or not passes["placebo p"]:
         wrong = direction is not None and np.isfinite(values["IC"]) and np.sign(values["IC"]) != np.sign(direction)
-        why = "the IC has the opposite sign to the one stated" if wrong else "the IC is not distinguishable from zero or from time-shifted placebos"
+        tilt = values.get("placebo mean")
+        fixed = passes["IC"] and tilt is not None and np.isfinite(tilt) and tilt * values["IC"] > 0 and abs(tilt) >= 0.5 * abs(values["IC"])
+        why = ("the IC has the opposite sign to the one stated" if wrong
+               else "the ranking predicts as well at other dates as at the right one: it favours the same markets throughout (a fixed tilt), it does not time them" if fixed
+               else "the IC is not distinguishable from zero or from time-shifted placebos")
         return "no evidence", f"{why} (IC {values['IC']:+.3f}, interval {values['interval low']:+.3f} to {values['interval high']:+.3f}, placebo p {values['placebo p']:.2f})"
-    if failed or not_run:
-        parts = ([f"fails: {', '.join(failed)}"] if failed else []) + ([f"not checked: {', '.join(not_run)}"] if not_run else [])
-        return "weak", f"distinguishable from luck (IC {values['IC']:+.3f}, placebo p {values['placebo p']:.2f}), but " + "; ".join(parts)
-    return "worth a strategy test", f"every check passes (IC {values['IC']:+.3f}, interval {values['interval low']:+.3f} to {values['interval high']:+.3f})"
+    skipped = f"; not applicable here: {', '.join(not_run)}" if not_run else ""
+    if failed:
+        return "weak", f"distinguishable from luck (IC {values['IC']:+.3f}, placebo p {values['placebo p']:.2f}), but fails: {', '.join(failed)}{skipped}"
+    return "worth a strategy test", f"every check that applies passes (IC {values['IC']:+.3f}, interval {values['interval low']:+.3f} to {values['interval high']:+.3f}){skipped}"
 
 
 def _fingerprint(name: str, signal: Data, target: Data, horizons: Sequence[int], standard: Standard) -> str:
@@ -543,6 +576,10 @@ def signal_card(signal: Data, close: Data | None = None, *, horizons: Sequence[i
         raise ValueError("horizons are whole bars of 1 or more, and the primary horizon must be one of them")
     signal, close, forward = _trim(signal), _trim(close), _trim(forward)
     panel = isinstance(signal, pd.DataFrame)
+    if panel:  # markets the signal never covers (outside the universe throughout) are not part of the ranking
+        covered = signal.columns[signal.notna().any()]
+        signal = signal[covered]
+        close, forward = (close[covered] if close is not None else None), (forward[covered] if forward is not None else None)
     cost = float(round_trip_bps) if round_trip_bps is not None else standard.round_trip_bps
     columns: dict[int, dict[str, Any]] = {}
     kept: tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None = None
@@ -716,6 +753,7 @@ def pipeline_checks(build: Callable[[Data], Data], close: Data, *, horizon: int 
                   "replay: values present in only one run": str(int(replay["values only in one run"].sum()))},
         "passes": {"IC on scrambled returns, mean": not leak, "replay: largest difference (share of the signal's size)": bool((replay["largest difference"] <= tolerance).all()),
                    "replay: values present in only one run": bool((replay["values only in one run"] == 0).all())}})
+    table["passes"] = table["passes"].astype(object).where(table["passes"].notna(), None)
     table.index.name = "check"
     noise = {"mean": mean, "sd": spread, "p95": float(np.quantile(np.abs(values), 0.95)) if len(values) else float("nan"), "runs": float(len(values))}
     return PipelineChecks(table=table, leak=leak, hindsight=hindsight, noise=noise, z=z, replay=replay)
@@ -776,8 +814,10 @@ def luck_threshold(signals: Mapping[str, Data], forward: Data, horizon: int, *, 
         if count <= 4 * away:
             return float("nan")
         shifts = np.random.default_rng(seed).integers(away, count - away, size=runs)
-        best = [max(abs(float(ic_by_date(pd.DataFrame(np.roll(item.reindex(forward.index).to_numpy(), int(k), axis=0), index=forward.index, columns=item.columns), forward, min_markets).mean()))
-                    for item in signals.values()) for k in shifts]
+        ahead = forward.to_numpy(dtype=float)
+        grids = [item.reindex(index=forward.index, columns=forward.columns).to_numpy(dtype=float) for item in signals.values()]
+        with np.errstate(invalid="ignore"):
+            best = [max(abs(float(np.nanmean(_row_ic(np.roll(grid, int(k), axis=0), ahead, min_markets)))) for grid in grids) for k in shifts]
         return float(np.quantile(best, level))
     frame = pd.DataFrame({**{name: item for name, item in signals.items()}, "__forward": forward}).replace([np.inf, -np.inf], np.nan).dropna()
     count = len(frame)

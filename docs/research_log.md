@@ -6,6 +6,38 @@ accident.
 
 ---
 
+## 2026-10-11: The signal card, checked against signals whose answer was known
+
+The signal card (`src/research/signal_checks.py`, the checks of QuantTAA's IC audit adapted to bars and costs) run
+on five known signals, development data only. `python scripts/research/signal_card_check.py`; 5 cards logged
+(family `signal_card_check`).
+
+| Signal | IC | Interval | Placebo p | Card | Research log |
+| --- | --- | --- | --- | --- | --- |
+| Coins ranked by minus 7-day funding, 7 days ahead | +0.027 | +0.003 to +0.051 | 0.27 | no evidence | H6: inconclusive |
+| Coins ranked by 7-day taker-buy share, 7 days ahead | +0.054 | +0.030 to +0.077 | 0.72 | no evidence: a fixed tilt | In the paper book |
+| Coins ranked by 30-day return, 7 days ahead | -0.002 | -0.030 to +0.027 | 0.95 | no evidence | Sign chosen in-sample |
+| BTC morning move against the afternoon (H10) | +0.077 | +0.022 to +0.132 | 0.01 | weak: best bucket 6 bp against an 11 bp round trip | H10: there before costs, not after |
+| ETH morning move against the afternoon (H10) | +0.048 | -0.007 to +0.103 | 0.08 | no evidence | H10: weaker than BTC |
+
+Four of five agree with what the studies concluded. The fifth is a finding:
+
+- **The taker-buy ranking predicts as well at any other date as at the right one.** The time-shifted placebos
+  average an IC of +0.066, above the real +0.054, and are positive in every shift. The share measured against each
+  coin's own history up to that day has an IC of -0.016. So what predicts is which coins have a high taker-buy share
+  on average, not when a coin's share is high. Part of the placebo's size may be returns causing a later high share
+  (a shift also places later values before earlier returns), but the own-history figure uses the past only and says
+  the same.
+- **What that means for the basket in the paper book.** Its record is a bet on a slowly changing set of about thirty
+  coins, which is far fewer independent observations than its 1,400 days suggest. The 2024-10 to 2025-12 holdout
+  result (2026-10-03 entry) still stands as evidence that the tilt persisted. The weekly re-ranking, which is where
+  the basket's costs come from, is not shown to add anything.
+- **Lead, not tested:** a slow version of the basket (a long average of the share, rebalanced monthly) should keep
+  most of the return at a fraction of the turnover. It needs its own pre-registration.
+
+On noise the card behaves as designed: of 200 persistent noise signals 95% came out "no evidence", 3% "worth a
+strategy test" and 2% "weak".
+
 ## 2026-10-09: H11, trend, carry and relative momentum on equity index futures and currencies: inconclusive
 
 The first test outside crypto, for the fund pilot (`docs/multi_asset_plan.md`). 12 equity indices and 9 currencies,
