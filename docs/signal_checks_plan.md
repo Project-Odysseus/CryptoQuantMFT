@@ -135,7 +135,8 @@ adjusted after seeing a result. Proposed defaults, to be agreed before the first
 | Sample | At least 30 independent observations at the horizon, else "short history" and no verdict |
 
 Verdict: "worth a strategy test" when all pass, "weak" when the interval and the placebo pass but another fails,
-"no evidence" otherwise. A change to the file is a new version, recorded like a pre-registration.
+"no evidence" otherwise. A change to the file is a new version, recorded like a pre-registration. "No evidence"
+blocks the strategy test unless an override with its reason is written into the pre-registration first.
 
 ### Where it sits in the process
 
@@ -184,9 +185,12 @@ then C4 and C5. C1 to C3 with C6 is the useful core and is about three days.
 - With few independent observations no check can pass. The card says "short history" in that case instead of
   giving a verdict.
 
-## Open points for the owner
+## Decisions (owner, 2026-10-11)
 
-1. The pass thresholds in the table above: accept them, or change them before the first card is run.
-2. Whether a card's "no evidence" should block a pre-registered strategy test, or only be reported next to it.
-3. Whether the same card should also be offered to QuantTAA later. It could, since tier 1 needs only two series,
-   but the two projects do not share code today.
+1. **The pass thresholds in the table above are accepted** as the first version of
+   `research/signal_standard.toml`.
+2. **A card's "no evidence" blocks the strategy test.** An override is possible, but it has to be written into the
+   pre-registration with the reason before the strategy test is run, and it is logged in the trial ledger.
+3. Open: whether the same card should later be offered to QuantTAA. Tier 1 needs only two series, but the two
+   projects do not share code today. QuantTAA's own missing safeguards were written to its `docs/TODO.md` on
+   2026-10-11 (section "Statistical safeguards the evaluation lacks").

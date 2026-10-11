@@ -235,7 +235,8 @@ Build steps (sizes and order in the plan):
 - [ ] C6 `notebooks/signal_card.ipynb` and a section in `docs/research_guide.md`
 - [ ] C7 Run it on three signals whose answer is known (taker flow, H6, H10) and compare with the research log
 - [ ] C4 `pipeline_checks(...)`; C5 `compare(...)`
-- [ ] Owner: agree the pass thresholds before the first card is run (table in the plan)
+- [x] Owner (2026-10-11): the pass thresholds in the plan are accepted; a card's "no evidence" blocks the strategy
+      test unless an override with its reason is written into the pre-registration first
 
 ## 6. Options (plan: `docs/options_plan.md`)
 
