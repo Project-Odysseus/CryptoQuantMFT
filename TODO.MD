@@ -218,8 +218,8 @@ Guide: "The signal card" in `docs/research_guide.md`; examples in `notebooks/sig
 - [x] Checked on five known signals (`scripts/research/signal_card_check.py`): four agree with the research log;
       the taker-buy ranking turns out to be a fixed tilt between coins, not timing (research log, 2026-10-11)
 - [ ] Use it: the next H-numbered study starts with a card and calls `require_card` in its script
-- [ ] Owner: version 2 of the standard? "Without the best block" only asks for the same sign, which noise gives
-      half the time
+- [x] Version 2 of the standard (owner, 2026-10-12): without its best block the IC must keep its sign and half
+      its size (research log, 2026-10-12)
 - [ ] Lead from the check: a slow taker-buy basket (long average, monthly rebalance); needs a pre-registration
 - [ ] Install `nbformat`/`nbconvert` in `CryptoArb` if notebooks should be committed with their outputs
 

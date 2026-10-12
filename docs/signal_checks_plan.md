@@ -205,9 +205,11 @@ What changed from the plan while building:
 
 Known limits:
 
-- **"Without the best block" has little power.** The rest only has to keep the IC's sign, and noise does that half
-  the time. A stricter mark (keep half the size, as the delay check does) would be version 2 of the standard; it is
-  the owner's call.
+- **"Without the best block" had little power in version 1.** The rest only had to keep the IC's sign, and noise
+  does that half the time. Version 2 of the standard (owner, 2026-10-12) asks for half of the IC's size as well. On
+  its own the check now passes 24% of noise, down from 49%. The share of noise that reaches the top verdict barely
+  moves (2.0% from 2.3% of 300 draws): noise that gets through the interval and the placebo has an IC large enough
+  to survive the loss of one block. What the stricter mark catches is an effect that sits mostly in one year.
 - **The card is at the 5% level.** About 3% of persistent noise signals get the top verdict in the tests.
 - **A ranking card takes several seconds** on 2,000 dates by 120 markets (332 cross-sections are ranked).
 - **The example notebook is committed without its outputs**: the notebook library is not installed in the

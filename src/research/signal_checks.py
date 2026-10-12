@@ -49,13 +49,14 @@ Data = pd.Series | pd.DataFrame
 class Standard:
     """The pass marks (see `research/signal_standard.toml` for what each means)."""
 
-    version: int = 1
+    version: int = 2
     level: float = 0.95
     placebo_p: float = 0.05
     delay_bars: int = 1
     delay_keep: float = 0.5
     stable_share: float = 0.70
     min_blocks: int = 3
+    best_block_keep: float = 0.5
     min_independent: float = 30.0
     round_trip_bps: float = 20.0
     buckets: int = 5
@@ -386,6 +387,11 @@ def _same_sign(value: float, reference: float) -> bool:
     return bool(np.isfinite(value) and np.isfinite(reference) and value * reference > 0)
 
 
+def _keeps(value: float, reference: float, share: float) -> bool:
+    """True when `value` has the sign of `reference` and at least `share` of its size."""
+    return _same_sign(value, reference) and abs(value) >= share * abs(reference)
+
+
 def _checks_one(signal: pd.Series, forward: pd.Series, close: pd.Series | None, horizon: int, standard: Standard, direction: int | None,
                 round_trip_bps: float, block: str | None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """(values, passes, details) of every check for one market at one horizon."""
@@ -427,7 +433,7 @@ def _checks_one(signal: pd.Series, forward: pd.Series, close: pd.Series | None, 
               # With the forward return given directly, one row later is another event, not the same trade a bar late
               f"IC kept {standard.delay_bars} bar late": bool(np.isfinite(kept) and kept >= standard.delay_keep) if close is not None else None,
               "blocks with the same sign": bool(len(blocks) >= standard.min_blocks and same >= standard.stable_share),
-              "IC without the best block": _same_sign(without, value),
+              "IC without the best block": _keeps(without, value, standard.best_block_keep),
               "baseline IC": bool(abs(value) > abs(baseline)) if np.isfinite(baseline) and np.isfinite(value) else None,
               "best bucket bps": bool(np.isfinite(edge) and edge > round_trip_bps)}
     details = {"delay": delays, "blocks": blocks, "buckets": edges, "placebo_95": placebo["placebo_95"],
@@ -495,7 +501,7 @@ def _checks_panel(signal: pd.DataFrame, forward: pd.DataFrame, close: pd.DataFra
               "placebo p": bool(np.isfinite(p) and p < standard.placebo_p),
               f"IC kept {standard.delay_bars} bar late": bool(np.isfinite(kept) and kept >= standard.delay_keep) if close is not None else None,
               "blocks with the same sign": bool(len(blocks) >= standard.min_blocks and same >= standard.stable_share),
-              "IC without the best block": _same_sign(without_block, mean),
+              "IC without the best block": _keeps(without_block, mean, standard.best_block_keep),
               "IC without the best market": _same_sign(without_market, mean) if len(per_market) else None,
               "baseline IC": bool(abs(mean) > abs(baseline)) if np.isfinite(baseline) and np.isfinite(mean) else None,
               "best bucket bps": bool(np.isfinite(edge) and edge > round_trip_bps)}
@@ -507,7 +513,7 @@ def _checks_panel(signal: pd.DataFrame, forward: pd.DataFrame, close: pd.DataFra
 
 
 COMPARED = {"independent observations": "at least {min_independent:g}", "IC": "{level:.0%} interval excludes zero", "placebo p": "below {placebo_p:g}",
-            "blocks with the same sign": "at least {stable_share:.0%} of {min_blocks}+ blocks", "IC without the best block": "same sign as the IC",
+            "blocks with the same sign": "at least {stable_share:.0%} of {min_blocks}+ blocks", "IC without the best block": "same sign, at least {best_block_keep:.0%} of the IC",
             "IC without the best market": "same sign as the IC", "baseline IC": "smaller in size than the IC", "best bucket bps": "above one round trip"}
 
 

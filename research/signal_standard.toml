@@ -1,7 +1,9 @@
 # What a signal has to show on its card before a strategy is built on it (src/research/signal_checks.py).
 # These numbers are fixed before a signal is looked at. A change is a new version: raise `version`, say why in
-# docs/research_log.md, and commit it on its own. Accepted by the owner on 2026-10-11.
-version = 1
+# docs/research_log.md, and commit it on its own. Version 1 accepted by the owner on 2026-10-11.
+# Version 2 (owner, 2026-10-12): `best_block_keep` added. Version 1 only asked that the IC without its best block
+# kept its sign, which noise does half the time.
+version = 2
 
 level = 0.95                # the IC's interval, from its effective sample size, must exclude zero at this level
 placebo_p = 0.05            # at most this share of time-shifted placebos may show an IC as large
@@ -9,6 +11,7 @@ delay_bars = 1              # the IC is measured again with the signal this many
 delay_keep = 0.5            # ...and must keep at least this share of its size, with the same sign
 stable_share = 0.70         # share of calendar blocks (years; quarters on short samples) with the full sample's sign
 min_blocks = 3              # blocks needed before stability is judged at all
+best_block_keep = 0.5       # with its best block left out, the IC must keep its sign and at least this share of its size
 min_independent = 30        # independent observations at the horizon; below this the card gives no verdict
 round_trip_bps = 20.0       # one trade in and out (Kraken perps, taker); pass a market's own figure to the card
 buckets = 5                 # point-in-time buckets for the size-against-cost check

@@ -370,13 +370,14 @@ card.plot(); card.save()
   morning). The two checks that need prices are then marked as not applicable.
 - `round_trip_bps` when the market's cost is not the standard's 20 basis points.
 
-| Check | Passes when (`research/signal_standard.toml`, version 1) |
+| Check | Passes when (`research/signal_standard.toml`, version 2) |
 | --- | --- |
 | IC and its interval | The 95% interval, from the independent observations, excludes zero (and has the stated sign) |
 | Placebo p | Fewer than 5% of time shifts of the signal show an IC as large |
 | IC kept 1 bar late | At least half of the IC is left when the signal is acted on one bar later |
 | Blocks with the same sign | At least 70% of calendar years (quarters on short samples), with 3 or more blocks |
-| IC without the best block, without the best market | Still the same sign |
+| IC without the best block | The same sign and at least half of the IC's size (version 1 asked for the sign only) |
+| IC without the best market | Still the same sign |
 | Baseline IC | The trailing 20-bar return predicts less than the signal does |
 | Best bucket | The best fifth of bars beats the average by more than one round trip |
 | Independent observations | 30 or more, else "short history" and no verdict |

@@ -32,7 +32,7 @@ def planted(returns: pd.Series, strength: float, seed: int, horizon: int = 5) ->
 
 
 def test_standard_file_loads_and_rejects_a_typo(tmp_path) -> None:
-    assert sc.load_standard() == STANDARD  # the committed file is version 1, equal to the defaults in code
+    assert sc.load_standard() == STANDARD  # the committed file is the current version, equal to the defaults in code
     (tmp_path / "bad.toml").write_text("version = 2\nplacebo = 0.5\n")
     with pytest.raises(ValueError, match="unknown keys"):
         sc.load_standard(tmp_path / "bad.toml")
@@ -147,6 +147,23 @@ def test_an_effect_in_one_year_only_fails_stability_and_concentration() -> None:
     assert float(card.table.loc["IC", "value"]) > 0 and card.table.loc["blocks", "value"] == "4"
     assert not card.table.loc["blocks with the same sign", "passes"] and not card.table.loc["IC without the best block", "passes"]
     assert card.verdict in ("weak", "no evidence") and "worth" not in card.verdict
+
+
+def test_most_of_the_effect_in_one_year_fails_the_best_block_check_since_version_2() -> None:
+    """The same sign in every year, but two thirds of the IC comes from one of them."""
+    n = 4 * 365
+    index = pd.date_range("2021-01-01", periods=n, freq="D")
+    rng = np.random.default_rng(31)
+    returns = pd.Series(rng.normal(0.0, 0.02, n), index=index)
+    knows = pd.Series(np.where(index.year == 2022, 1.5, 0.12), index=index)
+    signal = knows * returns.shift(-1) / 0.02 + pd.Series(rng.normal(size=n), index=index)
+    close = np.exp(returns.cumsum())
+    old = sc.signal_card(signal, close, horizons=[1], round_trip_bps=1.0, ledger=False, standard=sc.Standard(version=1, best_block_keep=0.0))
+    new = sc.signal_card(signal, close, horizons=[1], round_trip_bps=1.0, ledger=False)
+    full, rest = float(new.by_horizon.at["IC", 1]), float(new.by_horizon.at["IC without the best block", 1])
+    assert 0 < rest < 0.5 * full
+    assert old.table.loc["IC without the best block", "passes"] and not new.table.loc["IC without the best block", "passes"]
+    assert "50%" in new.table.loc["IC without the best block", "compared with"] and new.verdict != "worth a strategy test"
 
 
 def test_short_history_gives_no_verdict() -> None:

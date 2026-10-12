@@ -6,6 +6,30 @@ accident.
 
 ---
 
+## 2026-10-12: Signal standard, version 2: without its best block the IC must keep half its size
+
+Version 1 asked only that the IC without its best calendar block kept its sign. Version 2
+(`research/signal_standard.toml`, `best_block_keep = 0.5`, approved by the owner) asks for the sign and at least
+half of the IC's size, the same mark the one-bar-late check uses. Measured on synthetic data before the change was
+committed (6,000 bars, 5-bar horizon; no market data, nothing logged):
+
+| | Version 1 | Version 2 |
+| --- | --- | --- |
+| Noise (300 draws): the check on its own passes | 49% | 24% |
+| Noise: top verdict | 2.3% | 2.0% |
+| Weak real signal, IC 0.06 (80 draws): top verdict | 61% | 59% |
+| Real signal, IC 0.12 or more (80 draws each): top verdict | 100% | 100% |
+
+- **The check is now worth having, and the card's false-positive rate is where it was.** Noise that gets through
+  the interval and the placebo has an IC large enough to survive losing one block, so the top verdict on noise
+  moves by one draw in 300. The stricter mark costs a weak real signal about two points of power.
+- **What it catches is an effect that sits mostly in one year:** the same sign everywhere, most of the size in one
+  block. Version 1 passed that; there is a test for it now.
+- The five cards of 2026-10-11 keep their verdicts: four were "no evidence" on the interval or the placebo, and
+  the fifth was already "weak". The check on the best market is unchanged (same sign).
+
+---
+
 ## 2026-10-11: The signal card, checked against signals whose answer was known
 
 The signal card (`src/research/signal_checks.py`, the checks of QuantTAA's IC audit adapted to bars and costs) run
