@@ -1,0 +1,125 @@
+PRE-REGISTRATION H12: THE TAKER BASKET'S RETURN COMES FROM WHICH COINS IT FAVOURS, SO A SLOW VERSION KEEPS IT AT LESS TURNOVER
+Version 1. Written 2026-10-12, before any H12 test was run. Changes after results = a new version (lock it again), logged
+as extra trials.
+
+PRIOR EXPOSURE (what has already been looked at that bears on this)
+- The taker-buy basket (7-day share, long the top fifth, short the bottom fifth) has been studied on all of this
+  data: 2026-09-26 (8 features, two universes), 2026-09-26 robustness (45 configurations: universe 20/30/50, legs
+  10/20/30%, rebalance every 3/5/7/10/14 days), 2026-09-29 (Kraken prices through the engine), 2026-10-03 (its two
+  legs), 2026-10-04 (signal lab and H6), 2026-10-05 (H9, a rank buffer, killed). The baseline's numbers on this
+  exact window are known from H9: turnover 51.4 times a year, net return +18.4%, Sharpe 0.72, +11.3% at 2x costs.
+- 2026-10-11, signal card of the 7-day ranking (the reason for this test): IC +0.054 at 7 days, but time-shifted
+  copies of the ranking average +0.066, and the share measured against each coin's own history has an IC of -0.016.
+  The card's reading: the ranking favours the same coins throughout and those did better; the weekly changes in it
+  are not shown to predict anything.
+- Evidence already seen that points against this hypothesis: the robustness grid found 10-14 days best and nothing
+  slower was run; H9 found that a 10-day schedule replaces most of the basket at each re-rank (turnover 51 times a
+  year) and that holding coins a little longer (the buffer) cost 5 points of return a year. If the return came only
+  from a fixed set of coins, the buffer should have been harmless.
+- Not run before: any score longer than 7 days, any rebalance slower than 14 days, any split of the score into a
+  slow part and a fast part.
+- So the level of the basket's return is known and is not what is tested. What is tested is the difference a slow
+  score and a slow schedule make on the same data. A relative result on data the base rule was chosen on is weaker
+  than a test on new data.
+
+MARKET BEHAVIOUR
+Some coins have a persistently higher share of aggressive buying in their volume than others, and those coins have
+done better than the ones with a persistently low share. The differences between coins last for months; the week-to-
+week changes in a coin's share carry no further information about its next return.
+
+MECHANISM
+A persistently high share of aggressive buying marks a coin that is being accumulated by buyers who accept paying the
+spread, month after month; a persistently low share marks one that holders are leaving. That is a property of the
+coin over a long stretch, not of one week. The other side is whoever supplies liquidity in those coins and is paid
+the spread for it. No claim is made that this persists outside the window; the mechanism is weak and the result is
+read with that in mind.
+
+OBSERVABLE PREDICTION AND EXPECTED SIGN
+A basket ranked on the 90-day share and rebalanced every 30 days trades less than half as much as the paper book's
+rule and its net return is not lower. A basket ranked only on the fast part of the score (the 7-day share minus the
+90-day share) earns nothing before costs.
+
+DATA
+The signal lab's data and costs (src/research/signal_lab.py), as in H9: Binance USDT-perp daily closes, volume,
+taker-buy volume and settled funding; the 30 most traded coins whose Kraken perp had opened by that day (point-in-
+time listing snapshot); 0.05% fee and slippage by liquidity tier per side; funding on every position. Window: the
+first day with at least 10 names (2022-03-23) to 2025-12-31. The frozen holdout (2026 on) stays locked.
+
+SIGNAL CARD (run first, logged as one trial)
+The card of the slow score ("taker-buy share, 90 days", a ranking of coins, 30-day horizon, direction +1, family H12)
+is run before the strategy test. If its IC is zero or negative the strategy test is not run and the result is KILL.
+The card is expected to say "no evidence" all the same: its placebo asks whether the ranking predicts better at the
+right date than at other dates, and this hypothesis says it does not. The gate is therefore passed by hand:
+SIGNAL CARD OVERRIDE: the hypothesis is that the ranking is a fixed tilt between coins, which the card's time-shift placebo fails by construction; the owner approved this test on 2026-10-12 knowing the 7-day card said "no evidence: a fixed tilt".
+The override's reason was written by the assistant; the owner's approval was of the test, given after reading that
+verdict.
+
+RULE
+Scores, each from data up to that day's close:
+- fast (the paper book's): taker-buy volume over the last 7 days divided by volume over the last 7 days, minus 0.5
+  (at least 5 days of data);
+- slow: the same over the last 90 days (at least 60 days of data);
+- fast part: the fast score minus the slow score.
+Every N days, counted from the window's first day: long the top 20% of the ranked universe by score, short the
+bottom 20%, equal weight within a side, half of gross long and half short, 1x gross; flat with fewer than 10 ranked
+names. A coin without enough history for the score is not ranked. Between rebalance days the weights are held; a
+position is re-trimmed only when it has drifted more than 1% of equity from its weight (the paper book's band).
+Decided and traded at the day's close, as in the earlier studies.
+- Baseline (the rule in the paper book, H9's baseline): fast score, N = 10.
+- Slow basket (primary): slow score, N = 30.
+
+PRIMARY OUTCOME
+Two numbers, slow basket against baseline over the whole window at 1x costs: turnover a year, and net return a year.
+
+SECONDARY OUTCOMES
+- Sharpe, worst drawdown, costs and funding a year, names per side, for both.
+- The difference in daily net returns, annualised, with a 95% interval (circular block bootstrap, 20-day blocks,
+  2,000 draws, seed 0).
+- Per calendar year, both.
+- The two changes one at a time: the slow score with N = 10, and the fast score with N = 30.
+- The basket on the fast part of the score (N = 10), before and after costs: the direct test of whether the weekly
+  changes carry anything.
+- The slow basket with the 180-day share (at least 120 days of data).
+- The slow basket with its rebalance days moved by 10 and by 20 days: a 30-day schedule has only 46 rebalance days
+  in this window, so the starting day could matter. Reported, not judged.
+- The slow basket on today's Kraken list from 2020-06 (the original study's universe). Reported, not judged.
+- Two descriptions of the runs above (no new run): the share of names replaced at a rebalance, for the baseline and
+  the slow basket; and the slow basket's price P&L by coin (the weight held times the coin's next daily return), as
+  the share that comes from its best coin and from its best three.
+
+PARAMETER GRID (every configuration is a trial; count them)
+9 runs: the slow basket (primary); the slow basket at 2x costs; slow score with N = 10; fast score with N = 30; the
+fast part with N = 10; the 180-day share with N = 30; the slow basket moved by 10 days and by 20 days; the slow basket
+on today's list. With the signal card: 10 trials. The baseline at 1x, at 2x and on today's list are H9's runs repeated
+as the comparison and are not counted again. Nothing else is run.
+
+PASS CRITERIA (all three)
+1. Turnover is at least 50% lower than the baseline's.
+2. Net return a year is not more than 1 percentage point below the baseline's.
+3. At 2x costs the slow basket's net return is above the baseline's.
+
+KILL IF (any)
+- The signal card's IC of the slow score is zero or negative.
+- The slow basket's net return is zero or negative.
+- Its net return is more than 3 percentage points a year below the baseline's.
+Between kill and pass: inconclusive, and the paper book keeps its rule.
+
+WHAT THIS TEST CAN SHOW
+In H9 the difference between two versions of this basket had a 95% interval about 9 points a year wide on each side.
+The same will hold here: a pass on the point estimates says the slow version was not worse in this window, not that
+it is better. The turnover figure, by contrast, is measured almost without noise.
+
+WHAT A PASS LEADS TO
+The slow basket as a second basket in a paper book, next to the current one (a 90-day signal added to
+src/portfolio/basket.py), so both build a record on the same days. The paper book's own rule does not change on this
+result. A pass is also a reason to ask the owner for one look at the frozen 2026 window for both versions.
+
+KNOWN RISKS AND BIASES
+- The base rule was selected on this data, so its return here is flattered; only the difference is new.
+- A fixed difference between about thirty coins is very few independent observations, however many days it is
+  measured over. One or two coins could carry the result; the per-year table is the only guard against that here.
+- The 90-day window was chosen from the card's finding on this same data.
+- The slow basket holds its coins for months, so it is closer to a static long/short position in a handful of coins:
+  less diversified in time than the baseline, and more exposed to a single coin's collapse or delisting.
+- Binance prices and funding stand in for Kraken's; delisted Kraken perps are missing.
+- One window of under four years.
