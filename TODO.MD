@@ -162,6 +162,8 @@ direction is in `aspirations.md`.
 - [x] H10 final holdout test (2026-10-06, approved): gross +5.8 bp a trade in 2026 against +15.1 before; -5.2 net of
   taker costs; the large-morning variant -0.9. Undecided by its own rules; no sleeve; the lead is closed
 - [x] H9, a rank buffer on the taker basket (2026-10-05): killed (turnover -22%, return -5 points a year). `research/reports/H9.md`
+- [x] H12, a slow version of the taker basket (2026-10-12): inconclusive (turnover -64%, return -2.7 points a year; the
+      weekly changes in the share earn nothing before costs). `research/reports/H12.md`
 - [x] H8, pairs of Kraken perps by the distance method (2026-10-04): killed (Sharpe -0.65, 12% of trades converged). `research/reports/H8.md`
 - [x] H6, cross-sectional funding carry with a point-in-time Kraken coin list (2026-10-04): inconclusive (Sharpe 0.52,
   interval -0.72 to 1.82), not built. `research/reports/H6.md`
@@ -217,10 +219,12 @@ Guide: "The signal card" in `docs/research_guide.md`; examples in `notebooks/sig
       "no evidence" unless the pre-registration has a written override
 - [x] Checked on five known signals (`scripts/research/signal_card_check.py`): four agree with the research log;
       the taker-buy ranking turns out to be a fixed tilt between coins, not timing (research log, 2026-10-11)
-- [ ] Use it: the next H-numbered study starts with a card and calls `require_card` in its script
+- [x] Used: H12 starts with a card and calls `require_card` (the gate was passed by a written override)
 - [x] Version 2 of the standard (owner, 2026-10-12): without its best block the IC must keep its sign and half
       its size (research log, 2026-10-12)
-- [ ] Lead from the check: a slow taker-buy basket (long average, monthly rebalance); needs a pre-registration
+- [x] Lead from the check: a slow taker-buy basket, tested as H12 (2026-10-12): inconclusive, the paper book keeps its rule
+- [ ] Owner, optional: H12 version 2 with the monthly schedule in three parts 10 days apart (removes the start-day
+      luck that decided version 1; on data already looked at, so weak either way)
 - [ ] Install `nbformat`/`nbconvert` in `CryptoArb` if notebooks should be committed with their outputs
 
 ## 6. Options (plan: `docs/options_plan.md`)

@@ -6,6 +6,40 @@ accident.
 
 ---
 
+## 2026-10-12: H12, a slow version of the taker basket: inconclusive
+
+Pre-registered (`research/prereg/H12.txt`), report in `research/reports/H12.md`; the test of the lead from the
+2026-10-11 entry and the first study to start with a signal card. The 90-day taker-buy share ranked and rebalanced
+every 30 days, against the paper book's rule (7-day share, every 10 days); point-in-time Kraken list, top 30,
+2022-03 to 2025-12. 10 trials (the card and 9 baskets).
+
+| | Baseline | Slow basket |
+| --- | --- | --- |
+| Turnover a year | 51.4x | 18.3x |
+| Costs a year | 7.2% | 2.7% |
+| Net return a year | +18.4% | +15.7% |
+| Net return at 2x costs | +11.3% | +12.9% |
+| Sharpe | 0.72 | 0.70 |
+
+- **Inconclusive by the rules set beforehand:** turnover fell 64% (bar: 50%) and the slow basket is ahead at 2x
+  costs, but its net return is 2.7 points lower (bar: 1 point). The difference has a 95% interval of -28.5 to +23.8
+  points and changes sign every year. The paper book keeps its rule.
+- **The weekly changes in the share earn nothing:** a basket ranked only on the 7-day share minus the 90-day share
+  made -0.1% a year before costs (-8.2% after). The basket's return is in the slow part of the score, as the signal
+  card suggested. The card of the 90-day ranking says the same as the 7-day one: IC +0.135 at 30 days, placebo p
+  0.33 (a tilt between coins, not timing); the gate was passed by an override written into the pre-registration.
+- **The start day of a monthly schedule decides more than the rule does.** The same slow basket started 10 or 20
+  days later made +36.5% and +28.1%: a spread of 21 points. A schedule with few rebalance days needs to be split
+  into parts that rebalance on different days before two versions of it can be compared.
+- **The tilt is slow, not fixed.** The slow basket still replaces 47% of its names each month and held 82 coins in
+  under four years, because the universe changes. Three coins (WLD, FARTCOIN, BTC) make +15.9 of its +17.8 points
+  of price P&L a year.
+- Leads, not acted on: the slow score on the 10-day schedule (Sharpe 1.46 at half the turnover; one of nine runs,
+  picked after the fact), and a monthly schedule in three parts. On today's coin list from 2020-06 the slow basket
+  is 17 points a year behind the baseline, which points the other way.
+
+---
+
 ## 2026-10-12: Signal standard, version 2: without its best block the IC must keep half its size
 
 Version 1 asked only that the IC without its best calendar block kept its sign. Version 2
