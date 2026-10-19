@@ -388,8 +388,10 @@ engine work only if the result holds. The plan has the phases, the gaps in the e
 - [x] Card the strategies already running (2026-10-19, `scripts/research/card_books.py`, `data/research/cards_running_books/`):
       BTC/ETH trend and the taker basket weak; Keltner long/short and SOL trend no evidence. Notebook
       `notebooks/strategy_card.ipynb`; gate `--portfolio-check --require-strategy-cards`
-- [ ] Owner's call: keep or drop the "no evidence" sleeves (BTC/ETH Keltner long/short, SOL trend) in the paper and
-      live books; set the review Sharpes to the shrunk Sharpes
+- [x] Dropped the "no evidence" sleeves (2026-10-19, owner): BTC/ETH Keltner long/short and SOL trend disabled in
+      btc-live, multi-paper and small-paper; btc-live scale 0.36, small-paper 0.35 (risk budget); btc-live review refreshed
+- [ ] Owner's call: set the review Sharpes to the shrunk Sharpes (the honest live expectation) instead of holdout Sharpes
+- [ ] Equity trend paper book: every sleeve's card says "no evidence". Keep as a research record, or stop it (owner)
 - [ ] Review the equity trend paper book after 90 days (2027-01-17) with `scripts/research/performance_review.py`
 - [ ] Optional, needs its own pre-registration: `trend_forecast` vs the 4/48 rule on BTC/ETH/SOL (paper books only;
       at one lot the live book can't hold sizes)

@@ -6,6 +6,20 @@ accident.
 
 ---
 
+## 2026-10-19: The "no evidence" sleeves dropped from the books
+
+The owner's decision: only statistically significant strategies run. Disabled (`enabled = false`), not deleted, so each
+book's saved state and record continue:
+- **btc-live (live, not running):** `btc_keltner_ls` dropped; scale 0.55 -> 0.36 for the same 30% drawdown limit with a
+  1.5x margin (`risk_budget.py`). The review now expects the holdout Sharpes 0.99 (btc_ma_1d), 0.20 (btc_ma_4h) and
+  1.03 (book), with a worst drawdown of 20%.
+- **small-paper:** `btc_keltner_ls`, `eth_keltner_ls` and `sol_ma_1d` dropped; scale 0.55 -> 0.35.
+- **multi-paper:** the same three dropped. Scale 1 is kept: its historical worst drawdown of 27.7% is inside the 40% kill,
+  a 1.44x margin against the 1.5x the small books use.
+
+All three pass `--portfolio-check --require-strategy-cards` (every remaining sleeve is "weak": significant, not shown
+better than buy-and-hold). The engine now restores a checkpoint whose sleeve set only lost sleeves.
+
 ## 2026-10-19: Every running sleeve carded: none shows "evidence of an edge"
 
 `scripts/research/card_books.py` on the BTC live, multi-paper and small-paper books (`data/research/cards_running_books/`).

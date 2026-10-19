@@ -227,8 +227,13 @@ python main.py --portfolio config/portfolio.example.toml --tearsheet      # char
 - **Strategy cards before paper.** `--portfolio-check` lists each sleeve's latest strategy card from the trial ledger
   (`src/research/strategy_checks.py`). A sleeve with no card, or one saying "no evidence" or "short history", is a
   warning; with `--require-strategy-cards` it fails the check. Start a new paper book only once that passes, or write
-  down why a "weak" or failing sleeve is run anyway. The books running on 2026-10-19 predate the gate and fail it
-  (Keltner long/short and SOL trend: no evidence).
+  down why a "weak" or failing sleeve is run anyway. On 2026-10-19 the sleeves whose cards said "no evidence" (Keltner
+  long/short, SOL trend) were disabled in the live, multi-paper and small-paper books; all three pass the gate now.
+- **Dropping a sleeve from a running book.** Set `enabled = false` (or delete it) and restart. The engine keeps the
+  book's saved state and record, discards the dropped sleeves' states, starts the allocation afresh on the remaining
+  units, and trades their positions to the new targets at the next decision (event `portfolio_sleeves_dropped`).
+  Adding a sleeve still needs a fresh state. Re-run `scripts/research/risk_budget.py` afterwards: fewer sleeves give
+  each remaining one a larger share.
 - `--runtime-iterations 0` runs until Ctrl-C (or SIGTERM). The current cycle finishes and the checkpoint is written
   before it exits, so restarting with the same command resumes the same positions and decisions.
 - **Market data:** completed Kraken candles over REST, the same cached series the research used, polled every

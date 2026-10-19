@@ -1,6 +1,6 @@
 # The small account's paper book: about 200 NOK (19 USD), the size of the live Kraken account.
-# The five daily trend rules of the multi-strategy book on BTC, ETH and SOL, at the same 0.55 scale as the first live
-# book (a 30% drawdown limit). ETH's lot is about 2.70 USD and SOL's 1.20, so the book can hold close to what the rules
+# The daily trend rules of the multi-strategy book on BTC and ETH, scaled for a 30% drawdown limit. The Keltner
+# long/short sleeves and SOL trend were dropped on 2026-10-19 (strategy cards: no evidence). ETH's lot is about 2.70 USD and SOL's 1.20, so the book can hold close to what the rules
 # ask for; BTC's is about 8.50 USD (45% of the book), so BTC is held in steps of one lot.
 # Check:  python main.py --portfolio-check config/portfolio.small_paper.toml
 # Paper:  python main.py --runtime paper --portfolio config/portfolio.small_paper.toml --runtime-iterations 0 --runtime-interval 60
@@ -11,7 +11,7 @@ name = "small-paper"
 base_currency = "USD"
 initial_equity = 19
 rebalance_band = 0.02
-scale = 0.55                      # a 30% drawdown limit with a 1.5x margin (risk budget, 2026-09-26)
+scale = 0.35                      # a 30% drawdown limit with a 1.5x margin (risk budget, 2026-10-19, without the dropped sleeves)
 allocation = "equal"
 small_account_equity = 95         # below this, a target that rounds to zero lots holds one lot if that lot is at most...
 small_account_max_lot_weight = 0.5   # ...this share of equity (one BTC lot is about 45%)
@@ -59,6 +59,8 @@ sizing_params = { target_annual_vol = 0.5 }
 
 [[sleeves]]
 id = "btc_keltner_ls"
+# Dropped 2026-10-19: its strategy card says "no evidence" (research_log 2026-10-19). Disabled, not deleted, so the book's saved state and record continue.
+enabled = false
 instrument = "kraken_futures:BTC/USD"
 interval = "1d"
 strategy = "keltner_breakout"
@@ -78,6 +80,8 @@ sizing_params = { target_annual_vol = 0.5 }
 
 [[sleeves]]
 id = "eth_keltner_ls"
+# Dropped 2026-10-19: its strategy card says "no evidence" (research_log 2026-10-19). Disabled, not deleted, so the book's saved state and record continue.
+enabled = false
 instrument = "kraken_futures:ETH/USD"
 interval = "1d"
 strategy = "keltner_breakout"
@@ -87,6 +91,8 @@ sizing_params = { target_annual_vol = 0.5 }
 
 [[sleeves]]
 id = "sol_ma_1d"
+# Dropped 2026-10-19: its strategy card says "no evidence" (research_log 2026-10-19). Disabled, not deleted, so the book's saved state and record continue.
+enabled = false
 instrument = "kraken_futures:SOL/USD"
 interval = "1d"
 strategy = "moving_average_crossover"

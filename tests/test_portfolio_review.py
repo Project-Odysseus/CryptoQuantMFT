@@ -77,7 +77,7 @@ def test_the_review_table_is_parsed_and_checked() -> None:
     from src.portfolio.config import PortfolioConfigError, load_portfolio_config, parse_portfolio_config
 
     live = load_portfolio_config("config/portfolio.btc_live.toml")
-    assert live.review is not None and set(live.review.backtest_sharpe) == {sleeve.id for sleeve in live.sleeves}
+    assert live.review is not None and set(live.review.backtest_sharpe) == {sleeve.id for sleeve in live.enabled_sleeves}  # a disabled sleeve needs no review
     raw = {"portfolio": {"name": "x"}, "instruments": {"kraken_futures:BTC/USD": {"kind": "perp"}},
            "sleeves": [{"id": "a", "instrument": "kraken_futures:BTC/USD", "interval": "1d", "strategy": "moving_average_crossover"}],
            "review": {"backtest_sharpe": {"b": 1.0}, "min_days": 5}}

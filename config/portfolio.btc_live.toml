@@ -1,4 +1,5 @@
-# First live book: the three BTC trend sleeves from the example portfolio, on the Kraken Futures BTC perp only.
+# First live book: BTC trend sleeves on the Kraken Futures BTC perp only. Two run: the Keltner long/short sleeve was dropped on
+# 2026-10-19 (strategy card: no evidence); the two MA sleeves' cards say "weak" (significant, not shown better than holding BTC).
 # Sized for about 200 NOK (~19 USD) with a 30% drawdown limit (scripts/research/risk_budget.py).
 # At this capital Kraken's minimum order (0.0001 BTC, ~8 USD) dominates: the book holds either nothing or one lot.
 # Check:  python main.py --portfolio-check config/portfolio.btc_live.toml
@@ -10,7 +11,7 @@ name = "btc-live"
 base_currency = "USD"
 initial_equity = 19               # paper only; a live start adopts the real account's equity
 rebalance_band = 0.02
-scale = 0.55                      # a 30% drawdown limit with a 1.5x margin (risk budget, 2026-09-26)
+scale = 0.36                      # a 30% drawdown limit with a 1.5x margin (risk budget, 2026-10-19, without the dropped Keltner sleeve)
 allocation = "equal"
 # Small account: one 0.0001 BTC lot is ~44% of 19 USD. Below ~1000 NOK (95 USD), a target too small for one lot
 # holds one lot anyway, up to 90% of equity (research log 2026-09-27). Above it, normal lot rounding applies.
@@ -49,6 +50,8 @@ sizing_params = { target_annual_vol = 0.5 }
 
 [[sleeves]]
 id = "btc_keltner_ls"
+# Dropped 2026-10-19: its strategy card says "no evidence" (research_log 2026-10-19). Disabled, not deleted, so the book's saved state and record continue.
+enabled = false
 instrument = "kraken_futures:BTC/USD"
 interval = "1d"
 strategy = "keltner_breakout"
@@ -70,10 +73,10 @@ sizing_params = { target_annual_vol = 0.5 }
 # live Sharpe falls more than `decay_z` standard errors below these after `min_days`, any negative Sharpe after
 # `floor_days`, and a book drawdown beyond `max_drawdown_multiple` x the backtest's worst. It flags; you decide.
 [review]
-source = "scripts/research/portfolio_backtest.py config/portfolio.btc_live.toml, 2026-09-28: holdout 2024-10-01..2025-12-31 Sharpes; drawdown the worse of in-sample and holdout"
-backtest_sharpe = { btc_ma_1d = 1.02, btc_keltner_ls = 0.41, btc_ma_4h = 0.19 }
-book_backtest_sharpe = 1.02
-book_backtest_max_drawdown = 0.17
+source = "scripts/research/portfolio_backtest.py config/portfolio.btc_live.toml, 2026-10-19 (Keltner dropped, scale 0.36): holdout 2024-10-01..2025-12-31 Sharpes; drawdown the worse of in-sample and holdout"
+backtest_sharpe = { btc_ma_1d = 0.99, btc_ma_4h = 0.20 }
+book_backtest_sharpe = 1.03
+book_backtest_max_drawdown = 0.20
 min_days = 90
 floor_days = 365
 decay_z = 2.0

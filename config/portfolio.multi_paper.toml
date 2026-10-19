@@ -1,5 +1,5 @@
-# Multi-asset, multi-strategy book, PAPER: five trend sleeves on the BTC, ETH and SOL perps plus the cross-sectional
-# taker-buy basket on 40 Kraken Futures perps, under the correlation-aware limits (docs/portfolio_plan.md, phase 7).
+# Multi-asset, multi-strategy book, PAPER: the BTC and ETH trend sleeves on the Kraken perps plus the cross-sectional
+# taker-buy basket on 40 Kraken Futures perps (Keltner long/short and SOL trend dropped 2026-10-19: strategy cards say no evidence).
 # Research: docs/research_log.md 2026-10-03 ("A multi-strategy book under correlation-aware limits").
 # Everything decides on daily bars, so the book needs daily candles only.
 # Not for live at small capital: one lot of the largest-minimum coin needs a few hundred USD of equity per coin weight,
@@ -48,6 +48,8 @@ sizing_params = { target_annual_vol = 0.5 }
 
 [[sleeves]]
 id = "btc_keltner_ls"
+# Dropped 2026-10-19: its strategy card says "no evidence" (research_log 2026-10-19). Disabled, not deleted, so the book's saved state and record continue.
+enabled = false
 instrument = "kraken_futures:BTC/USD"
 interval = "1d"
 strategy = "keltner_breakout"
@@ -67,6 +69,8 @@ sizing_params = { target_annual_vol = 0.5 }
 
 [[sleeves]]
 id = "eth_keltner_ls"
+# Dropped 2026-10-19: its strategy card says "no evidence" (research_log 2026-10-19). Disabled, not deleted, so the book's saved state and record continue.
+enabled = false
 instrument = "kraken_futures:ETH/USD"
 interval = "1d"
 strategy = "keltner_breakout"
@@ -76,6 +80,8 @@ sizing_params = { target_annual_vol = 0.5 }
 
 [[sleeves]]
 id = "sol_ma_1d"
+# Dropped 2026-10-19: its strategy card says "no evidence" (research_log 2026-10-19). Disabled, not deleted, so the book's saved state and record continue.
+enabled = false
 instrument = "kraken_futures:SOL/USD"
 interval = "1d"
 strategy = "moving_average_crossover"
