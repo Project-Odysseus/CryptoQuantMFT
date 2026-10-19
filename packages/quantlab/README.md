@@ -74,3 +74,17 @@ Phase 5 (record and reporting):
 - `quantlab.reporting.charts`: the charts library.
 
 Walkthrough: `notebooks/lab_record.ipynb`.
+
+Phase 6 (the notebook interface):
+
+```python
+from quantlab.lab import Lab
+lab = Lab(universe="equity_index_core", start="1999")
+idea = lab.signal(lambda px: (px.close.rolling(20).mean() / px.close.rolling(100).mean() - 1).rank(axis=1, pct=True) - 0.5)
+lab.test(idea)
+lab.combine(idea, "trend", overlay="h14_regime")
+lab.compare_with_book(idea)
+```
+
+Fill the catalog once, offline, from this project's caches: `python scripts/lab/import_research_cache.py`.
+Templates: `notebooks/templates/`.

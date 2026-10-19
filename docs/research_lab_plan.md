@@ -243,7 +243,7 @@ switch strategies.
 
 ## Phase 6: The notebook workflow (the owner's main interface)
 
-- [ ] **6.1 A five-line idea test.**
+- [x] **6.1 A five-line idea test.**
       ```python
       lab = Lab(universe="equity_index_futures", start="1999")
       idea = lab.signal(lambda px: (px.close.rolling(20).mean() / px.close.rolling(100).mean() - 1).rank(pct=True))
@@ -252,13 +252,18 @@ switch strategies.
       ```
       *Done when* the owner can do exactly this, and every call is recorded in the experiment store as exploratory
       (not a trial) until pre-registered.
-- [ ] **6.2 Exploratory versus confirmatory mode.** Exploratory runs are clearly labelled and counted. Confirmatory
+      *2026-10-19:* `quantlab.lab.Lab`: `Lab(universe=..., start=...)`, `lab.signal(fn)` (a function of `px`, a library signal, or per-instrument bars), `lab.test`, `lab.combine(..., overlay=...)`, `lab.compare_with_book`, `lab.report`. Every signal is checked for hindsight: the plan's own example (`.rank(pct=True)` down each column) is caught as using later data; `.rank(axis=1, pct=True)` passes. Real data comes from the catalog, filled offline by `scripts/lab/import_research_cache.py`; notebooks find the project root from their own folder.
+- [x] **6.2 Exploratory versus confirmatory mode.** Exploratory runs are clearly labelled and counted. Confirmatory
       runs require a locked pre-registration and use the frozen-holdout rules.
-- [ ] **6.3 "Compare with the book."** Any idea is shown against and inside the current portfolio: correlation,
+      *2026-10-19:* without `hypothesis=` every call is a run under EXPLORATORY in the store (counted, `lab.exploration_count()`), with no trials and no ledger cards. With `hypothesis=`, the pre-registration must be locked, tests log trials and cards to that family, and `lab.final_look(approved_by=...)` opens the frozen holdout once.
+- [x] **6.3 "Compare with the book."** Any idea is shown against and inside the current portfolio: correlation,
       marginal Sharpe, marginal drawdown, diversification.
-- [ ] **6.4 Templates:** a new-signal notebook, a new-regime-model notebook, an overlay-design notebook (the H14
+      *2026-10-19:* `lab.compare_with_book`: correlation with the book and each member, marginal Sharpe and drawdown at one member's risk, diversification ratio, tangency risk share; the book is BOOK's signals at equal risk, or any P&L given.
+- [x] **6.4 Templates:** a new-signal notebook, a new-regime-model notebook, an overlay-design notebook (the H14
       walkthrough generalised), a portfolio-construction notebook, and a strategy-report notebook.
-- [ ] **6.5 Speed.** Re-running an idea after a change takes seconds, using cached features and data.
+      *2026-10-19:* `notebooks/templates/`: new_signal, new_regime_model, overlay_design, portfolio_construction, strategy_report; each runs end to end on the cached data in 2-7 s.
+- [x] **6.5 Speed.** Re-running an idea after a change takes seconds, using cached features and data.
+      *2026-10-19:* a full `lab.test` (both cards, book comparison, cost doubling) on 7 indices x 27 years takes about 3 s; book signals and backtests are kept per lab; features cached (Phase 2). Tested under 10 s.
 
 ## Phase 7: From research to paper to live, at the same standard
 
