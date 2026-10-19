@@ -60,6 +60,13 @@ class BacktestComparison:
     return_delta: float
 
 
+def _lab_strategy(spec: str, version: int) -> Any:
+    """A quantlab strategy spec as a host strategy (src/lab_adapters/strategy.py), imported only when used."""
+    from src.lab_adapters.strategy import lab_strategy
+
+    return lab_strategy(spec, version)
+
+
 class StrategyRegistry:
     """Resolve a strategy name to a strategy callable."""
 
@@ -80,6 +87,7 @@ class StrategyRegistry:
             "rsi_reversion": rsi_reversion_strategy,
             "trend_pullback": trend_pullback_strategy,
             "ema_vwap": ema_vwap_strategy,
+            "lab": _lab_strategy,
         }
         # Whether each strategy can emit a short (-1) signal at all. This is
         # about the signal itself, not whether a given runtime mode is
@@ -102,6 +110,7 @@ class StrategyRegistry:
             "rsi_reversion": True,
             "trend_pullback": True,
             "ema_vwap": True,
+            "lab": True,
         }
 
     def register(self, name: str, strategy: Any, *, can_short: bool = True) -> None:

@@ -764,6 +764,44 @@ bars and events of that time). Positions that agree with returns drifting apart 
 differ from the backtest's assumptions; for a live book that gap is the real cost model. It reads this year's
 candles (the frozen holdout) as a reference only, and logs that look in the trial ledger.
 
+## Lab strategies in a book (`strategy = "lab"`, quantlab specs)
+
+A strategy researched in the lab (`packages/quantlab`) runs in a book as its spec file, `research/strategies/<id>.toml`,
+pinned to a version. The sleeve computes the spec's signal with the same quantlab code research backtested
+(`src/lab_adapters/strategy.py`):
+
+```toml
+[[sleeves]]
+id = "mes_trend"
+instrument = "cme_usd:MES"
+interval = "1d"
+strategy = "lab"
+params = { spec = "smooth_trend", version = 1 }
+continuous = true
+```
+
+Before a book runs it, the spec version must be promoted to paper through the lab's gates (strategy card, costs,
+capacity, risk budget, the owner's sign-off; `notebooks/templates/promotion.ipynb`, `quantlab.deploy.gates`). The check:
+
+```bash
+python main.py --portfolio-check config/portfolio.<book>.toml --require-strategy-cards
+```
+
+fails for a lab sleeve whose spec version was not promoted, or whose file changed after its promotion (a new hash).
+Editing a spec means raising its `version`, promoting that version, and updating the sleeve's `version`. A sleeve
+pinned to a version the file no longer has does not start.
+
+Parity and expectations, once the book has a few days of snapshots:
+
+```bash
+python scripts/lab/parity_check.py --config config/portfolio.<book>.toml --spec <id>
+```
+
+It replays the spec with the research engine on the same days and compares positions (sign agreement, size ratio)
+and daily P&L with the book, then holds the book's returns to the spec's `[expectations]` (Sharpe decay in standard
+errors, drawdown beyond the backtest's worst, volatility). It reads the frozen holdout for this, logged as
+operational access in the lab ledger, and exits 1 when something is flagged. It never changes the book.
+
 ## Crash and network drills (portfolio)
 
 Two scripts practise what a real outage does. Both are paper only, use a state folder and database of their own, and

@@ -2238,6 +2238,8 @@ def strategy_card_status(config: Any, *, require: bool = False) -> int:
     missing = []
     print("Strategy cards (an edge or a fluke? notebooks/strategy_card.ipynb, scripts/research/card_books.py):")
     for unit_id, spec in units:
+        if getattr(spec, "strategy", None) == "lab":
+            continue  # a quantlab spec carries its card through its promotion (lab_promotion_status below)
         card = cards.get(sleeve_key(spec))
         if card is None:
             missing.append(unit_id)
@@ -2246,12 +2248,51 @@ def strategy_card_status(config: Any, *, require: bool = False) -> int:
         if card["verdict"] in ("no evidence", "short history"):
             missing.append(unit_id)
         print(f"  {unit_id:<18} {card['verdict']} ({card['at'][:10]}; baseline: {card.get('versus_baseline', '?')})")
+    blocked = lab_promotion_status(config)
     if missing and require:
         print(f"FAIL: no passing strategy card for {missing} (--require-strategy-cards)")
         return 1
+    if blocked and require:
+        print(f"FAIL: lab strategies not promoted to paper at the pinned version and hash: {blocked} (--require-strategy-cards)")
+        return 1
     if missing:
         print(f"Warning: {len(missing)} of {len(units)} without a card that shows evidence: {missing}")
+    if blocked:
+        print(f"Warning: lab strategies not promoted to paper: {blocked}")
     return 0
+
+
+def lab_promotion_status(config: Any) -> list[str]:
+    """Print the promotion of every sleeve running a quantlab spec (`strategy = "lab"`); returns those not promoted.
+
+    A lab sleeve may run only a spec version promoted to paper (quantlab.deploy.gates.promote) whose file still has
+    the hash it was promoted with: an edited spec needs a new version and a new promotion.
+    """
+    sleeves = [sleeve for sleeve in config.enabled_sleeves if getattr(sleeve, "basket", None) is None and sleeve.strategy == "lab"]
+    if not sleeves:
+        return []
+    from quantlab.deploy.gates import promoted
+    from quantlab.deploy.spec import find_spec, load_spec
+    from quantlab.lab import use_project_root
+
+    use_project_root()
+    blocked = []
+    print("Lab strategy promotions (quantlab.deploy.gates):")
+    for sleeve in sleeves:
+        name, version = str(sleeve.params.get("spec")), int(sleeve.params.get("version", -1))
+        spec = load_spec(find_spec(name))
+        record = promoted(spec.id, version, "paper")
+        if record is None:
+            blocked.append(sleeve.id)
+            print(f"  {sleeve.id:<18} {name}@v{version}: not promoted to paper")
+        elif record.get("hash") != spec.hash:
+            blocked.append(sleeve.id)
+            print(f"  {sleeve.id:<18} {name}@v{version}: the spec file changed after its promotion (hash {spec.hash} vs {record.get('hash')})")
+        else:
+            overrides = record.get("overrides") or {}
+            print(f"  {sleeve.id:<18} {name}@v{version}: {record['stage']} since {record['at'][:10]} (approved by {record.get('approved_by')})"
+                  + (f"; overrides: {', '.join(overrides)}" if overrides else ""))
+    return blocked
 
 
 def main() -> None:

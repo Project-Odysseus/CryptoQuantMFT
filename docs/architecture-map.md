@@ -244,6 +244,16 @@ Plan and status: `docs/portfolio_plan.md`.
   and `_book_stop_fills` books stops that fired, even during downtime. `_reconcile_account_log` corrects estimated fees
   and funding from Kraken's account log each decision bar (`KrakenFuturesCrossMarginAdapter.account_log`, `recent_fills`).
 
+### The research lab (`packages/quantlab`, portable, imports nothing from this repo)
+
+- `packages/quantlab`: data, engine, signals, regimes, validation, tracking, reporting and `quantlab.deploy` (strategy
+  specs, promotion gates, capacity, parity and expectation monitors, execution interface, factsheets). Plan:
+  `docs/research_lab_plan.md`; what moved from `src/`: `docs/quantlab_migration.md`.
+- `src/lab_adapters/`: this repo's side of the boundary: host data sources as lab adapters, and `strategy.py`, the
+  `lab` strategy that runs a spec (`research/strategies/*.toml`) inside a portfolio sleeve.
+- `main.py`'s `lab_promotion_status` (part of `--portfolio-check`) asks the lab ledger whether a lab sleeve's spec
+  version was promoted with its current hash; `scripts/lab/parity_check.py` compares a book with the research replay.
+
 ### Listed futures (`src/futures/`; nothing in it knows about crypto)
 
 - `contracts.py`: the contract table `config/futures_markets.csv` as `Market` objects; contract codes, last trading
