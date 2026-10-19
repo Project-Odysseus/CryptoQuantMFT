@@ -134,7 +134,8 @@ def test_portfolio_check_prints_the_plan_or_every_problem(tmp_path, capsys) -> N
 
     assert main.portfolio_check(EXAMPLE) == 0
     text = capsys.readouterr().out
-    assert "Portfolio 'trend-core'" in text and "btc_ma_4h" in text and text.rstrip().endswith("OK: the config is valid.")
+    assert "Portfolio 'trend-core'" in text and "btc_ma_4h" in text and "OK: the config is valid." in text
+    assert "Strategy cards" in text  # each sleeve's latest card follows the plan
 
     bad = tmp_path / "bad.toml"
     bad.write_text('[portfolio]\nallocation = "nope"\n')

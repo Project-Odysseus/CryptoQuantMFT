@@ -2206,12 +2206,16 @@ def preflight(path: str) -> int:
     return exit_code(run_checks(checks))
 
 
-def portfolio_check(path: str) -> int:
+def portfolio_check(path: str, *, require_cards: bool = False) -> int:
     """Validate a portfolio config and print what it resolves to; returns the process exit code.
 
     A bad config must fail before any run starts, with every problem listed
     at once, so this is the first thing to run after editing a portfolio
     file. It only reads the file and builds the strategies and sizers.
+
+    It also lists each sleeve's latest strategy card from the trial ledger (src/research/strategy_checks.py): the
+    check that a strategy is an edge and not a fluke before it goes into a book. With `require_cards`, a sleeve
+    without a card, or with "no evidence" or "short history", fails the check.
     """
     from src.portfolio.config import PortfolioConfigError, describe, load_portfolio_config
 
@@ -2222,6 +2226,31 @@ def portfolio_check(path: str) -> int:
         return 1
     print(describe(config))
     print("OK: the config is valid.")
+    return strategy_card_status(config, require=require_cards)
+
+
+def strategy_card_status(config: Any, *, require: bool = False) -> int:
+    """Print each sleeve's (and basket's) latest strategy card; returns 1 when `require` and one is missing or failing."""
+    from src.research.strategy_checks import latest_cards, sleeve_key
+
+    cards = latest_cards()
+    units = [(sleeve.id, sleeve) for sleeve in config.enabled_sleeves if sleeve.basket is None] + [(basket.id, basket) for basket in config.baskets if basket.enabled]
+    missing = []
+    print("Strategy cards (an edge or a fluke? notebooks/strategy_card.ipynb, scripts/research/card_books.py):")
+    for unit_id, spec in units:
+        card = cards.get(sleeve_key(spec))
+        if card is None:
+            missing.append(unit_id)
+            print(f"  {unit_id:<18} no card yet: card it before this book goes to paper")
+            continue
+        if card["verdict"] in ("no evidence", "short history"):
+            missing.append(unit_id)
+        print(f"  {unit_id:<18} {card['verdict']} ({card['at'][:10]}; baseline: {card.get('versus_baseline', '?')})")
+    if missing and require:
+        print(f"FAIL: no passing strategy card for {missing} (--require-strategy-cards)")
+        return 1
+    if missing:
+        print(f"Warning: {len(missing)} of {len(units)} without a card that shows evidence: {missing}")
     return 0
 
 
@@ -2268,7 +2297,8 @@ def main() -> None:
     parser.add_argument("--portfolio-adopt-exchange", action="store_true", help="Live portfolio: set the book to the exchange's positions and collateral before running (after a manual trade or liquidation left it unreconciled); logged")
     parser.add_argument("--portfolio-reset-peak", action="store_true", help="Restart the portfolio's drawdown count from current equity before running (re-arms it after the max-drawdown kill); logged")
     parser.add_argument("--preflight", metavar="PATH", nargs="?", const="config/portfolio.btc_live.toml", default=None, help="Run every non-destructive readiness check for a portfolio config (default config/portfolio.btc_live.toml): config, kill switch, database, clock, Kraken Futures public and read-only, Kraken spot validate-only, Telegram TEST message, dead-man's switch. Places no orders; exit code 0 when ready")
-    parser.add_argument("--portfolio-check", metavar="PATH", default=None, help="Validate a portfolio TOML (sleeves, instruments, allocation, risk limits) and print the resolved plan, then exit. Touches no network or database")
+    parser.add_argument("--portfolio-check", metavar="PATH", default=None, help="Validate a portfolio TOML (sleeves, instruments, allocation, risk limits) and print the resolved plan and each sleeve's strategy card, then exit. Touches no network or database")
+    parser.add_argument("--require-strategy-cards", action="store_true", help="With --portfolio-check: fail when a sleeve has no strategy card, or one that says 'no evidence' or 'short history' (the gate before a new paper book)")
     parser.add_argument("--target-annual-vol", type=float, default=None, help="Shorthand for --sizing vol_target --sizing-params '{\"target_annual_vol\": X}' (0.5 = 50%% a year; EWMA forecast, 10-day half-life)")
     parser.add_argument("--execution-exchange", choices=["auto", "sandbox", "kraken", "firi", "kraken_futures"], default="auto", help="Exchange routing target for the runtime execution adapter. kraken_futures trades perpetual futures: the in-process margin sandbox under live_dry_run, real Kraken Futures orders under live")
     parser.add_argument("--perp-sandbox-reset", action="store_true", help="Start the perpetual-futures dry-run account fresh; the previous saved state (data/perp_sandbox_<contract>.json) is moved aside, not deleted")
@@ -2344,7 +2374,7 @@ def main() -> None:
     if args.preflight:
         raise SystemExit(preflight(args.preflight))
     if args.portfolio_check:
-        raise SystemExit(portfolio_check(args.portfolio_check))
+        raise SystemExit(portfolio_check(args.portfolio_check, require_cards=args.require_strategy_cards))
     if args.telegram_test:
         raise SystemExit(telegram_test())
     if args.portfolio:

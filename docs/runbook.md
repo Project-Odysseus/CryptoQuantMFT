@@ -217,11 +217,18 @@ Check it, backtest it, then paper-run it:
 ```bash
 python main.py --portfolio-check config/portfolio.example.toml
 python scripts/research/portfolio_backtest.py config/portfolio.example.toml
+python scripts/research/card_books.py config/portfolio.example.toml          # a strategy card per sleeve (or notebooks/strategy_card.ipynb)
+python main.py --portfolio-check config/portfolio.example.toml --require-strategy-cards   # the gate: every sleeve shows evidence
 python main.py --runtime paper --portfolio config/portfolio.example.toml --runtime-iterations 0 --runtime-interval 60
 python main.py --portfolio config/portfolio.example.toml --dashboard      # from another terminal, any time
 python main.py --portfolio config/portfolio.example.toml --tearsheet      # charts of the running book -> plots/tearsheet_<name>.html
 ```
 
+- **Strategy cards before paper.** `--portfolio-check` lists each sleeve's latest strategy card from the trial ledger
+  (`src/research/strategy_checks.py`). A sleeve with no card, or one saying "no evidence" or "short history", is a
+  warning; with `--require-strategy-cards` it fails the check. Start a new paper book only once that passes, or write
+  down why a "weak" or failing sleeve is run anyway. The books running on 2026-10-19 predate the gate and fail it
+  (Keltner long/short and SOL trend: no evidence).
 - `--runtime-iterations 0` runs until Ctrl-C (or SIGTERM). The current cycle finishes and the checkpoint is written
   before it exits, so restarting with the same command resumes the same positions and decisions.
 - **Market data:** completed Kraken candles over REST, the same cached series the research used, polled every

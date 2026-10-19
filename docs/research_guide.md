@@ -450,6 +450,21 @@ review should compare against.
 Verdicts: **evidence of an edge** (every check that applies passes), **weak** (the mean is significant but something
 else fails), **no evidence** (the t-statistic or the Sharpe interval fails), **short history** (under 3 years).
 
+**For a sleeve** there is a shortcut that runs it the way the paper runtime would (alone, at full size, with the
+instrument's costs and funding, over the cached Kraken history). It runs its catalog grid as the variants, counts its
+catalog family's ledger trials, and uses buy-and-hold as the baseline:
+
+```python
+card = stc.card_sleeve("config/portfolio.multi_paper.toml", "btc_ma_1d")      # a sleeve in a book
+card = stc.card_sleeve("config/portfolio.multi_paper.toml", SleeveSpec(...))   # a candidate on one of its instruments
+card = stc.card_basket("config/portfolio.multi_paper.toml", "taker")
+```
+
+`notebooks/strategy_card.ipynb` walks through all of it. `python scripts/research/card_books.py <configs>` cards
+every sleeve of a book at once. The gate is `python main.py --portfolio-check <config> --require-strategy-cards`: it
+fails when a sleeve's latest card in the ledger is missing or says "no evidence" or "short history". Cards are found
+by what a sleeve trades and how (`sleeve_key`), not by its id.
+
 Two things to know:
 
 - **The timing placebo is the one most often failed by trend and long-biased books.** Shifting positions months in

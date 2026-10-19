@@ -101,3 +101,66 @@ def test_the_strategy_listed_again_among_its_variants_counts_once() -> None:
     returns, other = _returns(1.0, seed=12), _returns(0.5, seed=13)
     card = stc.strategy_card(returns, name="renamed", variants={"P": returns, "B": other}, standard=FAST, ledger=False)
     assert list(card.variants.index) == ["renamed", "B"]
+
+
+def _bar_loader(instrument, interval):
+    """A synthetic daily random walk for any instrument (no network, no cache)."""
+    from datetime import datetime, timedelta, timezone
+
+    from src.storage.bar_aggregator import OHLCVBar
+
+    rng = np.random.default_rng(abs(hash(instrument.id)) % 1000)
+    closes = 100.0 * np.exp(np.cumsum(rng.normal(0.0005, 0.03, 1800)))
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    return [OHLCVBar(exchange=instrument.venue, symbol=instrument.symbol, interval_seconds=86_400, timestamp=start + timedelta(days=index),
+                     open=float(close), high=float(close) * 1.01, low=float(close) * 0.99, close=float(close), volume=1.0)
+            for index, close in enumerate(closes)]
+
+
+def test_card_sleeve_runs_a_book_sleeve_with_its_variants_baseline_and_placebo() -> None:
+    card = stc.card_sleeve("config/portfolio.multi_paper.toml", "btc_ma_1d", variants={"fast": {"short_window": 2}}, bar_loader=_bar_loader,
+                           standard=FAST, ledger=False)
+    assert card.verdict in stc.VERDICTS
+    assert list(card.variants.index)[1:] == ["fast"]
+    assert card.versus_baseline in ("better", "not shown better")
+    assert isinstance(card.table.at["Timing placebo p", "passes"], bool)
+    assert card.details["subject"].startswith("sleeve|")
+
+
+def test_card_sleeve_takes_a_candidate_and_refuses_an_unknown_instrument() -> None:
+    from src.portfolio.sleeves import SleeveSpec
+
+    candidate = SleeveSpec(id="new", instrument="kraken_futures:ETH/USD", interval="1d", strategy="moving_average_crossover",
+                           params={"short_window": 4, "long_window": 48}, long_only=True, sizing="vol_target", sizing_params={"target_annual_vol": 0.5})
+    card = stc.card_sleeve("config/portfolio.multi_paper.toml", candidate, variants=None, bar_loader=_bar_loader, standard=FAST, ledger=False)
+    assert card.variants.index.tolist() == [card.name]
+    with pytest.raises(KeyError):
+        stc.card_sleeve("config/portfolio.multi_paper.toml", "no_such_sleeve", bar_loader=_bar_loader, ledger=False)
+
+
+def test_the_portfolio_check_gate_reads_the_latest_card_from_the_ledger(tmp_path, monkeypatch, capsys) -> None:
+    from types import SimpleNamespace
+
+    from main import strategy_card_status
+    from src.portfolio.sleeves import SleeveSpec
+
+    monkeypatch.setenv("CQM_TRIAL_LEDGER", str(tmp_path / "ledger.jsonl"))
+    spec = SleeveSpec(id="s", instrument="kraken_futures:BTC/USD", interval="1d", strategy="moving_average_crossover", params={"short_window": 4, "long_window": 48})
+    config = SimpleNamespace(enabled_sleeves=[spec], baskets=[])
+    assert strategy_card_status(config) == 0 and "no card yet" in capsys.readouterr().out
+    assert strategy_card_status(config, require=True) == 1
+    stc.strategy_card(_returns(0.0, seed=21), name="s noise", standard=FAST, subject=stc.sleeve_key(spec))
+    assert strategy_card_status(config, require=True) == 1  # "no evidence" fails the gate
+    stc.strategy_card(_returns(2.0, seed=22), name="s edge", standard=FAST, subject=stc.sleeve_key(spec))
+    assert strategy_card_status(config, require=True) == 0  # the latest card counts
+    assert stc.latest_cards()[stc.sleeve_key(spec)]["verdict"] == "evidence of an edge"
+
+
+def test_the_sleeve_key_ignores_id_and_budget_but_not_parameters() -> None:
+    from dataclasses import replace
+
+    from src.portfolio.sleeves import SleeveSpec
+
+    spec = SleeveSpec(id="a", instrument="kraken_futures:BTC/USD", interval="1d", strategy="moving_average_crossover", params={"short_window": 4, "long_window": 48})
+    assert stc.sleeve_key(spec) == stc.sleeve_key(replace(spec, id="b", budget=0.5))
+    assert stc.sleeve_key(spec) != stc.sleeve_key(replace(spec, params={"short_window": 8, "long_window": 48}))

@@ -33,7 +33,7 @@ import tomllib
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -244,6 +244,10 @@ class StrategyCard:
     def __repr__(self) -> str:
         return f"StrategyCard({self.name!r}: {self.verdict}; {self.reason}; baseline: {self.versus_baseline})"
 
+    def summary(self) -> dict[str, Any]:
+        """The verdict and the key numbers, one row of a comparison table."""
+        return {"verdict": self.verdict, "versus baseline": self.versus_baseline, **self.details.get("numbers", {})}
+
     def to_markdown(self) -> str:
         """The card as a markdown page."""
         shown = self.table.copy()
@@ -334,8 +338,8 @@ def _row(value: Any, compared: str = "", passes: bool | None = None) -> dict[str
 
 def strategy_card(returns: pd.Series, *, name: str, periods_per_year: float = 252.0, baseline: pd.Series | None = None,
                   variants: Mapping[str, pd.Series] | pd.DataFrame | None = None, positions: pd.Series | pd.DataFrame | None = None,
-                  asset_returns: pd.Series | pd.DataFrame | None = None, sweep: pd.DataFrame | None = None, family: str | None = None,
-                  standard: StrategyStandard | None = None, ledger: bool = True, seed: int = 0) -> StrategyCard:
+                  asset_returns: pd.Series | pd.DataFrame | None = None, sweep: pd.DataFrame | None = None, family: str | Sequence[str] | None = None,
+                  standard: StrategyStandard | None = None, ledger: bool = True, seed: int = 0, subject: str | None = None) -> StrategyCard:
     """Every check on one strategy's net returns (one row per period, after costs, above cash where that applies).
 
     Args:
@@ -348,10 +352,12 @@ def strategy_card(returns: pd.Series, *, name: str, periods_per_year: float = 25
         positions, asset_returns: For the timing placebo: the position earning each period's market return (Series
             for one market, DataFrames with one column per market for a book).
         sweep: A parameter sweep's returns (periods x configurations) for the probability of backtest overfitting.
-        family: The hypothesis (e.g. "H13"): its trial count in the ledger feeds the deflated Sharpe.
+        family: The ledger family (e.g. "H13", or the catalog's "trend"), or several: every configuration logged under
+            them counts as a trial in the deflated Sharpe, so a rule picked from an earlier sweep pays for that sweep.
         standard: Pass marks; default `research/strategy_standard.toml`.
         ledger: Note the card in the trial ledger (adds no trials). Tests switch it off.
         seed: For the bootstrap and the placebo.
+        subject: A stable key for what was carded (`sleeve_key`), so `--portfolio-check` can find the card later.
     """
     standard = standard or load_standard()
     named = {name: returns}
@@ -387,7 +393,9 @@ def strategy_card(returns: pd.Series, *, name: str, periods_per_year: float = 25
 
     # More than the best of many tries?
     per_period = frame[variant_cols].mean() / frame[variant_cols].std(ddof=1)
-    ledger_trials, ledger_variance = family_trials(family) if family else (0, 0.0)
+    families = [family] if isinstance(family, str) else list(family or [])
+    counted = [family_trials(name) for name in families]
+    ledger_trials, ledger_variance = sum(count for count, _ in counted), max([variance for _, variance in counted], default=0.0)
     trials = max(ledger_trials, len(variant_cols), 1)
     variance = max(float(np.var(per_period.to_numpy(), ddof=1)) if len(variant_cols) > 1 else 0.0, ledger_variance, 1.0 / count)
     dsr = deflated_sharpe_ratio(primary, trials=max(trials, 2), sharpe_variance=variance) if trials > 1 else probabilistic_sharpe_ratio(primary)
@@ -400,9 +408,11 @@ def strategy_card(returns: pd.Series, *, name: str, periods_per_year: float = 25
     rows["Romano-Wolf p (vs 0, all variants)"] = _row(float(variant_table.at[name, "p vs 0, Romano-Wolf"]), f"< {standard.family_level:g}",
                                                       bool(variant_table.at[name, "p vs 0, Romano-Wolf"] < standard.family_level) if len(variant_cols) > 1 else None)
     details: dict[str, Any] = {"span": span, "boot_sharpe": boot_primary}
+    numbers: dict[str, float] = {"sharpe": sharpe, "sharpe_low": float(low), "sharpe_high": float(high), "t": t_stat, "dsr": float(dsr), "trials": float(trials)}
     if sweep is not None:
         result = pbo_cscv(_trim(sweep), blocks=standard.cscv_blocks, periods_per_year=periods_per_year)
         rows["Probability of backtest overfitting"] = _row(result["pbo"], f"<= {standard.pbo_max:g}, {sweep.shape[1]} configurations", bool(result["pbo"] <= standard.pbo_max))
+        numbers["pbo"] = result["pbo"]
         details["pbo_logits"] = result["logits"]
     else:
         rows["Probability of backtest overfitting"] = _row("no sweep given")
@@ -433,6 +443,7 @@ def strategy_card(returns: pd.Series, *, name: str, periods_per_year: float = 25
     if positions is not None and asset_returns is not None:
         placebo = timing_placebo(positions, asset_returns, runs=standard.placebo_runs, min_shift=standard.placebo_min_shift, periods_per_year=periods_per_year, seed=seed)
         rows["Timing placebo p"] = _row(placebo["p"], f"<= {standard.placebo_p:g} (gross Sharpe {placebo['real']:.2f})", bool(placebo["p"] <= standard.placebo_p))
+        numbers["placebo_p"] = placebo["p"]
     else:
         rows["Timing placebo p"] = _row("no positions given")
 
@@ -441,6 +452,7 @@ def strategy_card(returns: pd.Series, *, name: str, periods_per_year: float = 25
     posterior = shrink(sharpe, error, standard.prior_mean, standard.prior_sd)
     rows["Shrunk Sharpe (posterior mean)"] = _row(f"{posterior[0]:.2f} ± {posterior[1]:.2f}", f"prior {standard.prior_mean:g} ± {standard.prior_sd:g}")
     rows["P(Sharpe > 0), posterior"] = _row(float(norm.cdf(posterior[0] / posterior[1])))
+    numbers.update({"shrunk_sharpe": posterior[0], "p_positive": float(norm.cdf(posterior[0] / posterior[1])), "max_drawdown": float(drawdown.min())})
     versus = "no baseline"
     if baseline is not None:
         base = frame["__baseline__"].to_numpy(dtype=float)
@@ -458,6 +470,7 @@ def strategy_card(returns: pd.Series, *, name: str, periods_per_year: float = 25
         variant_table["minus baseline"] = observed_vs_base
         variant_table["p vs baseline, Romano-Wolf"] = romano_wolf(observed_vs_base, boot_vs_base)
         versus = "better" if d_low > 0.0 else "not shown better"
+        numbers.update({"minus_baseline": difference, "p_better": float(norm.cdf(diff_post[0] / diff_post[1]))})
 
     table = pd.DataFrame(rows).T
     gates = table["passes"].dropna()
@@ -469,18 +482,166 @@ def strategy_card(returns: pd.Series, *, name: str, periods_per_year: float = 25
     else:
         failed = [check for check, value in gates.items() if not bool(value)]
         verdict, reason = "weak", "the mean is significant but these fail: " + ", ".join(failed)
-    details.update({"growth": growth.to_frame(name), "rolling_sharpe": rolling.dropna(), "yearly": yearly, "posterior": posterior})
+    details.update({"growth": growth.to_frame(name), "rolling_sharpe": rolling.dropna(), "yearly": yearly, "posterior": posterior, "numbers": numbers})
     fingerprint = hashlib.sha256(pd.util.hash_pandas_object(frame, index=True).values.tobytes()).hexdigest()[:16]
     card = StrategyCard(name, periods_per_year, table, variant_table, verdict, reason, versus, standard, details, fingerprint)
+    card.details["subject"] = subject
     if ledger:
-        _note(card, family)
+        _note(card, ",".join(families) or None, subject)
     return card
 
 
-def _note(card: StrategyCard, family: str | None) -> None:
+def _note(card: StrategyCard, family: str | None, subject: str | None) -> None:
     """One ledger note per card (not a trial: the study logs its trials); the same input is not noted twice."""
     study = f"strategy_card:{card.name}"
     if any(entry.get("study") == study and entry.get("fingerprint") == card.fingerprint for entry in governance.ledger_entries()):
         return
-    governance._append({"type": "strategy_card", "study": study, "family": family or card.name, "fingerprint": card.fingerprint,
-                        "verdict": card.verdict, "versus_baseline": card.versus_baseline, "standard_version": card.standard.version})
+    governance._append({"type": "strategy_card", "study": study, "family": family or card.name, "fingerprint": card.fingerprint, "subject": subject,
+                        "verdict": card.verdict, "reason": card.reason, "versus_baseline": card.versus_baseline,
+                        "standard_version": card.standard.version, "span": card.details.get("span")})
+
+
+# --- cards for portfolio sleeves: the check before a sleeve goes into a paper book ---------------------------------
+
+CRYPTO_VENUES = ("kraken", "kraken_futures")
+# The ledger families whose trials a basket's signal was chosen from (the studies that found and tuned it).
+BASKET_FAMILIES = {"taker_buy_share_7d": ("cross_sectional", "H9", "H12")}
+
+
+def _stable(values: Mapping[str, Any]) -> str:
+    import json
+
+    return json.dumps(values, sort_keys=True, default=str)
+
+
+def sleeve_key(spec: Any) -> str:
+    """What a sleeve trades and how, without its id or budget: two sleeves with the same key share a card."""
+    if getattr(spec, "coins", None) is not None:  # a basket
+        values = {name: getattr(spec, name) for name in ("coins", "signal", "top_n", "quantile", "gross", "min_names", "rebalance_days", "long_only", "venue", "interval")}
+        return "basket|" + _stable(values)
+    values = {"strategy": spec.strategy, "params": dict(spec.params), "instrument": spec.instrument, "interval": spec.interval,
+              "long_only": spec.long_only, "continuous": getattr(spec, "continuous", False), "sizing": spec.sizing,
+              "sizing_params": dict(spec.sizing_params), "stops": dict(spec.stops)}
+    return "sleeve|" + _stable(values)
+
+
+def latest_cards() -> dict[str, dict[str, Any]]:
+    """The newest card noted in the ledger for each subject."""
+    out: dict[str, dict[str, Any]] = {}
+    for entry in governance.ledger_entries():
+        if entry.get("type") == "strategy_card" and entry.get("subject"):
+            out[entry["subject"]] = entry
+    return out
+
+
+def _label(params: Mapping[str, Any], base: Mapping[str, Any]) -> str:
+    changed = {key: value for key, value in params.items() if base.get(key) != value}
+    return ", ".join(f"{key}={value}" for key, value in changed.items()) or "as configured"
+
+
+def _variant_params(spec: Any, variants: str | Mapping[str, Mapping[str, Any]] | None, limit: int) -> dict[str, dict[str, Any]]:
+    """Variant name -> full strategy params: the catalog's sweep grid by default, without the sleeve's own settings."""
+    if variants is None:
+        return {}
+    if isinstance(variants, Mapping):
+        return {str(name): {**spec.params, **dict(params)} for name, params in variants.items()}
+    from src.research.catalog import CATALOG
+
+    if variants != "grid" or spec.strategy not in CATALOG:
+        return {}
+    own = {**CATALOG[spec.strategy].defaults, **spec.params}
+    combos = [{**own, **combo} for combo in CATALOG[spec.strategy].combos()]
+    combos = [combo for combo in combos if combo != own]
+    if len(combos) > limit:
+        combos = [combos[int(index)] for index in np.linspace(0, len(combos) - 1, limit)]
+    return {_label(combo, own): combo for combo in combos}
+
+
+def card_sleeve(config: Any, sleeve: str | Any, *, variants: str | Mapping[str, Mapping[str, Any]] | None = "grid", baseline: str | None = "buy_and_hold",
+                funding_pct_per_day: float = 0.01, family: str | None = None, max_variants: int = 40, bar_loader: Any = None,
+                standard: StrategyStandard | None = None, ledger: bool = True, seed: int = 0) -> StrategyCard:
+    """The strategy card of one sleeve, run exactly as the paper runtime would run it alone at full size.
+
+    Args:
+        config: A portfolio config (or its path). It supplies the instrument's costs; the sleeve need not be in it.
+        sleeve: A sleeve id in the config, or a `SleeveSpec` (a candidate) on one of its instruments.
+        variants: "grid" runs every combination in the strategy's catalog grid as the variants a search would have
+            tried (they feed the deflated Sharpe, Romano-Wolf and the overfitting test); a mapping of name -> params
+            runs exactly those; None runs none.
+        baseline: "buy_and_hold" (the instrument held at 1x, paying funding on perps) or None.
+        funding_pct_per_day: Funding longs pay on perps, as in `portfolio_backtest.py`.
+        family: Ledger families whose trials count; default the strategy's catalog family ("trend" for MA crossover), so
+            the sweep it was chosen from is paid for.
+        max_variants: At most this many grid points, spread evenly.
+        bar_loader: Replaces the cached Kraken history (tests).
+    """
+    from dataclasses import replace
+
+    from src.portfolio.backtest import daily_returns, prepare_inputs, run_book
+    from src.portfolio.config import load_portfolio_config
+
+    cfg = load_portfolio_config(config) if isinstance(config, (str, Path)) else config
+    if isinstance(sleeve, str):
+        found = [spec for spec in cfg.sleeves if spec.id == sleeve and spec.basket is None]
+        if not found:
+            raise KeyError(f"no sleeve {sleeve!r} in {cfg.name}; sleeves: {[spec.id for spec in cfg.sleeves if spec.basket is None]}")
+        sleeve = found[0]
+    if sleeve.instrument not in cfg.instruments:
+        raise KeyError(f"{sleeve.instrument} has no [instruments] table in {cfg.name}")
+    from src.research.catalog import CATALOG
+
+    spec = replace(sleeve, enabled=True, budget=1.0)
+    if family is None and spec.strategy in CATALOG:
+        family = CATALOG[spec.strategy].family
+    others = _variant_params(spec, variants, max_variants)
+    variant_specs = {name: replace(spec, id=f"{spec.id}_v{index}", params=params) for index, (name, params) in enumerate(others.items())}
+    # the strategy alone at full size: the book's scale is a sizing choice, not part of the strategy
+    test = replace(cfg, sleeves=(spec, *variant_specs.values()), baskets=(), contract_sleeves=(), review=None, scale=1.0)
+    inputs = prepare_inputs(test, bar_loader=bar_loader)
+
+    def alone(sleeve_id: str) -> Any:
+        return run_book(test, inputs, allocation="equal", sleeves=[sleeve_id], risk_overlay=False, funding_pct_per_day=funding_pct_per_day)
+
+    book = alone(spec.id)
+    net = daily_returns(book)
+    named = {"as configured": net, **{name: daily_returns(alone(variant.id)) for name, variant in variant_specs.items()}}
+    instrument = cfg.instruments[spec.instrument]
+    weights = book.result.weights
+    positions = weights[[spec.instrument]].shift(1) if weights is not None and spec.instrument in weights else None
+    market = inputs.prices[[spec.instrument]].pct_change(fill_method=None)
+    base = None
+    if baseline == "buy_and_hold":
+        daily_close = inputs.prices[spec.instrument].resample("1D").last()
+        base = (daily_close.pct_change(fill_method=None) - (funding_pct_per_day / 100.0 if instrument.kind == "perp" else 0.0)).reindex(net.index)
+    params = ", ".join(f"{key}={value}" for key, value in spec.params.items())
+    name = f"{spec.id}: {spec.strategy}({params}) on {spec.instrument} {spec.interval}{', long only' if spec.long_only else ''}"
+    frame = pd.DataFrame(named).dropna()
+    return strategy_card(net, name=name, periods_per_year=365.0 if instrument.venue in CRYPTO_VENUES else 252.0, baseline=base,
+                         variants=frame.drop(columns="as configured") if len(frame.columns) > 1 else None, sweep=frame if len(frame.columns) > 1 else None,
+                         positions=positions, asset_returns=market, family=family, standard=standard, ledger=ledger, seed=seed, subject=sleeve_key(spec))
+
+
+def card_basket(config: Any, basket: str, *, funding_pct_per_day: float = 0.01, family: str | Sequence[str] | None = None, bar_loader: Any = None,
+                basket_panel: Any = None, standard: StrategyStandard | None = None, ledger: bool = True, seed: int = 0) -> StrategyCard:
+    """The strategy card of a basket (all its member sleeves together), with its positions for the timing placebo.
+
+    No baseline: a long/short basket is compared with cash, which is what the Sharpe interval already does.
+    """
+    from dataclasses import replace
+
+    from src.portfolio.backtest import daily_returns, prepare_inputs, run_book
+    from src.portfolio.config import load_portfolio_config
+
+    cfg = load_portfolio_config(config) if isinstance(config, (str, Path)) else config
+    spec = next((item for item in cfg.baskets if item.id == basket), None)
+    if spec is None:
+        raise KeyError(f"no basket {basket!r} in {cfg.name}")
+    members = [sleeve for sleeve in cfg.sleeves if sleeve.basket == basket]
+    family = family if family is not None else BASKET_FAMILIES.get(spec.signal)
+    test = replace(cfg, sleeves=tuple(members), baskets=(replace(spec, enabled=True),), contract_sleeves=(), review=None, scale=1.0)
+    inputs = prepare_inputs(test, bar_loader=bar_loader, basket_panel=basket_panel)
+    book = run_book(test, inputs, allocation="equal", risk_overlay=False, funding_pct_per_day=funding_pct_per_day)
+    weights = book.result.weights
+    return strategy_card(daily_returns(book), name=f"{basket}: {spec.signal} basket, {len(spec.coins)} coins", periods_per_year=365.0,
+                         positions=weights.shift(1) if weights is not None else None, asset_returns=inputs.prices.pct_change(fill_method=None)[list(weights.columns)] if weights is not None else None,
+                         family=family, standard=standard, ledger=ledger, seed=seed, subject=sleeve_key(spec))
