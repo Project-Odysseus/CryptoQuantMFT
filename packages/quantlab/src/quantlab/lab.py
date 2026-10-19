@@ -147,8 +147,8 @@ class Lab:
 
     def __init__(self, universe: str | Sequence[str] = "equity_index_core", start: str | None = None, end: str | None = None, *,
                  bars: Mapping[str, pd.DataFrame] | None = None, master: Any = None, catalog: Any = None, target_vol: float = 0.10,
-                 cost_bps: float = 1.5, engine: EngineConfig | None = None, hypothesis: str | None = None, store: Any = None, record: bool = True,
-                 show: bool = True) -> None:
+                 cost_bps: float = 1.5, engine: EngineConfig | None = None, sizer: Sizer | None = None, hypothesis: str | None = None,
+                 store: Any = None, record: bool = True, show: bool = True) -> None:
         from quantlab.validation import ledger
 
         self.root = use_project_root() if bars is None or master is not None else project_root()
@@ -157,7 +157,7 @@ class Lab:
             ledger.require_prereg(hypothesis)  # confirmatory work starts from a locked pre-registration
         self.start, self.end = start, end
         self.universe = universe
-        self.sizer = Sizer(target_vol, span=20, cap=2.0)
+        self.sizer = sizer or Sizer(target_vol, span=20, cap=2.0)
         self.engine = engine or EngineConfig(band=0.02, max_position=2.0)
         self.cost_bps = cost_bps
         self.show = show

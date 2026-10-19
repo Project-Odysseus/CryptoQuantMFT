@@ -88,3 +88,11 @@ lab.compare_with_book(idea)
 
 Fill the catalog once, offline, from this project's caches: `python scripts/lab/import_research_cache.py`.
 Templates: `notebooks/templates/`.
+
+Phase 7 (research to paper to live), in `quantlab.deploy`:
+- `spec`: versioned strategy specs (`research/strategies/*.toml`);
+- `gates`: evaluate, promotion check, sign-off, promote;
+- `capacity`, `monitor` (parity and expectations), `execution`;
+- `quantlab.reporting.factsheet`.
+
+Walkthrough: `notebooks/templates/promotion.ipynb`.

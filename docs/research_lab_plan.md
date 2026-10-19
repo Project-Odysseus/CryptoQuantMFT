@@ -267,9 +267,10 @@ switch strategies.
 
 ## Phase 7: From research to paper to live, at the same standard
 
-- [ ] **7.1 One strategy object** from research is what paper and live run: same components, same config, same
+- [x] **7.1 One strategy object** from research is what paper and live run: same components, same config, same
       code. A promotion moves a config and version, nothing is rewritten.
-- [ ] **7.2 Promotion gates,** automated and logged:
+      *2026-10-19:* `quantlab.deploy.spec`: a strict, versioned, hashed spec file (`research/strategies/smooth_trend.toml` is the H13 design). The host runs it as `strategy = "lab"` with `params = { spec, version }` (`src/lab_adapters/strategy.py`); the sleeve's signal equals the host's own `trend_forecast` bar for bar (tested), and a pinned version the file no longer has is refused.
+- [x] **7.2 Promotion gates,** automated and logged:
       - passed cards;
       - power-adequate test;
       - holdout look;
@@ -277,17 +278,23 @@ switch strategies.
       - risk budget;
       - owner sign-off.
       The existing `--require-strategy-cards` becomes part of this.
-- [ ] **7.3 Paper/live parity monitor.** Daily comparison of live or paper positions and P&L against the research
+      *2026-10-19:* `quantlab.deploy.gates`: `evaluate` (backtest, card, power, 2x costs, capacity), `promotion_check` (cards, power, holdout, costs, capacity, risk budget, sign-off; paper and live requirements differ), `sign_off`, `promote` (overrides need a written reason; sign-off cannot be overridden), `promoted`. All logged to the lab ledger. `--portfolio-check --require-strategy-cards` now also requires a promotion with the current hash for lab sleeves. First run, smooth_trend: paper blocked by its card (no evidence, t 1.04) and its drawdown budget; live also by power (17%) and the holdout.
+- [x] **7.3 Paper/live parity monitor.** Daily comparison of live or paper positions and P&L against the research
       engine replayed on the same data. Flag divergence beyond tolerance (slippage, data, timing).
-- [ ] **7.4 Live monitoring against expectation.** Track Sharpe, drawdown, turnover and costs against the strategy's
+      *2026-10-19:* `quantlab.deploy.monitor.parity` (sign agreement, size ratio, correlation per instrument; daily P&L tracking error; flags with likely causes) and `scripts/lab/parity_check.py` on the book's SQLite snapshots. Monitoring reads the frozen holdout through `operational_lab`, logged as operational access. The equity-trend book has one day of snapshots so far.
+- [x] **7.4 Live monitoring against expectation.** Track Sharpe, drawdown, turnover and costs against the strategy's
       shrunk Sharpe and expected ranges; decay alarms; kill criteria (generalise `src/portfolio/review.py`).
-- [ ] **7.5 Execution adapters for a fund.**
+      *2026-10-19:* `quantlab.deploy.monitor.expectation_check`: Sharpe against the shrunk Sharpe in standard errors (decay), floor after a year, drawdown against the backtest's worst, volatility, turnover and costs bands; statuses ok / watch / flag / too early; never acts by itself. Expectations live in the spec.
+- [x] **7.5 Execution adapters for a fund.**
       - The order-file and desk handover (exists for futures), and FIX or broker API adapters behind one interface.
       - Paper uses the same interface with simulated fills.
       - The crypto runtime is one adapter, not the centre.
-- [ ] **7.6 Capacity and implementation shortfall analysis** per strategy, at fund-relevant sizes.
-- [ ] **7.7 Documentation for adoption:** a strategy factsheet template (mechanism, evidence, risks, capacity,
+      *2026-10-19:* `quantlab.deploy.execution`: `plan_orders` (whole contracts, band, exits first), the `ExecutionAdapter` interface, `PaperAdapter` and `OrderFileAdapter`. Broker/FIX adapters are written against a firm's API behind this interface; the host's Kraken runtime stays the host's adapter.
+- [x] **7.6 Capacity and implementation shortfall analysis** per strategy, at fund-relevant sizes.
+      *2026-10-19:* `quantlab.deploy.capacity`: `capacity_curve` (Sharpe, impact cost and participation by capital with square-root impact; capacities where the Sharpe halves and where participation hits the limit) and `implementation_shortfall` from fills. smooth_trend: capacity about 1bn USD, set by STOXX 600 futures volume (an assumption in the spec).
+- [x] **7.7 Documentation for adoption:** a strategy factsheet template (mechanism, evidence, risks, capacity,
       correlations, operational needs) as a fund would want it.
+      *2026-10-19:* `quantlab.reporting.factsheet.build_factsheet` (mechanism, evidence, risks, capacity, correlations, operational needs, status); `notebooks/templates/promotion.ipynb` walks evidence, gates, factsheet and the decision.
 
 ## Phase 8: Engineering quality
 

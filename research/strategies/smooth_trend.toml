@@ -1,0 +1,45 @@
+# The H13 design as a lab strategy spec: what the equity-trend paper book runs (config/portfolio.equity_trend_paper.toml).
+# Any change here is a new version: raise `version`, and the promotion gates must pass again before a book uses it.
+
+[strategy]
+id = "smooth_trend"
+version = 1
+title = "Smooth volatility-normalised trend on equity index futures"
+hypothesis = "H13"
+description = """A volatility-normalised EMA difference at three speeds (10/20, 20/40, 40/80 days) through a compound \
+sigmoid (Martin 2023): the position grows with the strength of the trend and stays small while it is weak, which gives \
+trend returns their positive skew. Each market is sized to 10% volatility and weighted equally; decisions at the \
+close trade at the next close."""
+
+[signal]
+name = "trend_forecast"
+params = { activation = "compound_sigmoid", speeds = [[10, 20], [20, 40], [40, 80]] }
+
+[sizing]
+target_vol = 0.10
+span = 20
+
+[engine]
+band = 0.02
+band_exits_to_zero = false
+max_position = 1.0
+cost_bps = 1.0
+
+[universe]
+instruments = ["idx:NDX", "idx:SPX", "idx:STOXX600"]
+
+[expectations]
+# research/reports/H13.md, design P (2005-07 to 2025-12), and its strategy card (section 9).
+sharpe = 0.27
+shrunk_sharpe = 0.23
+volatility = 0.09
+max_drawdown = -0.21
+turnover = 6.7
+costs_per_year = 0.0016
+source = "research/reports/H13.md (H13 P) and its strategy card, section 9"
+
+[capacity]
+# Average daily traded value of the full-size contracts (ES, NQ, STOXX 600 futures), order of magnitude, 2025.
+adv_usd = { "idx:NDX" = 2.0e11, "idx:SPX" = 4.0e11, "idx:STOXX600" = 2.0e9 }
+max_participation = 0.01
+impact_coefficient = 0.01   # square-root law: cost = Y x daily volatility x sqrt(participation), Y about 1, daily volatility about 1%
