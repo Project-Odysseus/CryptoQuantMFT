@@ -391,6 +391,9 @@ engine work only if the result holds. The plan has the phases, the gaps in the e
 - [x] Dropped the "no evidence" sleeves (2026-10-19, owner): BTC/ETH Keltner long/short and SOL trend disabled in
       btc-live, multi-paper and small-paper; btc-live scale 0.36, small-paper 0.35 (risk budget); btc-live review refreshed
 - [ ] Owner's call: set the review Sharpes to the shrunk Sharpes (the honest live expectation) instead of holdout Sharpes
+- [x] H14 (2026-10-19): the owner's regime-adaptive trend + range strategy on equity indices. **D, not supported**
+      (`research/reports/H14.md`). Next tests, each needing its own pre-registration: real NQ/ES contract data;
+      short-horizon mean reversion alone; a single-feature overlay
 - [ ] Equity trend paper book: every sleeve's card says "no evidence". Keep as a research record, or stop it (owner)
 - [ ] Review the equity trend paper book after 90 days (2027-01-17) with `scripts/research/performance_review.py`
 - [ ] Optional, needs its own pre-registration: `trend_forecast` vs the 4/48 rule on BTC/ETH/SOL (paper books only;

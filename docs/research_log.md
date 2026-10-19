@@ -6,6 +6,31 @@ accident.
 
 ---
 
+## 2026-10-19: H14, a regime-adaptive trend + range strategy on equity indices: not supported (D)
+
+The owner's specification, pre-registered before any result (`research/prereg/H14.txt`, config
+`research/h14_regime_switch.toml`), report in `research/reports/H14.md`. The pieces:
+- a trend model (normalised MA plus a 60/20-day breakout);
+- a range model (z-score around a 40-day EWMA);
+- a causal regime overlay: five walk-forward percentile features, three states with hysteresis, transition weights,
+  a rapid-breakout exception and stress rules.
+
+Nasdaq-100 as the NQ proxy, 1999-2025, six more markets, 145 trials.
+
+- **The primary 0.19 net Sharpe (t 1.11)** is below the static 50/50 blend (0.29), the hard switch (0.24), the
+  exposure-matched static benchmark (0.21), trend alone (0.27), and the 20/100 and 200-day MA filters (0.41, 0.37).
+  Timing placebo p 0.52. One of seven criteria passes.
+- **The range model has no edge** on the Nasdaq-100 (-0.12) or in 4 of 7 markets.
+- **The overlay works against the trend model.** It cuts it where it earns most (TRANSITION, trend Sharpe 0.57) and
+  switches 12 times a year.
+- **Its five features are largely one** (ER/slope 0.77). Single features beat the blend; confidence scaling (0.25)
+  beats the state machine.
+- **Robust only in a bad way:** all 18 sensitivity settings have positive returns, and all are below their static
+  blend. Cross-market: beats the static blend in 3 of 7 markets, not pooled.
+- **What it earns is mostly equity beta:** average net long +0.17.
+
+Nothing built. `src/research/regime_switch.py`, `src/signals/regime_features.py`, `scripts/research/h14_study.py`.
+
 ## 2026-10-19: The "no evidence" sleeves dropped from the books
 
 The owner's decision: only statistically significant strategies run. Disabled (`enabled = false`), not deleted, so each
