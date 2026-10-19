@@ -119,31 +119,39 @@ pipeline. The pipeline is held to the same standard at every step, so deployment
 
 ## Phase 2: The research engine
 
-- [ ] **2.1 Component interfaces.** Typed protocols for `Feature`, `Signal` (forecast in a defined unit, e.g. a
+- [x] **2.1 Component interfaces.** Typed protocols for `Feature`, `Signal` (forecast in a defined unit, e.g. a
       volatility-normalised score), `Regime` (state probabilities), `Overlay` (signals plus regime to weights),
       `Combiner`, `Sizer`, `PortfolioConstructor`, `ExecutionModel`, `CostModel`. Each declares its warm-up and
       required inputs.
-- [ ] **2.2 Vectorised event-time engine.** Panel in (dates × instruments × fields), positions and P&L out.
+      *2026-10-19:* `quantlab.engine.components`: Signal, PanelSignal, RegimeModel protocols; `signal(name, fn)` for notebook lambdas; `Targets` (target + parts + diagnostics); `per_instrument`, `apply_signal`, `combine_targets`. Overlays and combiners are strategies returning Targets; separate Overlay/Combiner protocols wait until a second overlay family needs them (Phase 3).
+- [x] **2.2 Vectorised event-time engine.** Panel in (dates × instruments × fields), positions and P&L out.
       - It enforces decision-time alignment: a decision at the close of t trades at the next tradable price (the
         close of t+1 by default; next open optional) and earns from then.
       - It handles different instrument calendars and holidays without look-ahead.
-- [ ] **2.3 Execution and cost models:**
+      *2026-10-19:* `quantlab.engine.backtest.run_backtest`. Size, limits, band (`band_exits_to_zero` is a setting), then decide at the close of t, trade at the close of t+1, earn from t+2, enforced by the engine. Different calendars align in the panel (stale bars carry). NEXT_OPEN raises NotImplementedError until a study needs it.
+- [x] **2.3 Execution and cost models:**
       - per-instrument spread, commission and slippage;
       - a market-impact option (square-root of participation);
       - roll costs; funding and financing (futures excess return, perp funding, cash interest);
       - FX conversion to the base currency.
       Cost cases (low/base/high) are first-class.
-- [ ] **2.4 Sizing:** volatility targeting (EWMA, HAR), risk parity, inverse-volatility and fixed. Leverage and gross
+      *2026-10-19:* per-side bps (fixed, per instrument or per bar), `cost_table` from the master (ticks to bps as the price moves), rolls, cost multiplier, optional square-root impact. `engine.returns.excess_returns` builds excess returns from the master (carry minus point-in-time short rate). Perp funding and FX translation of P&L remain: book them when a crypto or non-base-currency study needs them.
+- [x] **2.4 Sizing:** volatility targeting (EWMA, HAR), risk parity, inverse-volatility and fixed. Leverage and gross
       caps. Whole contracts or lots, with rounding reported.
-- [ ] **2.5 Portfolio construction:** sleeves → instrument targets with netting, budgets, correlation-aware risk
+      *2026-10-19:* `Sizer` (EWMA vol targeting with an optional scale cap, or none). HAR and inverse-vol sizing go through allocation for now. `portfolio.construction.to_contracts` gives whole contracts and flags rounding to zero.
+- [x] **2.5 Portfolio construction:** sleeves → instrument targets with netting, budgets, correlation-aware risk
       targeting, exposure limits, and turnover control (bands, buffering). Reuse and generalise
       `src/portfolio/allocation.py` and `risk.py`.
-- [ ] **2.6 Attribution built in:** P&L by signal, by instrument, by regime state, long and short, gross and net,
+      *2026-10-19:* `portfolio.construction.build_portfolio` (sleeves, causal refitted allocation, netting), with the host's allocation math ported (`portfolio.allocation`: fixed, equal, inverse_vol, risk_parity, hrp). `Limits` (gross, net, per-instrument). Correlation-aware risk targeting (the host's risk model) is still to port.
+- [x] **2.6 Attribution built in:** P&L by signal, by instrument, by regime state, long and short, gross and net,
       cost and financing components, and beta to chosen benchmarks.
-- [ ] **2.7 Reproducibility check.** Port H14 (and H13) onto the engine. The numbers must match the original studies
+      *2026-10-19:* `analytics.performance`: metrics (the H14 table), trades, attribution by instrument, side, target part and costs, and `benchmark_stats`. Attribution by regime state reads `Targets.diagnostics`.
+- [x] **2.7 Reproducibility check.** Port H14 (and H13) onto the engine. The numbers must match the original studies
       to the reported precision, or the difference must be explained and accepted.
-- [ ] **2.8 Performance.** A 30-year, 30-instrument daily panel with 20 signals runs in seconds. Feature caching is
+      *2026-10-19:* `tests/test_lab_golden.py`. H14 on the engine from its cached data reproduces the golden numbers: 5A 0.1941, 6A 0.2870, 2A -0.1208, 7A 0.3702, turnover 7.763 and 4.097 exact, regime shares, the exposure-matched and volatility-managed baselines. H13's forecast book reproduces too. H11 (weekly covariance-scaled book) is not ported yet.
+- [x] **2.8 Performance.** A 30-year, 30-instrument daily panel with 20 signals runs in seconds. Feature caching is
       keyed by data fingerprint and parameters.
+      *2026-10-19:* 20 signals x 30 instruments x 30 years run in about 8 s (tested under 20 s). `engine.cache.cached` memoises features on data content plus parameters (used for H14's regime scores).
 
 ## Phase 3: Signals, regimes and overlays as research objects
 

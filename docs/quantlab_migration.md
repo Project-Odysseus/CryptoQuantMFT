@@ -91,3 +91,4 @@ migration log below and accepted by the owner.
 | --- | --- | --- |
 | 2026-10-19 | Phase 0: package, config loader, conventions, compliance note, this plan, golden numbers recorded | done |
 | 2026-10-19 | Phase 1: data layer in quantlab. Yahoo/OECD/Norges Bank fetching ported as adapters; Kraken and the contract store adapted (`src/lab_adapters`); `config/instruments.toml` generated from the host tables. The host's own loaders are untouched until the engine replaces their callers. | done |
+| 2026-10-19 | Phase 2: the engine. Ported verbatim: indicators, regime features, the trend forecast, the allocation math, and H14's strategy functions (`quantlab.strategies.regime_overlay`). Golden numbers reproduce (H14 to 4 decimals, H13). The host's H11/H13/H14 loops can retire once their studies are re-run through the engine; they stay until then. | done |
