@@ -230,3 +230,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 deploy/backup.env
+
+# Local research papers (not versioned)
+documentation/
