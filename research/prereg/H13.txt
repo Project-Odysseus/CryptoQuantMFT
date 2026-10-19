@@ -1,0 +1,120 @@
+PRE-REGISTRATION H13: A SMOOTH, VOLATILITY-NORMALISED TREND SIGNAL ON THE NASDAQ-100, S&P 500 AND STOXX EUROPE 600 BEATS THE BINARY RULE ON SKEW WITHOUT LOSING ITS RETURN
+Version 1. Written 2026-10-19, before any H13 test was run and before any price of the Nasdaq-100 or STOXX Europe 600 was
+looked at in this project. Changes after results = a new version (lock it again), logged as extra trials.
+
+PURPOSE
+The owner asked (2026-10-19) how the trend designs in two papers would look on equity index futures (Nasdaq-100, S&P 500,
+STOXX Europe 600), and for a paper book running what was found, next to the crypto books on the dashboard. Research and
+paper only: the owner may not trade these markets personally (employer rule), so nothing here can lead to a live book.
+The papers (local, not in git, documentation/):
+- R. J. Martin, "Design and analysis of momentum trading strategies", arXiv:2101.01006v2 (2023).
+- Concretum Research, "Chasing Skew in Trend Following" (2026-10-16).
+
+PRIOR EXPOSURE
+- H11 (2026-10-09) ran a trend rule (the 4/48-day average and the 252-day return, as signs) on the S&P 500 and 11 other
+  indices, 2000-2025: equity trend had a Sharpe ratio of 0.01 after costs, 0.30 before 2013 and -0.27 after. So the
+  S&P 500 has been seen; the Nasdaq-100 and the STOXX Europe 600 have not.
+- Only the first and last dates and the row counts of the three free series were read (2026-10-19): Nasdaq-100 from
+  1985-10, S&P 500 from 1970-01, STOXX Europe 600 from 2004-04-26. No price, return or chart.
+- Martin's settings (speeds, the 0.6 dead zone, the highlighted activation) were chosen on 20+ years of futures across
+  asset classes ending around 2012-2020, which include equity index futures and overlap this window. So the first
+  half of the window is partly in-sample for the design; the second half less so.
+- The 4/48-day rule (variant B4) was chosen on BTC, ETH and SOL in this project.
+
+MARKET BEHAVIOUR
+Equity indices trend for weeks to months. A trend position that grows with the strength of the trend and stays small
+while the trend is weak has positively skewed returns over months; a position that is always full size (+1 or -1) does
+not (Martin, section 4.2.3).
+
+MECHANISM
+Skew is a property of the design (Martin): the position is larger after the strategy has already made money, so the
+big outcomes are mostly gains. Expected return needs trends to exist, which is the usual slow-diffusion and
+gradual-repositioning story. The smooth activation adds no edge of its own; it is expected to keep the binary rule's
+return while trading less in choppy markets and having better skew.
+
+DATA
+- Daily closes from Yahoo: ^NDX (Nasdaq-100), ^GSPC (S&P 500), ^STOXX (STOXX Europe 600, price index). Cached under
+  data/research_cache/h13/ on the first run.
+- 3-month interbank rates, monthly, from the OECD cache of H11 (data/research_cache/multi_asset/rates.csv): USA for the
+  two US indices, EA20 for the STOXX Europe 600. A month's rate is used from the following month on.
+- Calendar: Monday to Friday. A market with no price that day keeps its last price (a zero return).
+- Window: returns from 2005-07-01 to 2025-12-31, the same for all three markets (the STOXX series starts 2004-04; the
+  first year is warm-up for the slowest signal). 2026 stays frozen (governance.FINAL_HOLDOUT_START).
+- Halves: 2005-07-01 to 2015-06-30 and 2015-07-01 to 2025-12-31.
+
+RETURN OF ONE MARKET (what a futures position earns above cash)
+The day's change of the index, plus (dividend yield minus the local 3-month rate) / 252. Flat dividend yields:
+Nasdaq-100 0.9%, S&P 500 1.9%, STOXX Europe 600 3.2% a year.
+
+SIGNALS (each computed from data up to and including day t; nothing is fitted)
+- Volatility: sigma_t = square root of an exponential average (decay 1 - 1/20) of squared daily returns, floored at
+  5% a year (0.05 / sqrt(252) a day).
+- Volatility-adjusted return U_t = r_t / sigma_{t-1}; cumulative Y_t = sum of U up to t.
+- For a speed pair (N_fast, N_slow), a = 1 - 1/N_fast, b = 1 - 1/N_slow, E_a = exponential average of Y with decay a:
+  z = (E_a(Y) - E_b(Y)) / sqrt((a - b)^2 (1 + a b) / ((1 - a^2)(1 - b^2)(1 - a b))), which has unit variance when the
+  U are independent with unit variance (Martin, appendix A).
+- Speeds: (10, 20), (20, 40), (40, 80) days.
+- Activation psi(z), each scaled so that E[psi(Z)^2] = 1 for Z standard normal (Martin's normalisation):
+  P  (primary) compound sigmoid, Martin's highlighted example (figure 8): w_S = 0.30, w_R = 0.71, lambda = 0.75,
+     psi = w_S c_S (2 Phi(lambda z) - 1) + w_R (1 + 2 lambda^2)^(3/4) z exp(-lambda^2 z^2 / 2),
+     c_S = (2/pi arctan(lambda^2 / sqrt(1 + 2 lambda^2)))^(-1/2).
+  B1 sign: psi = sign(z). The binary bet Martin argues against.
+  B2 linear: psi = z, capped at +/-2.
+  B3 double step: psi = c (1[z > 0.6] - 1[z < -0.6]), c = (2 Phi(-0.6))^(-1/2).
+  B4 the rule the crypto and futures books run: +1 when the 4-day simple average of the close is above the 48-day one,
+     -1 below. One speed only.
+- A market's forecast (P, B1, B2, B3) = the average of psi over the three speeds.
+
+POSITIONS
+- Position in a market (a fraction of the book's capital as futures notional) = forecast x 0.10 / annualised sigma_t,
+  divided by 3 (the three markets share the book equally), each capped at +/-1.
+- Decided at the close of day t, traded at the close of t+1, earning from t+2.
+- No-trade band: a market's position is traded to its target only when the two differ by more than 0.02 (the paper
+  engine's rebalance band, 2% of equity).
+- The book is the sum of the three. No further volatility scaling.
+
+COSTS
+- Per side: 1.5 basis points of the amount traded for the Nasdaq-100 and S&P 500, 3 for the STOXX Europe 600.
+- Rolling: 4 times a year at 1 basis point of the position.
+- A doubled-cost case of P is reported.
+
+PRIMARY OUTCOME
+For P and B1: the yearly Sharpe ratio of the book's daily returns after costs over the window, with a 95% interval from a
+circular block bootstrap (60-day blocks, 2,000 draws, seed 0), and the skew of non-overlapping 63-day book returns.
+
+SECONDARY OUTCOMES (all variants, the book and each market)
+- Sortino ratio, yearly return, volatility, worst drawdown, each half, turnover per year, share of gross return lost to
+  costs, correlation of monthly returns with the S&P 500.
+- Skew of book returns at 1, 5, 21 and 63 days (non-overlapping).
+- Trades (a trade = a run of days on which a market's position keeps the same sign, from entry to the day it ends):
+  skew of closed-trade returns (one row per trade) and of daily returns inside trades (one row per trade-day), and the
+  intra-trade skew with each trade weighted equally; share of winning trades; for trades of 20 days or more, where the
+  average path peaks (as a share of the trade's life) and how much of the peak it gives back by the exit.
+- The book in 2008, 2020 and 2022.
+
+TRIALS (every configuration is a trial; count them)
+21: 5 variants x (the book + 3 markets) = 20, plus P at doubled costs. No parameter is varied.
+
+PASS CRITERIA (all three)
+1. P's book Sharpe ratio after costs is positive over the window and in both halves.
+2. P's Sharpe ratio is no more than 0.10 below B1's.
+3. P's 63-day skew is higher than B1's.
+
+KILL IF
+P's book Sharpe ratio after costs from 2015-07-01 to 2025-12-31 is zero or negative.
+Between kill and pass: inconclusive.
+
+WHAT EACH RESULT LEADS TO
+The owner asked for a paper book either way, so the paper book runs P on the micro Nasdaq-100 and micro S&P 500 futures
+and the STOXX Europe 600 future at 10,000,000 NOK of pretend capital, and its config states this verdict. Pass: the
+paper record is a test of a model that passed. Inconclusive or kill: the paper record is a test of the setup and of
+how the design behaves, not of a model expected to earn. Never live (employer rule).
+
+KNOWN RISKS AND BIASES
+- Free data: index closes stand in for futures prices; dividend yields are flat assumptions; no real roll gaps.
+- Only three markets, all equity and highly correlated: a book this narrow has few independent bets, so Sharpe
+  intervals will be wide and one regime (2022) can dominate.
+- H11 already showed equity trend after 2013 near zero or negative. The prior for criterion 1 is weak.
+- Martin's design was chosen on data that overlaps the first half.
+- Costs are assumptions, not measurements.
+- Interest on cash is not counted: returns are above cash.
