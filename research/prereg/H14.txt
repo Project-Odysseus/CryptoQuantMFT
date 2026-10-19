@@ -1,0 +1,92 @@
+PRE-REGISTRATION H14: A CAUSAL THREE-STATE REGIME OVERLAY COMBINES A TREND MODEL AND A RANGE MODEL ON EQUITY INDEX FUTURES BETTER THAN SIMPLER COMBINATIONS
+Version 1. Written 2026-10-19 from the owner's specification, before any H14 result existed. Every number is in
+research/h14_regime_switch.toml (version 1); the rules are in src/research/regime_switch.py and
+src/signals/regime_features.py, tested on synthetic data only. Changes after results = a new version (lock it again),
+logged as extra trials. Research and paper only: the owner may not trade these markets personally.
+
+QUESTION
+Can two economically distinct return mechanisms - trend following and short-horizon mean reversion around a slow
+anchor - be combined by a timely, causal regime overlay, so that the combination beats each model alone, a naive
+50/50 blend and a simple hard switch, after costs, without being explained by equity beta or by holding less?
+
+PRIOR EXPOSURE
+- H11 (2026-10-09): 4/48-day trend on 12 indices incl. the S&P 500, 2000-2025: equity trend Sharpe 0.01 after costs.
+- H13 (2026-10-19): smooth EMA-difference trend on the Nasdaq-100, S&P 500 and STOXX 600, 2005-2025: Sharpe 0.27,
+  strategy card "no evidence", timing placebo failed (the return was mostly being long a rising market). So trend on
+  US indices has been seen; the range model, the regime overlay and the other markets in this form have not.
+- Data checks only (2026-10-19): first/last dates, row counts, duplicates, calendar gaps and close-only history per
+  market. No return, signal or chart.
+- The specification's parameters are the owner's starting hypotheses, not fitted here.
+
+DATA
+- Daily Yahoo index OHLC as the futures proxy (no continuous futures history in the free data): Nasdaq-100 (^NDX, for
+  NQ; the development market), S&P 500 (^GSPC, ES), Russell 2000 (^RUT, RTY), DAX (^GDAXI), Euro Stoxx 50 (^STOXX50E),
+  Nikkei 225 (^N225), FTSE 100 (^FTSE).
+- Return of a rolled future = index return + (flat dividend yield - local 3-month rate, OECD, used a month late) / 252.
+  An index has no roll gaps and no back-adjustment, so roll distortions cannot arise; the report says so and checks
+  trade concentration around quarterly roll dates anyway. Real NQ data can replace the index later.
+- Each market starts the day after its last close-only year (more than 20 bars with high = low = close): DAX 1994,
+  Nikkei 1989; isolated such bars are kept. Euro Stoxx 50 exists only from 2007-03.
+- Evaluation window 1999-01-04 to 2025-12-31 (the first rate is 1998-01). Exploratory 1999-2011, validation 2012-2025.
+  Nothing is fitted on either; both are reported. 2026 is the frozen final holdout and is not looked at.
+- Percentile scores: each calendar year scored against the 500 observations before 1 January, frozen within the year
+  (walk-forward calibration); at least 250 needed, else warm-up and no trade.
+
+STRATEGIES (each predefined; all in the config)
+1 trend alone; 2A/2B range alone (A symmetric, B short signal capped at 0.5); 3A/3B hard switch (trend model when the
+trend probability >= 0.50, range model otherwise); 4A/4B three-state with hysteresis, TRANSITION at 0.25/0.25;
+5A/5B three-state with hysteresis and the transition schedule (PRIMARY = 5A); 6A/6B static 50/50 always active;
+7A 200-day-MA regime filter (trend model above, range model below); 8 buy-and-hold 1x and a volatility-managed long;
+9A exposure-matched static (|5A target| x sign of the 6A signal).
+Diagnostics and references, also predefined: 5C no range shorts; 5A without the rapid-breakout exception;
+P probability-weighted (trend weight = trend probability: confidence scaling without states); simple filters M2-M6
+(|40-day return| > 10%, ADX > 20 and > 25, ER above its median, 20-day MA above 100-day MA, volatility expansion with
+a recent breakout) as hard switches; the overlay without each of its five features, and with each feature alone;
+an MA-filtered long.
+Resolutions of the specification's open points, fixed here: "trend score strongly negative/positive" = trend signal
+beyond -/+0.5; the volatility-breakout veto = 10-day vol above 1.5 x 60-day vol; "conflicting component signals" =
+at least two scores >= 0.65 and at least two <= 0.35; "directional confirmation" = ER, |slope| or breakout score above
+0.5; with confirmed volatility expansion TREND needs 2 confirmations instead of 3; the slow MA is 100 days (section 2).
+Positions: target signal x 10% / EWMA volatility (cap 2x), a 2% band, decided at the close of t, traded at the close
+of t+1, earning from t+2. Costs per side 1.5 bps (NDX, SPX), 2 (DAX, Euro Stoxx 50, FTSE), 3 (RUT, Nikkei), plus 4
+rolls a year at 1 bp; cost cases x0.5, x1, x2.5. Stress rules and the dead zone apply to every combination, not to
+the standalone models or the long references.
+
+SENSITIVITY (one at a time around the baseline, then fast and slow joint settings; 18 configurations of 5A)
+Regime horizon 30/60; TREND entry 0.60/0.70; RANGE entry 0.30/0.40; confirmation 2/5; range |z| entry 1.25/2.0;
+breakout 40/100; anchor 30/60; MA pairs 10/50 and 40/200; fast and slow joint settings.
+
+PRIMARY OUTCOME
+5A's daily net returns on the Nasdaq-100, 1999-2025, base costs: the strategy card (src/research/strategy_checks.py,
+standard v1) with 6A as the baseline, every NDX configuration as a variant, and its positions for the timing placebo.
+
+OUTCOME CLASSIFICATION (mechanical; Sharpe = net annualised Sharpe at base costs, NDX unless stated)
+E1 significant: 5A's card verdict is "weak" or "evidence of an edge".
+E2 beats simpler combinations: 5A's Sharpe exceeds 6A's and 3A's in both the exploratory and the validation period,
+   and the paired bootstrap interval of 5A minus 6A is above zero over the whole window.
+E3 not exposure reduction: 5A's Sharpe exceeds 9A's in both periods.
+E4 beats simple filters: 5A's Sharpe is at least the best of 7A and M2-M6 over the whole window.
+E5 generalises: 5A's Sharpe exceeds 6A's on the S&P 500 and on at least 3 of the other 5 markets, and the pooled
+   (equal-weight across all 7 markets) 5A beats the pooled 6A.
+E6 robust: net return positive in at least 80% of the 18 sensitivity configurations, and above 6A's in at least 2/3.
+E7 not one episode: 5A's Sharpe without its best calendar year is above zero.
+Then, in this order:
+C Mostly exposure management: 5A's Sharpe exceeds 6A's over the whole window but E3 fails.
+D Not supported: 5A's whole-window Sharpe is at most the larger of 6A's and 3A's, or E4 fails.
+A Supported: E1 to E7 all hold.
+B Partially supported: E1 and E2 hold but some of E3-E7 fail.
+E Inconclusive: anything else (5A ahead on point estimates without the significance to say so).
+
+TRIALS
+Every strategy configuration run is a trial: about 37 on the Nasdaq-100, 18 sensitivity configurations, 2 extra cost
+cases, 15 per cross-market market. The study counts and logs the exact number.
+
+WHAT EACH RESULT LEADS TO
+A or B: owner's call on a paper book with the unchanged rules (research only), after one approved look at 2026.
+C, D, E: nothing is built. A post-hoc modification, if any, is a new version, labelled post-hoc, tested separately.
+
+KNOWN RISKS AND BIASES
+- Index closes stand in for futures; dividend yields are flat assumptions; costs are assumptions.
+- One development market, highly correlated with the cross-markets; few independent regime episodes in 27 years.
+- The owner's starting parameters may reflect general knowledge of these markets' history.
+- Many diagnostics are reported; only the classification above decides.

@@ -1,0 +1,145 @@
+# H14: regime-adaptive equity-index strategy (trend model + range model + causal regime overlay).
+# Every number the study uses is here; src/research/regime_switch.py refuses unknown keys. Fixed before any result
+# (research/prereg/H14.txt). These are starting hypotheses from the owner's specification, not optimised values.
+version = 1
+
+[data]
+frequency = "1d"
+primary = "NDX"                       # Nasdaq-100 index as the NQ proxy (no continuous NQ history in the free data)
+cross_markets = ["SPX", "RUT", "DAX", "STOXX50", "NIKKEI", "FTSE"]
+download_start = "1985-01-01"         # warm-up for features and percentile calibration
+evaluation_start = "1999-01-04"       # first day with an interest rate (OECD series from 1998, used a month late)
+evaluation_end = "2025-12-31"         # 2026 stays frozen (governance.FINAL_HOLDOUT_START)
+validation_start = "2012-01-01"       # exploratory 1999-2011, validation 2012-2025
+
+# market: Yahoo symbol, OECD rate area, flat dividend yield, cost class
+[markets.NDX]
+symbol = "^NDX"
+rate_area = "USA"
+dividend_yield = 0.009
+cost_bps = 1.5
+[markets.SPX]
+symbol = "^GSPC"
+rate_area = "USA"
+dividend_yield = 0.019
+cost_bps = 1.5
+[markets.RUT]
+symbol = "^RUT"
+rate_area = "USA"
+dividend_yield = 0.013
+cost_bps = 3.0
+[markets.DAX]
+symbol = "^GDAXI"
+rate_area = "EA20"
+dividend_yield = 0.0                  # the DAX is a total-return index
+cost_bps = 2.0
+[markets.STOXX50]
+symbol = "^STOXX50E"
+rate_area = "EA20"
+dividend_yield = 0.032
+cost_bps = 2.0
+[markets.NIKKEI]
+symbol = "^N225"
+rate_area = "JPN"
+dividend_yield = 0.018
+cost_bps = 3.0
+[markets.FTSE]
+symbol = "^FTSE"
+rate_area = "GBR"
+dividend_yield = 0.035
+cost_bps = 2.0
+
+[execution]
+trade_lag = 2                         # decided at the close of t, traded at the close of t+1, earning from t+2
+target_vol = 0.10                     # the codebase's convention: a unit signal holds 10% yearly volatility
+vol_span = 20                         # exponential average of squared returns for that scaling (decay 1 - 1/20)
+max_position = 2.0                    # cap on |position| as a multiple of capital
+rebalance_band = 0.02                 # trade only when the target moves more than this (the paper engine's band)
+rolls_per_year = 4
+roll_bps = 1.0
+cost_multipliers = { low = 0.5, base = 1.0, high = 2.5 }   # x each market's cost_bps per side
+japan_rate_before_source = 0.1        # % a year, before the OECD series starts (as in H11)
+
+[trend]
+fast_mean = 20
+slow_mean = 100                       # section 2 says 100 (the parameter list's "slow horizon 120" is not used by any rule)
+atr = 20
+ma_scale = 2.0                        # ma_signal = tanh(ma_trend / 2)
+breakout_entry = 60
+breakout_exit = 20
+ma_weight = 0.5
+breakout_weight = 0.5
+
+[range]
+anchor_span = 40                      # EWMA span of the close
+residual_vol = 40
+entry_z = 1.5
+boundary = 40                         # previous 40-day high / low
+boundary_atr = 0.5                    # beyond the boundary by this many ATR: veto entry / stop out
+signal_scale = 2.5                    # range_signal = clip(-z / 2.5, -1, 1)
+max_hold = 20
+strong_trend = 0.5                    # "trend score strongly negative/positive" = raw trend signal beyond +/-0.5
+vol_veto_ratio = 1.5                  # volatility-breakout veto: 10-day vol above 1.5 x 60-day vol
+regime_entry_weight = 0.60            # entries need RANGE or range weight >= 0.60 (overlay variants)
+regime_exit_weight = 0.40             # exit when the regime has left RANGE and range weight < 0.40
+short_cap_b = 0.5                     # version B: short range signal capped at 0.5
+
+[regime]
+horizon = 40                          # ER, slope, variance-ratio window
+adx = 14
+vr_lag = 5
+short_vol = 10
+long_vol = 60
+breakout = 60
+calibration_days = 500                # percentile reference: the 500 days before each calendar year, frozen within it
+min_calibration = 250
+weights = { er = 0.25, slope = 0.25, adx = 0.20, vr = 0.15, breakout = 0.15 }
+trend_entry = 0.65
+range_entry = 0.35
+exit_threshold = 0.50
+confirm = 3
+confirm_fast = 2                      # TREND confirmation when volatility expands with directional confirmation
+exit_confirm = 2
+direction_median = 0.5                # "ER or |slope| score above its historical median"
+rapid_breakout_atr = 0.5
+stress_percentile = 0.95
+stress_gap_atr = 3.0
+stress_signal_scale = 0.5
+stress_range_block = 3
+stress_max_step = 0.5                 # in stress no position moves more than 0.5 of full exposure in one observation
+transition_cap = 0.50                 # gross model exposure cap in TRANSITION
+dead_zone = 0.10
+
+[filters]
+ma_long = 200                         # M1 price vs 200-day MA; also the MA-filtered long reference
+return_window = 40                    # M2 |40-day return| above...
+return_threshold = 0.10               # ...10%
+adx_levels = [20, 25]                 # M3
+fast_slow = [20, 100]                 # M5
+
+[sensitivity]
+# one at a time around the baseline (section 11), then three joint settings
+horizon = [30, 60]
+trend_entry = [0.60, 0.70]
+range_entry = [0.30, 0.40]
+confirm = [2, 5]
+entry_z = [1.25, 2.0]
+breakout_entry = [40, 100]
+anchor_span = [30, 60]
+ma_pair = [[10, 50], [40, 200]]
+fast = { horizon = 30, trend_entry = 0.60, range_entry = 0.40, confirm = 2 }
+slow = { horizon = 60, trend_entry = 0.70, range_entry = 0.30, confirm = 5 }
+
+# Market environments (section 11), fixed before looking
+[episodes]
+dotcom_bear = ["2000-03-27", "2002-10-09"]
+bull_2003_2007 = ["2003-03-12", "2007-10-31"]
+gfc = ["2007-11-01", "2009-03-09"]
+recovery_2009 = ["2009-03-10", "2010-04-23"]
+sideways_2011_2012 = ["2011-01-01", "2012-12-31"]
+low_vol_trend_2017 = ["2017-01-01", "2018-01-26"]
+volmageddon_2018 = ["2018-01-29", "2018-12-24"]
+covid_shock = ["2020-02-19", "2020-03-23"]
+covid_recovery = ["2020-03-24", "2021-11-19"]
+rate_shock_2022 = ["2022-01-01", "2022-12-31"]
+ai_bull_2023_2024 = ["2023-01-01", "2024-12-31"]
