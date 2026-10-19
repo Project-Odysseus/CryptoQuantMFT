@@ -232,6 +232,8 @@ def main() -> None:
               *(["- kill rule met: P's Sharpe after costs from 2015-07 is zero or negative"] if killed else []), "", f"**{verdict}**"]
     (out / "report.md").write_text("\n".join(report))
     pd.DataFrame({variant: result["net"].sum(axis=1) for variant, result in results.items()}).to_csv(out / "daily_net.csv")
+    pd.concat({variant: result["earning"] for variant, result in results.items()}, axis=1).to_csv(out / "positions.csv")  # for the timing placebo
+    window(returns.fillna(0.0)).to_csv(out / "market_returns.csv")
     if not args.no_ledger:
         governance.record_trials("h13_study", 21, family=HYPOTHESIS, data="^NDX, ^GSPC, ^STOXX (Yahoo), OECD rates, 2005-07 to 2025-12",
                                  details={"verdict": verdict, "sharpe_net": estimate, "interval": [low, high]})

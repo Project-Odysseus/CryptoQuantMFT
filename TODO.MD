@@ -383,6 +383,10 @@ engine work only if the result holds. The plan has the phases, the gaps in the e
       than the ±1 rule. `research/reports/H13.md`. Built `trend_forecast`, continuous sleeves and FXXP priced at its index
 - [x] Equity index trend paper book running as a LaunchAgent (2026-10-19, research only, never live):
       `config/portfolio.equity_trend_paper.toml`, `deploy/launchd/com.cryptoquant.paper-equity-trend.plist`
+- [x] Strategy card (2026-10-19): `src/research/strategy_checks.py`, `research/strategy_standard.toml`,
+      `scripts/research/strategy_card.py`; in the guide and the hypothesis scaffold. H13 by it: no evidence (placebo fails)
+- [ ] Card the strategies already running (BTC/ETH/SOL trend sleeves, Keltner, the taker basket) from their portfolio
+      backtests, so the live and paper books are judged by the same standard
 - [ ] Review the equity trend paper book after 90 days (2027-01-17) with `scripts/research/performance_review.py`
 - [ ] Optional, needs its own pre-registration: `trend_forecast` vs the 4/48 rule on BTC/ETH/SOL (paper books only;
       at one lot the live book can't hold sizes)

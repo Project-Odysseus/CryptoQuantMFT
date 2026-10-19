@@ -6,6 +6,24 @@ accident.
 
 ---
 
+## 2026-10-19: The strategy card, and H13 judged by it: no evidence
+
+`src/research/strategy_checks.py`, `research/strategy_standard.toml` (v1), `scripts/research/strategy_card.py`: one
+card per strategy, the counterpart of the signal card. It holds:
+- the Newey-West t and a block-bootstrap Sharpe interval;
+- the deflated Sharpe against the ledger;
+- Romano-Wolf p-values across variants;
+- CSCV overfitting probability;
+- halves, years and the best year left out;
+- a timing placebo;
+- a paired test against a baseline;
+- a Bayesian shrunk Sharpe, reported but not a gate.
+
+Run on H13's saved returns: **no evidence** (t 1.30, deflated Sharpe 0.25, positive in 48% of years). The timing
+placebo fails at p 0.69: the equity trend book earned what being long a rising market earns, and its timing added
+nothing measurable. The smooth design is not shown better than ±1 (difference -0.04, -0.12 to +0.05). H13's
+pre-registered pass asked only for positive Sharpes; from now on every strategy is also judged by the card.
+
 ## 2026-10-19: H13, a smooth trend activation on the Nasdaq-100, S&P 500 and STOXX Europe 600: pass (weak)
 
 From two papers the owner added (Martin, arXiv:2101.01006; Concretum, "Chasing Skew in Trend Following"); research and

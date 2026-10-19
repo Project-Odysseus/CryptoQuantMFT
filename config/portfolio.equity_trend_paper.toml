@@ -8,6 +8,9 @@
 # costs (95% interval -0.11 to 0.65), 0.38 / 0.16 in the two halves, worst drawdown -21%, 63-day skew +0.53 vs +0.33 for
 # the +/-1 rule. The STOXX Europe 600 lost money in the second half (-0.36), and daily returns are left-skewed (-0.93):
 # expect a choppy ride and a win rate near 20% per trade.
+# Strategy card (added after, research/reports/H13.md section 9): NO EVIDENCE of an edge. t 1.30, deflated Sharpe 0.25,
+# and the timing placebo fails (p 0.69): the return is mostly from being net long a rising market, not trend timing.
+# Shrunk Sharpe 0.23 +/- 0.20. Read this book as a record of the design's behaviour, not a model expected to earn.
 #
 # Pricing: MNQ and MES at their own contracts (free source, delayed 10-15 min). FXXP has no contract quotes in the free
 # source, so it is marked and filled at the STOXX Europe 600 cash index (no futures basis, no roll gap).
