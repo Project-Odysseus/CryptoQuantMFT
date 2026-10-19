@@ -1,0 +1,31 @@
+# What a strategy's return series has to show on its card (src/research/strategy_checks.py) before it counts as an
+# edge and not a fluke. The counterpart of research/signal_standard.toml for finished strategies (signal + rules +
+# costs). These numbers are fixed before a strategy is looked at. A change is a new version: raise `version`, say why
+# in docs/research_log.md, and commit it on its own.
+# Version 1, 2026-10-19, written with the owner's go-ahead ("a baseline for all strategies and signals").
+version = 1
+
+# --- gates (the frequentist checks decide) ---
+level = 0.95                # intervals: the Sharpe ratio's block-bootstrap interval must exclude zero at this level
+t_min = 2.0                 # the mean return's Newey-West t-statistic (autocorrelation-robust) must reach this
+dsr_min = 0.95              # deflated Sharpe: probability the Sharpe beats the best of all trials run by luck
+stable_share = 0.60         # share of calendar years with a positive return
+min_blocks = 3              # years needed before stability is judged at all
+best_block_keep = 0.5       # with its best year left out, the Sharpe keeps its sign and at least this share of its size
+placebo_p = 0.05            # timing placebo (needs positions): at most this share of time-shifted positions do as well
+pbo_max = 0.5               # probability of backtest overfitting (needs a sweep): above this, picking the best was luck
+min_years = 3.0             # less history than this: "short history" and no verdict
+family_level = 0.05         # Romano-Wolf: a variant beats zero (or the baseline) with all variants tried accounted for
+
+# --- how the numbers are computed ---
+bootstrap_block = 60        # days per block in the circular block bootstrap (keeps volatility clusters together)
+bootstrap_runs = 2000
+placebo_runs = 500
+placebo_min_shift = 60      # a placebo shift moves the positions at least this many periods
+cscv_blocks = 16            # combinatorially symmetric cross-validation: blocks the history is cut into (even)
+
+# --- Bayesian view (reported, never a gate) ---
+# Prior on the annual Sharpe ratio: centred on no edge, with most strategies between -1 and +1. The posterior mean is
+# the backtest Sharpe shrunk by how much evidence there is: what to expect live, and what paper reviews compare to.
+prior_mean = 0.0
+prior_sd = 0.5

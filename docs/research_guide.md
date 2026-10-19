@@ -409,6 +409,55 @@ the card says "no evidence" or "short history". The owner can override by writin
 `SIGNAL CARD OVERRIDE: <reason>` into the hypothesis's pre-registration before the test; the use of an override is
 recorded in the ledger.
 
+## The strategy card: edge or fluke? (2026-10-19)
+
+The signal card screens a signal before any rules exist. The strategy card judges the finished strategy (signal,
+rules and costs) from its net return series, with the same checks every time. `src/research/strategy_checks.py`,
+pass marks in `research/strategy_standard.toml` (version 1). Every study that ends in a strategy runs it, and its
+verdict goes in the report next to the pre-registered pass criteria.
+
+```python
+from src.research import strategy_checks as stc
+
+card = stc.strategy_card(net, name="H13 P", baseline=net_b1, variants=all_variants, sweep=all_variants,
+                         positions=positions, asset_returns=market, family="H13", periods_per_year=252)
+card.table, card.verdict, card.versus_baseline
+card.save()
+```
+
+Or from a study's saved CSVs:
+`python scripts/research/strategy_card.py <dir>/daily_net.csv --strategy P --baseline B1 --variants all --sweep --family H13 --positions <dir>/positions.csv --market <dir>/market_returns.csv`.
+
+| Check | Passes when (version 1) | Question it answers |
+| --- | --- | --- |
+| Mean return, Newey-West t | t >= 2 | Is the mean different from zero, allowing for autocorrelated returns? |
+| Sharpe, block-bootstrap interval | 95% interval above 0 | The same, allowing for volatility clusters and fat tails |
+| Deflated Sharpe | >= 0.95, with every trial in the study and the ledger | Is it more than the best of everything tried? |
+| Romano-Wolf p | < 0.05 | Is this variant still significant once all the variants (and how alike they are) are counted? |
+| Probability of backtest overfitting (CSCV) | <= 0.5 (needs a sweep) | Did picking the best configuration in-sample pick a good one out-of-sample? |
+| Both halves | Sharpe above 0 in each | Did it work in both halves? |
+| Years with a positive return | >= 60% of years (3 or more) | Is it steady, or a few lucky years? |
+| Without the best year | Same sign, >= half the Sharpe | Does one year carry it? |
+| Timing placebo | p <= 0.05 (needs positions) | Does the timing earn it, or just being long a rising market? |
+| Versus the baseline | Paired bootstrap interval of the Sharpe difference above 0 | Is it better than what we already run? (reported, not part of the verdict) |
+
+Reported only: the probabilistic Sharpe, the rolling one-year Sharpe, the worst drawdown and longest time under
+water, and the **Bayesian view**. The Bayesian view shrinks the Sharpe toward a sceptical prior (mean 0, sd 0.5 a
+year) by however much the evidence allows. It gives the posterior mean and the probability that the Sharpe is above
+zero and above the baseline. The frequentist checks decide; the shrunk Sharpe is what to expect live and what a paper
+review should compare against.
+
+Verdicts: **evidence of an edge** (every check that applies passes), **weak** (the mean is significant but something
+else fails), **no evidence** (the t-statistic or the Sharpe interval fails), **short history** (under 3 years).
+
+Two things to know:
+
+- **The timing placebo is the one most often failed by trend and long-biased books.** Shifting positions months in
+  time keeps their average exposure. If the shifted versions do as well, the return is the market's drift, not the
+  strategy's timing. H13's equity trend book fails it (p = 0.69).
+- **The card adds no trials.** It is noted in the ledger (`type = "strategy_card"`) once per identical input. The
+  study logs its own trials, and the card reads them back for the deflated Sharpe.
+
 ## From a hypothesis to a report: the standard path (2026-10-03)
 
 One command starts a hypothesis, and the same tools measure every one, so studies can be compared and nothing is
@@ -439,6 +488,8 @@ python scripts/research/new_hypothesis.py status      # every hypothesis: locked
   page with the data-quality check, events per year, the event study with its charts, the outcome by trend and
   volatility regime at the event, and the primary outcome under the nearby definitions you pass as `variants`. Look
   for a plateau across them, not the best cell. `report.trials` is what to log in the ledger.
+- **The strategy card:** a study that ends in a strategy saves its daily net returns (and positions) and runs the
+  strategy card on them, with the baseline and every variant. Its verdict goes in the report.
 - **After the report:** judge it against the pass criteria you wrote, then write `research/reports/<ID>.md` and the
   research log entry, failures included. A signal that passes becomes a sleeve only after `candidate_report` shows
   it improves the book (`src/portfolio/backtest.py`).

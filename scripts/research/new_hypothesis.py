@@ -58,7 +58,9 @@ TODO: other horizons, hit rate, worst excursion, per coin and per year.
 
 TESTS
 TODO: event study against volatility-matched controls with bootstrap intervals (src/research/events.py); regimes;
-placebo; costs at 1x and 2x.
+placebo; costs at 1x and 2x. A signal gets its signal card first (src/research/signal_checks.py). A strategy's net
+returns get a strategy card (src/research/strategy_checks.py, research/strategy_standard.toml), with the baseline it
+must beat and every variant run named here; its verdict is reported next to the pass criteria below.
 
 PARAMETER GRID (every configuration is a trial; count them)
 TODO: the nearby definitions that will be run, all listed here. Nothing outside this list is run.
@@ -151,7 +153,8 @@ def main() -> None:
               f"excess over controls {{row['excess']:+.2%}} -> {{page}}")
     if not args.no_ledger:
         governance.record_trials(f"{slug}_study", trials, family=HYPOTHESIS, data=f"binance {{INTERVAL}} to 2025-12-31", details={{"coins": list(COINS), "horizons": list(HORIZONS)}})
-    print(f"Wrote {{out}}. Judge it against the PASS CRITERIA and KILL IF in research/prereg/{id}.txt, then write research/reports/{id}.md and the research log entry.")
+    print(f"Wrote {{out}}. Judge it against the PASS CRITERIA and KILL IF in research/prereg/{id}.txt, then write research/reports/{id}.md and the research log entry. "
+          "If it ends in a strategy, save its net returns and run scripts/research/strategy_card.py on them for the report.")
 
 
 if __name__ == "__main__":
