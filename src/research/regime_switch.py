@@ -157,6 +157,18 @@ def load_config(path: Path | str = CONFIG_PATH) -> Config:
 
 # --- data --------------------------------------------------------------------------------------------------------------
 
+def _run(coroutine: Any) -> Any:
+    """Run a coroutine to completion, also from inside a running event loop (Jupyter), by using a separate thread."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coroutine)
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coroutine).result()
+
+
 async def _download(symbols: Mapping[str, str], start: str) -> dict[str, pd.DataFrame]:
     import aiohttp
 
@@ -174,7 +186,7 @@ def load_market(config: Config, market: str, *, refresh: bool = False, cache_dir
     path = Path(cache_dir) / f"{market}.csv"
     if refresh or not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        frame = asyncio.run(_download({market: config.markets[market]["symbol"]}, config.data["download_start"]))[market]
+        frame = _run(_download({market: config.markets[market]["symbol"]}, config.data["download_start"]))[market]
         frame.to_csv(path)
     frame = pd.read_csv(path, index_col=0, parse_dates=True)
     frame.index.name = "day"
@@ -224,7 +236,7 @@ def load_rates() -> pd.DataFrame:
     """OECD 3-month rates by month (the H11 cache)."""
     from src.research import multi_asset as ma
 
-    return asyncio.run(ma.load_raw(ma.load_markets()))["rates"]
+    return _run(ma.load_raw(ma.load_markets()))["rates"]
 
 
 # --- features, scores and the trend probability --------------------------------------------------------------------
