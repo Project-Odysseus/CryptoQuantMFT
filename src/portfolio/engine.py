@@ -262,6 +262,7 @@ class PortfolioEngine:
         self.unknown_fee_fills: list[str] = []
         self.stop_failure_alerted = False
         self.disabled_sleeves: set[str] = set()
+        self.dropped_sleeves: list[str] = []
         self.cycle = 0
         self.restored = self._load()
         for adapter in self.adapters.values():
@@ -1565,12 +1566,19 @@ class PortfolioEngine:
         if self.state_path is None or not self.state_path.exists():
             return False
         payload = json.loads(self.state_path.read_text())
-        if payload.get("config_name") != self.config.name or set(payload.get("states", {})) != set(self.sleeves):
-            raise ValueError(f"{self.state_path} was written for another portfolio or sleeve set; move it aside to start fresh")
+        saved = set(payload.get("states", {}))
+        if payload.get("config_name") != self.config.name or not set(self.sleeves) <= saved:
+            raise ValueError(f"{self.state_path} was written for another portfolio or sleeve set (a sleeve can be dropped or disabled, "
+                             "but a new one needs a fresh state); move it aside to start fresh")
+        # Sleeves dropped from the config (deleted or `enabled = false`): their states go, their positions stay in the book
+        # and are traded down to the new targets at the next decision, like any other change of target
+        self.dropped_sleeves = sorted(saved - set(self.sleeves))
         self.cycle = int(payload["cycle"])
         self.book = PortfolioBook.from_dict(payload["book"], instruments=self.config.instruments)
-        self.states = {sleeve_id: SleeveState.from_dict(state) for sleeve_id, state in payload["states"].items()}
-        self.allocator = Allocator.from_dict(payload["allocator"])
+        self.states = {sleeve_id: SleeveState.from_dict(state) for sleeve_id, state in payload["states"].items() if sleeve_id in self.sleeves}
+        restored_allocator = Allocator.from_dict(payload["allocator"])
+        if set(restored_allocator.budgets) == set(self.allocator.budgets):  # with other units its scales are stale: start the allocation afresh
+            self.allocator = restored_allocator
         # Checkpoints written before the risk model existed have none: it then warms up again from the next bars
         if payload.get("risk_model") and tuple(payload["risk_model"]["instruments"]) == self.risk_model.instruments:
             restored = RiskModel.from_dict(payload["risk_model"])
@@ -1579,8 +1587,8 @@ class PortfolioEngine:
                 self.risk_model = restored
         if payload.get("unit_returns") and tuple(payload["unit_returns"]["names"]) == self.unit_returns.names:
             self.unit_returns.rows = ReturnWindow.from_dict(payload["unit_returns"]).rows[-self.unit_returns.length:]
-        self.held_weights = {sleeve_id: float(value) for sleeve_id, value in dict(payload.get("held_weights", {})).items()}
-        self.last_sleeve_bar = {sleeve_id: datetime.fromisoformat(stamp) for sleeve_id, stamp in payload["last_sleeve_bar"].items()}
+        self.held_weights = {sleeve_id: float(value) for sleeve_id, value in dict(payload.get("held_weights", {})).items() if sleeve_id in self.sleeves}
+        self.last_sleeve_bar = {sleeve_id: datetime.fromisoformat(stamp) for sleeve_id, stamp in payload["last_sleeve_bar"].items() if sleeve_id in self.sleeves}
         self.last_grid_bar = datetime.fromisoformat(payload["last_grid_bar"]) if payload.get("last_grid_bar") else None
         self.last_grid_close = {instrument: float(close) for instrument, close in payload["last_grid_close"].items()}
         self.last_decisions = dict(payload.get("last_decisions", {}))

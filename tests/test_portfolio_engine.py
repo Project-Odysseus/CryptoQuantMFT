@@ -58,7 +58,11 @@ def bars_until(grid_index: int) -> dict[tuple[str, str], list[OHLCVBar]]:
 
 
 def _config(execution: dict[str, Any] | None = None, contract_sleeves: list[dict[str, Any]] | None = None, **portfolio: Any):
-    return parse_portfolio_config({
+    return parse_portfolio_config(_raw_config(execution, contract_sleeves, **portfolio))
+
+
+def _raw_config(execution: dict[str, Any] | None = None, contract_sleeves: list[dict[str, Any]] | None = None, **portfolio: Any) -> dict[str, Any]:
+    return ({
         **({"execution": execution} if execution else {}),
         **({"contract_sleeves": contract_sleeves} if contract_sleeves else {}),
         "portfolio": {"name": "engine-test", "allocation": "equal", "initial_equity": 10_000, "rebalance_band": 0.02,
@@ -818,3 +822,27 @@ def test_a_fills_trade_row_and_its_event_are_written_together(tmp_path) -> None:
         broken.log_trade(timestamp=START, source="portfolio_paper", exchange="kraken_futures", pair="BTC/USD", side="buy", price=50_000.0, size=0.01, fee=0.25,
                          event={"level": "INFO", "event_type": "portfolio_fill", "message": "buy", "source": "portfolio", "metadata": {}})
     assert TradeLogger(tmp_path / "other.db").list_trades() == []
+
+
+def test_a_restart_after_a_sleeve_is_disabled_keeps_the_book_and_trades_its_position_away(tmp_path) -> None:
+    config = _config()
+    first = _engine(config, tmp_path, state=True)
+    for index in range(FIRST, 350):
+        first.run_cycle(bars_until(index), now=_now(index))
+    equity = first.book.equity()
+    del first
+    raw = {"portfolio": {"name": "engine-test", "allocation": "equal", "initial_equity": 10_000, "rebalance_band": 0.02,
+                         "allocation_lookback_days": 20, "allocation_refit_days": 5}}
+    dropped = parse_portfolio_config({**raw, **{key: value for key, value in _raw_config().items() if key != "portfolio"},
+                                      "sleeves": [*_raw_config()["sleeves"][:2], {**_raw_config()["sleeves"][2], "enabled": False}]})
+    second = _engine(dropped, tmp_path, state=True)
+    assert second.restored and second.dropped_sleeves == ["btc_keltner_4h"]
+    assert set(second.states) == {"btc_ma_1d", "eth_keltner_4h"} and second.book.equity() == equity
+    assert set(second.allocator.budgets) == {"btc_ma_1d", "eth_keltner_4h"}
+    for index in range(350, 420):
+        report = second.run_cycle(bars_until(index), now=_now(index))
+        assert report.mismatches == {}
+
+    added = parse_portfolio_config({**_raw_config(), "sleeves": [*_raw_config()["sleeves"], {**_raw_config()["sleeves"][0], "id": "new_sleeve"}]})
+    with pytest.raises(ValueError, match="a new one needs a fresh state"):
+        _engine(added, tmp_path, state=True)

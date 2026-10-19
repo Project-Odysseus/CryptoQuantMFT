@@ -90,6 +90,9 @@ class PortfolioRuntime:
         self._install_signal_handlers()
         self._event("INFO", "portfolio_runtime_started", f"portfolio {self.engine.config.name} started ({self.engine.mode})",
                     {"iterations": iterations, "interval_seconds": self.interval_seconds, "restored": self.engine.restored})
+        if self.engine.dropped_sleeves:
+            self._event("WARNING", "portfolio_sleeves_dropped", f"sleeves no longer in the config: {self.engine.dropped_sleeves}; "
+                        "their positions are traded to the new targets at the next decision", {"sleeves": self.engine.dropped_sleeves})
         await self._ping("started")
         count = 0
         while not self.stop_requested and (iterations == 0 or count < iterations):
