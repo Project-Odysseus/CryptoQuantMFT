@@ -6,6 +6,20 @@ accident.
 
 ---
 
+## 2026-10-19: H13, a smooth trend activation on the Nasdaq-100, S&P 500 and STOXX Europe 600: pass (weak)
+
+From two papers the owner added (Martin, arXiv:2101.01006; Concretum, "Chasing Skew in Trend Following"); research and
+paper only (employer rule). Pre-registered (`research/prereg/H13.txt`), report in `research/reports/H13.md`. A
+volatility-normalised EMA difference at 10/20, 20/40 and 40/80 days through Martin's compound sigmoid (P), against the
+sign of the same signal (B1), linear, a 0.6 dead zone, and the crypto books' 4/48 rule; index data 2005-07 to
+2025-12, 21 trials. **P: Sharpe 0.27 after costs (interval -0.11 to 0.65), 0.38 and 0.16 in the halves; 63-day skew
++0.53 against +0.33 for B1, whose Sharpe is 0.31.** All three criteria pass. Every sized design is left-skewed daily
+(P -0.93) and right-skewed quarterly; closed trades +3.2 while the days inside them are -0.85; the average trade
+gives back 61% of its peak; P wins 18% of trades. The 4/48 rule loses here (-0.05, 16x turnover), as in H11. The
+STOXX Europe 600 lost in the second half under every design (P -0.36). Built: `trend_forecast`, continuous sleeves,
+FXXP priced at its index, and the paper book `config/portfolio.equity_trend_paper.toml`.
+`src/signals/trend_forecast.py`, `scripts/research/h13_study.py`.
+
 ## 2026-10-12: H12, a slow version of the taker basket: inconclusive
 
 Pre-registered (`research/prereg/H12.txt`), report in `research/reports/H12.md`; the test of the lead from the
