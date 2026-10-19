@@ -1,0 +1,70 @@
+{
+  "_about": "Results the lab's engine must reproduce before the code that produced them is retired (docs/quantlab_migration.md). Values are as reported; tolerance is absolute unless noted. Data: the cached snapshots named in each source run's manifest.",
+  "H11": {
+    "source": "research/reports/H11.md; data/research/h11_20261009T101359Z/",
+    "window": ["2000-02-01", "2025-12-31"],
+    "tolerance": 0.01,
+    "values": {
+      "book_sharpe_net": 0.32,
+      "book_sharpe_net_2000_2012": 0.62,
+      "book_sharpe_net_2013_2025": 0.04,
+      "book_sharpe_doubled_costs": 0.20,
+      "book_sharpe_gross": 0.45,
+      "currency_book_sharpe": 0.42,
+      "equity_book_sharpe": 0.07
+    }
+  },
+  "H13": {
+    "source": "research/reports/H13.md; data/research/h13_20261019T084004Z/",
+    "window": ["2005-07-01", "2025-12-31"],
+    "tolerance": 0.01,
+    "values": {
+      "P_sharpe_net": 0.27,
+      "B1_sharpe_net": 0.31,
+      "B2_sharpe_net": 0.18,
+      "B3_sharpe_net": 0.24,
+      "B4_sharpe_net": -0.05,
+      "P_skew_63d": 0.53,
+      "B1_skew_63d": 0.33,
+      "P_card_t": 1.30,
+      "P_card_timing_placebo_p": 0.69
+    }
+  },
+  "H14": {
+    "source": "research/reports/H14.md; data/research/h14_20261019T140716Z/",
+    "window": ["1999-01-04", "2025-12-31"],
+    "market": "NDX",
+    "tolerance": 0.005,
+    "values": {
+      "1_trend_alone_sharpe": 0.265,
+      "2A_range_alone_sharpe": -0.121,
+      "3A_hard_switch_sharpe": 0.240,
+      "4A_hysteresis_sharpe": 0.152,
+      "5A_primary_sharpe": 0.194,
+      "6A_static_sharpe": 0.287,
+      "7A_ma200_filter_sharpe": 0.370,
+      "9A_exposure_matched_sharpe": 0.214,
+      "8v_vol_managed_long_sharpe": 0.652,
+      "primary_regime_share_range": 0.357,
+      "primary_regime_share_transition": 0.303,
+      "primary_regime_share_trend": 0.340,
+      "primary_card_t": 1.11,
+      "pooled_5A_sharpe": 0.060,
+      "pooled_6A_sharpe": 0.066
+    }
+  },
+  "crypto_sleeve_cards": {
+    "source": "data/research/cards_running_books/summary.csv (scripts/research/card_books.py, 2026-10-19)",
+    "tolerance": 0.02,
+    "values": {
+      "btc_ma_1d_sharpe": 1.46,
+      "btc_ma_1d_t": 3.07,
+      "btc_ma_4h_sharpe": 1.27,
+      "eth_ma_1d_sharpe": 1.11,
+      "taker_basket_sharpe": 1.26,
+      "btc_keltner_ls_sharpe": 0.92,
+      "eth_keltner_ls_sharpe": 0.85,
+      "sol_ma_1d_sharpe": 0.89
+    }
+  }
+}

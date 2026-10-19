@@ -1,0 +1,7 @@
+# Versions quantlab is developed and tested against (plan 0.2). Regenerate when a dependency is upgraded on purpose.
+# Python 3.13.14
+numpy==2.5.2
+pandas==3.0.5
+scipy==1.18.0
+matplotlib==3.11.1
+pytest==9.1.1  # test extra

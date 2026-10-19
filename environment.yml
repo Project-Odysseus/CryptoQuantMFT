@@ -18,3 +18,4 @@ dependencies:
       - pytest==9.1.1
       - pytest-asyncio==1.3.0
       - websockets==17.0.1
+      - -e ./packages/quantlab  # the research lab (docs/research_lab_plan.md)

@@ -49,23 +49,36 @@ pipeline. The pipeline is held to the same standard at every step, so deployment
 
 ## Phase 0: Foundations and decisions (before code)
 
-- [ ] **0.1 Package boundary.** Put the lab in its own package (working name `quantlab`) inside this repo, with no
+- [x] **0.1 Package boundary.** Put the lab in its own package (working name `quantlab`) inside this repo, with no
       imports from the crypto runtime (`src/runtime`, `src/execution`, `src/portfolio` engine). The runtime may import
       the lab, never the reverse.
       *Done when* `quantlab` installs and its tests pass in a fresh environment with only its own dependencies.
-- [ ] **0.2 Dependency policy.** Keep to pandas, numpy and scipy, plus matplotlib or plotly for charts. Optional
+      *2026-10-19:* `packages/quantlab/` (src layout, own `pyproject.toml`, editable install in `environment.yml`). `tests/test_quantlab_boundary.py` fails on any host import, undeclared dependency, module-level optional import, machine path or forced matplotlib backend. Its tests pass with the host repo off the import path (`python -I`). A truly fresh environment is untested; it needs a download, so it waits for wifi.
+- [x] **0.2 Dependency policy.** Keep to pandas, numpy and scipy, plus matplotlib or plotly for charts. Optional
       extras (statsmodels, arch, polars) only behind feature flags. Record versions in a lock file.
-- [ ] **0.3 Configuration standard.** TOML or YAML configs, validated by typed schemas (pydantic or dataclasses with
+      *2026-10-19:* core numpy/pandas/scipy/matplotlib; extras `test`, `stats`; `requirements.lock` pins tested versions.
+- [x] **0.3 Configuration standard.** TOML or YAML configs, validated by typed schemas (pydantic or dataclasses with
       strict keys). A strategy is fully defined by its config plus its component code.
-- [ ] **0.4 Conventions document.**
+      *2026-10-19:* TOML into frozen dataclasses (`quantlab.config`: `parse`, `load`, `to_dict`, `config_hash`). It reports every problem at once with its path, rejects unknown keys and bool-as-number, and parses nested, optional, `Literal`, tuple and dict fields. Chosen over pydantic to keep the core dependency-free; revisit if schemas grow complex.
+- [x] **0.4 Conventions document.**
       - Time: UTC storage, exchange-local session dates, and a timestamp meaning "bar closes at" (decide and enforce
         one).
       - Returns: log returns for features, simple returns for P&L, excess-of-cash for futures.
       - Position units: weight of equity, contracts or notional, and how one converts to another.
-- [ ] **0.5 Migration plan.** Decide what is ported from `src/research` and what is retired. List every current
+      *2026-10-19:* `packages/quantlab/CONVENTIONS.md` plus `quantlab.conventions` (tested).
+      - Bars indexed by when their data is final (daily: session date; intraday: close time, UTC).
+      - Execution at the next close by default.
+      - Log returns for features, simple returns for P&L, futures as excess return.
+      - Weight-of-equity positions.
+      - Unit-variance forecasts capped at ±2.
+      - Regimes as probabilities.
+      - Separate databases.
+- [x] **0.5 Migration plan.** Decide what is ported from `src/research` and what is retired. List every current
       study whose numbers must be reproducible after the move (H11, H13, H14, and the crypto sleeves' cards).
-- [ ] **0.6 Compliance note** in the repo: what the lab contains, that it holds no employer material, and what may be
+      *2026-10-19:* `docs/quantlab_migration.md` (port / adapt / keep / retire, module by module) and `packages/quantlab/tests/golden/studies.json` (H11, H13, H14 and the crypto sleeve cards, with tolerances).
+- [x] **0.6 Compliance note** in the repo: what the lab contains, that it holds no employer material, and what may be
       traded where.
+      *2026-10-19:* `packages/quantlab/COMPLIANCE.md`.
 
 ## Phase 1: Data layer
 
@@ -264,9 +277,9 @@ switch strategies.
 
 ## Open questions (to settle as we go)
 
-- Plotly (interactive) or matplotlib (simple, exportable) for the lab's charts? Possibly both.
-- How much of `src/research` and `src/portfolio` to port versus wrap.
-- Whether the experiment store should live in the same SQLite file as the trading database or a separate one
-  (separate is cleaner for portability).
+- ~~Plotly or matplotlib~~ **matplotlib** (owner, 2026-10-19).
+- ~~Port versus wrap~~ **Refactor for reuse:** port where the logic is host-agnostic, wrap or adapt where it is
+  host-specific (owner, 2026-10-19; detail in `docs/quantlab_migration.md`).
+- ~~Same or separate database~~ **Separate** (owner, 2026-10-19).
 - Which external data is worth paying for, if any, and only for crypto while the employment rule stands.
 - Licensing of the code itself (a private repo; the owner keeps the rights; no employer contributions).
