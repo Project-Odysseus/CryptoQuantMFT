@@ -20,6 +20,11 @@ Tick items here, and in those files, when they are done.
 | Kraken spot live (single-strategy runtime) | Proven with tiny manual and strategy-driven round trips (2026-09-18/25). Open hardening in `todo_important.md` |
 | Options | Research only; no execution |
 
+## 0. Research lab (plan and checklist: `docs/research_lab_plan.md`; started 2026-10-19)
+
+A portable, fund-grade research-to-live stack: one engine, regime models as researched components, power analysis,
+experiment store, notebook-first workflow. Tasks are checked off in the plan itself.
+
 ## 1. Critical path: the BTC book live
 
 Everything below the first line is needed before live runs for days unattended, server or not. The long-term
