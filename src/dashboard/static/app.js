@@ -12,8 +12,11 @@
   const pct = (value, digits = 1, sign = false) => (finite(value) ? `${sign && value > 0 ? "+" : ""}${(value * 100).toFixed(digits)}%` : "–");
   const times = (value, digits = 2) => (finite(value) ? `${value.toFixed(digits)}×` : "–");
   const number = (value, digits = 2) => (finite(value) ? value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits }) : "–");
-  const money = (value) => (finite(value) ? `${value < 0 ? "−" : ""}$${Math.abs(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "–");
-  const signedMoney = (value) => (finite(value) ? `${value > 0 ? "+" : value < 0 ? "−" : ""}$${Math.abs(value).toFixed(2)}` : "–");
+  // Amounts carry their currency: "$" and "€" in front, any other code after (a NOK book reads "10,000,000.00 NOK").
+  const SYMBOLS = { USD: "$", EUR: "€" };
+  const withCurrency = (text, currency = "USD") => (SYMBOLS[currency] ? `${SYMBOLS[currency]}${text}` : `${text} ${currency}`);
+  const money = (value, currency = "USD") => (finite(value) ? `${value < 0 ? "−" : ""}${withCurrency(Math.abs(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }), currency)}` : "–");
+  const signedMoney = (value, currency = "USD") => (finite(value) ? `${value > 0 ? "+" : value < 0 ? "−" : ""}${withCurrency(Math.abs(value).toFixed(2), currency)}` : "–");
   const price = (value) => (finite(value) ? value.toLocaleString("en-US", { maximumSignificantDigits: 6 }) : "–");
   const coin = (instrument) => String(instrument || "").split(":").pop().replace("/USD", "");
   const clock = (stamp, withDate = true) => {
@@ -224,9 +227,9 @@
       <tbody>${units.map((unit) => html`<tr key=${unit.name}><td>${unit.name}${unit.disabled ? html`<span class="tag">paused</span>` : null}</td><td class="text muted">${unit.rule}${unit.members > 1 ? ` (${unit.members} coins)` : ""}</td>
         <td class="text">${unit.instruments.size ? (unit.instruments.size > 4 ? `${unit.instruments.size} coins` : [...unit.instruments].join(", ")) : html`<span class="muted">flat</span>`}</td>
         <td>${unit.long ? pct(unit.long) : "–"}</td><td>${unit.short ? pct(unit.short) : "–"}</td><td>${pct(unit.risk, 0)}</td>
-        <td>${signedMoney(unit.pnl)}<${SignedBar} value=${unit.pnl} scale=${scale} /></td><td><${Sparkline} values=${unit.series} /></td>
+        <td>${signedMoney(unit.pnl, snapshot.base_currency)}<${SignedBar} value=${unit.pnl} scale=${scale} /></td><td><${Sparkline} values=${unit.series} /></td>
         <td class="text muted">${unit.lastBar ? `${unit.lastAction || "change"}, ${clock(unit.lastBar)}` : "–"}</td></tr>`)}</tbody></table>
-      ${finite(snapshot.residual_pnl) ? html`<p class="small">Not credited to any strategy (fees, slippage, funding and rounding): <b>${signedMoney(snapshot.residual_pnl)}</b></p>` : null}
+      ${finite(snapshot.residual_pnl) ? html`<p class="small">Not credited to any strategy (fees, slippage, funding and rounding): <b>${signedMoney(snapshot.residual_pnl, snapshot.base_currency)}</b></p>` : null}
       <p class="muted small">“Wants” is what each strategy asks for, as a share of equity, before opposite requests are netted and the limits are applied. Positions below are what the book actually holds.</p></div>`;
   }
 
@@ -241,9 +244,9 @@
     return html`<div>
       ${rows.length ? html`<div class="scroll"><table><thead><tr><th>Coin</th><th>Side</th><th>Units</th><th>Bar close</th><th>Now</th><th>Since close</th><th>Value</th><th>Share of equity</th><th>Share of risk</th><th>Realised</th><th>Fees</th><th>Funding</th></tr></thead>
         <tbody>${rows.map((row) => html`<tr key=${row.name}><td>${coin(row.name)}</td><td>${row.units > 0 ? "long" : row.units < 0 ? "short" : "–"}</td><td>${row.units ? price(row.units) : "–"}</td><td>${price(row.price)}</td>
-          <td>${now[row.name] ? price(now[row.name].price) : "–"}</td><td>${now[row.name] && row.units ? signedMoney(now[row.name].pnl) : "–"}</td>
-          <td>${row.units ? money(row.value) : "–"}</td><td>${row.units ? pct(row.weight, 1, true) : "–"}<${SignedBar} value=${row.weight} scale=${scale} /></td><td>${pct(share[row.name], 0)}</td>
-          <td>${signedMoney(row.realized_pnl)}</td><td>${money(row.fees)}</td><td>${signedMoney(row.funding)}</td></tr>`)}</tbody></table></div>`
+          <td>${now[row.name] ? price(now[row.name].price) : "–"}</td><td>${now[row.name] && row.units ? signedMoney(now[row.name].pnl, row.currency) : "–"}</td>
+          <td>${row.units ? money(row.value, row.currency) : "–"}</td><td>${row.units ? pct(row.weight, 1, true) : "–"}<${SignedBar} value=${row.weight} scale=${scale} /></td><td>${pct(share[row.name], 0)}</td>
+          <td>${signedMoney(row.realized_pnl, row.currency)}</td><td>${money(row.fees, row.currency)}</td><td>${signedMoney(row.funding, row.currency)}</td></tr>`)}</tbody></table></div>`
         : html`<div class="empty">The book holds nothing right now${equity ? "" : " (no equity reported)"}.</div>`}
       <button class="linkish" onClick=${() => setAll(!all)}>${all ? "Only coins held" : "Show every coin the book may trade"}</button>
     </div>`;
@@ -283,11 +286,12 @@
     </div>`;
   }
 
-  function Fills({ fills }) {
+  function Fills({ fills, snapshot }) {
+    const currencyOf = (instrument) => (((snapshot || {}).instruments || {})[instrument] || {}).currency;
     if (!fills.length) return html`<div class="empty">No fills yet. A book trades only when a strategy's signal changes or a position drifts outside its band.</div>`;
     return html`<div class="scroll"><table><thead><tr><th>Time</th><th>Coin</th><th>Side</th><th>Units</th><th>Price</th><th>Value</th><th>Fee</th><th class="text">Why</th><th class="text">Strategies</th></tr></thead>
       <tbody>${fills.map((fill, index) => html`<tr key=${index}><td>${clock(fill.time)}</td><td>${coin(fill.instrument)}</td><td>${fill.side}</td><td>${price(fill.units)}</td><td>${price(fill.price)}</td>
-        <td>${money((fill.units || 0) * (fill.price || 0))}</td><td>${finite(fill.fee) ? `$${fill.fee.toFixed(4)}` : "–"}</td><td class="text">${fill.reason || ""}${fill.liquidity === "maker" ? html`<span class="tag">maker</span>` : null}</td><td class="text muted">${(fill.strategies || []).join(", ")}</td></tr>`)}</tbody></table></div>`;
+        <td>${money((fill.units || 0) * (fill.price || 0), currencyOf(fill.instrument))}</td><td>${finite(fill.fee) ? withCurrency(fill.fee.toFixed(4), currencyOf(fill.instrument)) : "–"}</td><td class="text">${fill.reason || ""}${fill.liquidity === "maker" ? html`<span class="tag">maker</span>` : null}</td><td class="text muted">${(fill.strategies || []).join(", ")}</td></tr>`)}</tbody></table></div>`;
   }
 
   function Alerts({ alerts }) {
@@ -363,10 +367,10 @@
     return html`<div>
       ${error ? html`<div class="error">The last refresh failed (${error}); showing the previous data.</div>` : null}
       <div class="tiles">
-        ${live ? html`<${Tile} label="Equity now" value=${money(live.equity)} note=${`${pct(live.change, 2, true)} since start, at Kraken's prices ${clock(live.as_of, false)}`} />` : null}
-        ${live ? html`<${Tile} label="Since the last bar close" value=${signedMoney(live.since_bar_close)} note=${`${pct(live.since_bar_close / snapshot.equity, 2, true)}; not yet in the book's own number`} />` : null}
-        <${Tile} label=${live ? "Equity at the last bar close" : "Equity"} value=${money(snapshot.equity)} note=${`started with ${money(snapshot.initial_equity)}`} />
-        <${Tile} label=${live ? "Since start, at bar close" : "Since start"} value=${pct(change, 2, true)} note=${signedMoney(snapshot.equity - snapshot.initial_equity)} />
+        ${live ? html`<${Tile} label="Equity now" value=${money(live.equity, snapshot.base_currency)} note=${`${pct(live.change, 2, true)} since start, at Kraken's prices ${clock(live.as_of, false)}`} />` : null}
+        ${live ? html`<${Tile} label="Since the last bar close" value=${signedMoney(live.since_bar_close, snapshot.base_currency)} note=${`${pct(live.since_bar_close / snapshot.equity, 2, true)}; not yet in the book's own number`} />` : null}
+        <${Tile} label=${live ? "Equity at the last bar close" : "Equity"} value=${money(snapshot.equity, snapshot.base_currency)} note=${`started with ${money(snapshot.initial_equity, snapshot.base_currency)}`} />
+        <${Tile} label=${live ? "Since start, at bar close" : "Since start"} value=${pct(change, 2, true)} note=${signedMoney(snapshot.equity - snapshot.initial_equity, snapshot.base_currency)} />
         <${Tile} label="Drawdown" value=${pct(snapshot.drawdown, 2)} note=${`stops at ${pct(limits.max_drawdown, 0)}`} />
         <${Tile} label="Gross exposure" value=${times(snapshot.gross)} note=${`net ${times(snapshot.net)}`} />
         <${Tile} label="Bitcoin beta" value=${times(exposure.beta_exposure)} note="a 1% BTC move ≈ this × 1%" />
@@ -394,7 +398,7 @@
           <${Heatmap} names=${correlation.names} matrix=${correlation.matrix} /><//>` : null}
         ${Object.keys(snapshot.contract_sleeves || {}).length || Object.keys(snapshot.contracts || {}).length
           ? html`<${Card} title="Bets and options" sub="contracts held under a loss budget"><${Contracts} snapshot=${snapshot} /><//>` : null}
-        <${Card} title="Fills" sub=${snapshot.execution === "maker_first" ? "newest first; orders rest at the touch first (maker), then go to market" : "newest first"} span="c8"><${Fills} fills=${fills} /><//>
+        <${Card} title="Fills" sub=${snapshot.execution === "maker_first" ? "newest first; orders rest at the touch first (maker), then go to market" : "newest first"} span="c8"><${Fills} fills=${fills} snapshot=${snapshot} /><//>
         <${Card} title="Alerts" span="c4"><${Alerts} alerts=${alerts} /><//>
       </div>
     </div>`;
@@ -418,7 +422,7 @@
         <h1>CryptoQuant books</h1>
         <div class="books">${(books || []).map((book) => html`<button key=${book.name} class="book" aria-pressed=${current && current.name === book.name} onClick=${() => pick(book.name)}>
           <b>${book.name}<span class=${`tag ${book.mode === "live" ? "live" : ""}`}>${book.mode === "live" ? "real money" : "paper"}</span></b>
-          <span class="pill">${money(book.equity)} · ${pct(book.change, 2, true)}</span><br />
+          <span class="pill">${money(book.equity, book.base_currency)} · ${pct(book.change, 2, true)}</span><br />
           <span class="pill"><span class="dot" style=${{ background: book.reporting ? "var(--good)" : "var(--text-3)" }}></span>${book.reporting ? "running" : "stopped"}, ${ago(book.age_seconds)}</span>
         </button>`)}</div>
         <span class="spacer"></span>

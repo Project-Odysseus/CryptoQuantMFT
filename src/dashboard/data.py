@@ -115,7 +115,7 @@ class DashboardData:
             snap = self.book(name) or {}
             initial = float(snap.get("initial_equity") or 0.0)
             age = _age_seconds(last, now)
-            out.append({"name": name, "mode": snap.get("mode") or "paper", "snapshots": count, "first": first, "last": last, "age_seconds": age,
+            out.append({"name": name, "mode": snap.get("mode") or "paper", "base_currency": snap.get("base_currency") or "USD", "snapshots": count, "first": first, "last": last, "age_seconds": age,
                         "reporting": age is not None and age < 2.5 * 3600.0,  # snapshots are written at least hourly while a book runs
                         "equity": snap.get("equity"), "initial_equity": initial, "change": float(snap["equity"]) / initial - 1.0 if initial and snap.get("equity") is not None else None,
                         "drawdown": snap.get("drawdown"), "gross": snap.get("gross"), "net": snap.get("net"),

@@ -1392,6 +1392,7 @@ class PortfolioEngine:
                 "realized_pnl": float(position.realized_pnl) if position else 0.0, "fees": float(position.fees) if position else 0.0,
                 "funding": float(position.funding) if position else 0.0,
                 "exchange_stop": self.stop_anchors.get(instrument, {}).get("stop"),
+                "currency": self.book.venue_currency.get(self.config.instruments[instrument].venue, self.config.base_currency),  # of value, P&L and fees
             }
         contracts = {}  # options and prediction-market contracts: not in the config, registered as they are traded
         for instrument, spec in sorted(self.book.instruments.items()):
@@ -1417,7 +1418,8 @@ class PortfolioEngine:
         exposure = exposure_summary(weights, config=self.config, estimate=self.risk_model.estimate(), units=self.groups,
                                     sleeve_weights={sleeve_id: (row["instrument"], row["allocated_weight"]) for sleeve_id, row in sleeves.items()})
         return {
-            "portfolio": self.snapshot_name, "mode": self.mode, "cycle": self.cycle, "equity": equity, "initial_equity": float(self.book.initial_equity),
+            "portfolio": self.snapshot_name, "mode": self.mode, "cycle": self.cycle, "base_currency": self.config.base_currency,
+            "equity": equity, "initial_equity": float(self.book.initial_equity),
             "peak_equity": peak, "drawdown": max(0.0, 1.0 - equity / peak) if peak > 0 else 0.0,
             "day_start_equity": float(self.book.day_start_equity), "gross": gross, "net": sum(weights.values()),
             "limits": {"max_gross_exposure": risk.max_gross_exposure, "max_net_exposure": risk.max_net_exposure,
