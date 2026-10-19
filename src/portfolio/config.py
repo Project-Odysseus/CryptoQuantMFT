@@ -163,6 +163,10 @@ class PortfolioConfig:
     # lot is at most `small_account_max_lot_weight` of equity. For accounts where one lot is a big share of the book.
     small_account_equity: float = 0.0
     small_account_max_lot_weight: float = 0.9
+    # Interest a paper book earns on idle cash (equity minus the margin its positions tie up), a fraction a year, and the
+    # absolute return the dashboard compares the book with (default: the cash rate, i.e. "beat the savings account").
+    cash_rate: float = 0.0
+    benchmark_return: float | None = None
     allocation: str = "equal"
     allocation_lookback_days: int = 90
     allocation_refit_days: int = 30
@@ -233,7 +237,7 @@ class PortfolioConfig:
 
 
 _PORTFOLIO_KEYS = {"name", "base_currency", "initial_equity", "rebalance_band", "scale", "allocation", "allocation_lookback_days", "allocation_refit_days",
-                   "small_account_equity", "small_account_max_lot_weight"}
+                   "small_account_equity", "small_account_max_lot_weight", "cash_rate", "benchmark_return"}
 _TOP_KEYS = {"portfolio", "risk", "instruments", "sleeves", "review", "baskets", "execution", "contract_sleeves", "futures"}
 _EXECUTION_KEYS = {"policy", "maker_timeout_seconds"}
 EXECUTION_POLICIES = ("taker", "maker_first")
@@ -341,6 +345,12 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
     small_lot_weight = _number(portfolio, "small_account_max_lot_weight", 0.9, "[portfolio]", errors)
     if small_lot_weight is not None and not 0 < small_lot_weight <= 1:
         errors.append("[portfolio] small_account_max_lot_weight must be above 0 and at most 1 (0.9 = one lot up to 90% of equity)")
+    cash_rate = _number(portfolio, "cash_rate", 0.0, "[portfolio]", errors)
+    if cash_rate is not None and not 0 <= cash_rate < 0.5:
+        errors.append("[portfolio] cash_rate must be at least 0 and below 0.5 (0.045 = 4.5% a year on idle cash)")
+    benchmark_return = _number(portfolio, "benchmark_return", 0.0, "[portfolio]", errors)
+    if benchmark_return is not None and not -0.5 < benchmark_return < 1:
+        errors.append("[portfolio] benchmark_return must be a yearly return between -0.5 and 1 (0.08 = 8% a year)")
     for key, default in (("allocation_lookback_days", 90), ("allocation_refit_days", 30)):
         value = portfolio.get(key, default)
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -552,6 +562,8 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
         scale=float(portfolio.get("scale", 1.0)),
         small_account_equity=float(portfolio.get("small_account_equity", 0.0)),
         small_account_max_lot_weight=float(portfolio.get("small_account_max_lot_weight", 0.9)),
+        cash_rate=float(portfolio.get("cash_rate", 0.0)),
+        benchmark_return=float(portfolio["benchmark_return"]) if "benchmark_return" in portfolio else None,
         allocation=str(portfolio.get("allocation", "equal")),
         allocation_lookback_days=int(portfolio.get("allocation_lookback_days", 90)),
         allocation_refit_days=int(portfolio.get("allocation_refit_days", 30)),
@@ -583,7 +595,9 @@ def describe(config: PortfolioConfig) -> str:
     from src.portfolio.allocation import sleeve_scales
 
     lines = [f"Portfolio '{config.name}' ({config.path or 'in memory'}): base {config.base_currency}, initial equity {config.initial_equity:,.0f}, "
-             f"allocation {config.allocation}, rebalance band {config.rebalance_band:.1%}" + (f", scale {config.scale:g}" if config.scale != 1.0 else "")]
+             f"allocation {config.allocation}, rebalance band {config.rebalance_band:.1%}" + (f", scale {config.scale:g}" if config.scale != 1.0 else "")
+             + (f", idle cash earns {config.cash_rate:.2%} a year (paper)" if config.cash_rate else "")
+             + (f", benchmark {config.benchmark_return:.2%} a year" if config.benchmark_return is not None else "")]
     lines.append("Instruments:")
     for spec in config.instruments.values():
         lines.append(f"  {spec.id:<28} {spec.kind:<4} short={'yes' if spec.can_short else 'no':<3} max leverage {spec.max_leverage:g}x, fee {spec.taker_fee_pct:.2f}%, slippage {spec.slippage_bps:g} bps")

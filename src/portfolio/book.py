@@ -100,6 +100,8 @@ class PortfolioBook:
     day: date | None = None
     last_update: datetime | None = None
     liquidations_booked: list[str] = field(default_factory=list)  # exchange liquidation order ids already in the book
+    interest_earned: Decimal = ZERO  # on idle cash, in the base currency (paper books with a cash rate)
+    interest_until: datetime | None = None
 
     def __post_init__(self) -> None:
         """Fill in venue currencies and a starting equity."""
@@ -361,6 +363,40 @@ class PortfolioBook:
 
     # --- views ---------------------------------------------------------------------------------------------------
 
+    def idle_cash(self) -> Decimal:
+        """Equity not tied up as margin: each position's notional over its instrument's `max_leverage` is set aside.
+
+        Spot positions are paid in full (leverage 1), so a spot book's idle cash is what it has not bought with. A
+        futures or perp position ties up only its margin; the rest of the collateral is idle and earns interest.
+        """
+        tied = ZERO
+        for instrument, units in self.units().items():
+            spec = self._spec(instrument)
+            value = abs(units * self.marks.get(instrument, self.positions[instrument].avg_entry)) * self.fx.get(self.venue_currency.get(spec.venue, self.base_currency), Decimal(1))
+            tied += value / max(_d(spec.max_leverage if spec.kind != "spot" else 1), Decimal(1))
+        return max(ZERO, self.equity() - tied)
+
+    def accrue_interest(self, rate: float, now: datetime) -> Decimal:
+        """Add interest on idle cash since the last accrual, at `rate` a year (act/365), to the base-currency cash.
+
+        The first call only starts the clock. Interest lands in the venue that keeps the base currency (`CASH_VENUE`
+        for a futures book), so it counts in equity and drawdown like any other profit.
+        """
+        if self.interest_until is None or now <= self.interest_until or rate <= 0:
+            self.interest_until = max(now, self.interest_until or now)
+            return ZERO
+        days = _d((now - self.interest_until).total_seconds()) / Decimal(86_400)
+        amount = self.idle_cash() * _d(rate) * days / Decimal(365)
+        venue = CASH_VENUE if CASH_VENUE in self.cash else next((name for name in self.cash if self.venue_currency.get(name) == self.base_currency), None)
+        if venue is None:  # no base-currency venue: credit the first one, converted
+            venue = sorted(self.cash)[0]
+            self.cash[venue] += amount / self.fx[self.venue_currency[venue]]
+        else:
+            self.cash[venue] += amount
+        self.interest_earned += amount
+        self.interest_until = now
+        return amount
+
     def venue_equity(self, venue: str) -> Decimal:
         """Cash plus open positions on one venue, in the venue's currency."""
         total = self.cash.get(venue, ZERO)
@@ -424,6 +460,8 @@ class PortfolioBook:
             "day": self.day.isoformat() if self.day else None,
             "last_update": self.last_update.isoformat() if self.last_update else None,
             "liquidations_booked": list(self.liquidations_booked),
+            "interest_earned": str(self.interest_earned),
+            "interest_until": self.interest_until.isoformat() if self.interest_until else None,
             "options": sorted(instrument for instrument, spec in self.instruments.items() if spec.kind == "option"),
             "binaries": sorted(instrument for instrument, spec in self.instruments.items() if spec.kind == "binary"),
         }
@@ -448,5 +486,7 @@ class PortfolioBook:
             day=date.fromisoformat(payload["day"]) if payload.get("day") else None,
             last_update=datetime.fromisoformat(payload["last_update"]) if payload.get("last_update") else None,
             liquidations_booked=list(payload.get("liquidations_booked", [])),
+            interest_earned=Decimal(payload.get("interest_earned", "0")),
+            interest_until=datetime.fromisoformat(payload["interest_until"]) if payload.get("interest_until") else None,
         )
         return book

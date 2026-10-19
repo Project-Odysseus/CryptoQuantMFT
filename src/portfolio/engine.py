@@ -302,6 +302,8 @@ class PortfolioEngine:
         self._settle_binaries(now)
         self._run_contracts(report, now)
         self._book_live_funding(now)
+        if self.config.cash_rate and self.mode != "live":  # a live account earns what the exchange pays: nothing to add
+            self.book.accrue_interest(self.config.cash_rate, now)
         self._flush_tax(now)  # funding booked while marking
         self._check_equity_drift(now)
 
@@ -1420,6 +1422,8 @@ class PortfolioEngine:
                                     sleeve_weights={sleeve_id: (row["instrument"], row["allocated_weight"]) for sleeve_id, row in sleeves.items()})
         return {
             "portfolio": self.snapshot_name, "mode": self.mode, "cycle": self.cycle, "base_currency": self.config.base_currency,
+            "cash_rate": self.config.cash_rate, "interest_earned": float(self.book.interest_earned), "idle_cash": float(self.book.idle_cash()),
+            "benchmark_return": self.config.benchmark_return if self.config.benchmark_return is not None else self.config.cash_rate,
             "equity": equity, "initial_equity": float(self.book.initial_equity),
             "peak_equity": peak, "drawdown": max(0.0, 1.0 - equity / peak) if peak > 0 else 0.0,
             "day_start_equity": float(self.book.day_start_equity), "gross": gross, "net": sum(weights.values()),

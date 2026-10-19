@@ -684,6 +684,11 @@ Things to know:
   The usual weight limits in `[risk]` and `[risk.groups]` apply as for any book.
 - **Money.** The capital stays in the base currency; each ledger (one per exchange and currency, such as `cme_usd`)
   holds only what its contracts have earned or lost. No fee is booked on paper: the cost is in the fill price.
+- **Interest on idle cash and an absolute benchmark.** `[portfolio] cash_rate = 0.045` makes a paper book earn that
+  yearly rate on idle cash: equity minus each position's margin (notional / `max_leverage`; spot is paid in full).
+  It is accrued every cycle into the base-currency cash and shown on the dashboard. Live books never add it, because
+  the account earns only what the exchange pays. The dashboard compares a book with a fixed-return line,
+  `benchmark_return` (default: the cash rate), not with Bitcoin. Bitcoin beta is shown only for books that hold BTC.
 - **Around the clock (CME only).** `[futures] around_the_clock = ["cme_usd:MES", ...]` sends a CME market's orders as
   soon as they are decided, at any hour Globex trades (Sunday 18:00 to Friday 17:00 New York, closed 17:00-18:00
   daily), instead of at a slot. A daily decision then fills when Globex reopens (about 00:00 Oslo), not at 16:00 the

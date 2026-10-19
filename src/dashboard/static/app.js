@@ -276,7 +276,7 @@
     return html`<div>
       <${Meter} label="Gross exposure" note="longs plus shorts" value=${snapshot.gross} limit=${limits.max_gross_exposure} format=${times} />
       <${Meter} label="Net exposure" note="longs minus shorts" value=${snapshot.net} limit=${limits.max_net_exposure} format=${times} />
-      <${Meter} label="Bitcoin beta" note="how much of a BTC move the book takes" value=${exposure.beta_exposure} limit=${limits.max_beta_exposure} format=${times} />
+      ${finite(exposure.beta_exposure) ? html`<${Meter} label="Bitcoin beta" note="how much of a BTC move the book takes" value=${exposure.beta_exposure} limit=${limits.max_beta_exposure} format=${times} />` : null}
       <${Meter} label="Volatility" note="yearly, assuming coins move together" value=${exposure.stressed_volatility} limit=${limits.max_portfolio_vol} format=${(value) => pct(value, 0)} />
       <${Meter} label="Drawdown" note="below the highest equity" value=${snapshot.drawdown} limit=${limits.max_drawdown} format=${(value) => pct(value, 1)} />
       <${Meter} label="Loss today" value=${dayLoss} limit=${limits.daily_loss_limit} format=${(value) => pct(value, 1)} />
@@ -345,11 +345,16 @@
       const end = new Date(history.time[history.time.length - 1]).getTime();
       const from = range === null ? 0 : history.time.findIndex((stamp) => new Date(stamp).getTime() >= end - range * 86400e3);
       const cut = (values) => values.slice(Math.max(0, from));
-      const equity = cut(history.equity), bench = cut(history.benchmark);
-      const firstEquity = equity.find(finite), firstBench = bench.find(finite);
-      return { time: cut(history.time), equity, drawdown: cut(history.drawdown).map((value) => (finite(value) ? -value : null)), gross: cut(history.gross), net: cut(history.net), beta: cut(history.beta),
-               bookIndex: equity.map((value) => (finite(value) && firstEquity ? (value / firstEquity) * 100 : null)), benchIndex: bench.map((value) => (finite(value) && firstBench ? (value / firstBench) * 100 : null)) };
-    }, [history, range]);
+      const equity = cut(history.equity), time = cut(history.time);
+      const firstEquity = equity.find(finite);
+      // An absolute benchmark: what the starting money would have grown to at a fixed yearly return (the book's cash rate
+      // unless the config sets `benchmark_return`), so the book is judged against "the savings account", not a coin.
+      const rate = (state.snapshot && finite(state.snapshot.benchmark_return)) ? state.snapshot.benchmark_return : 0;
+      const start = time.length ? new Date(time[0]).getTime() : 0;
+      return { time, equity, drawdown: cut(history.drawdown).map((value) => (finite(value) ? -value : null)), gross: cut(history.gross), net: cut(history.net), beta: cut(history.beta), rate,
+               bookIndex: equity.map((value) => (finite(value) && firstEquity ? (value / firstEquity) * 100 : null)),
+               benchIndex: time.map((stamp) => 100 * Math.pow(1 + rate, (new Date(stamp).getTime() - start) / (365 * 86400e3))) };
+    }, [history, range, state.snapshot]);
     if (error && !snapshot) return html`<div class="error">Could not load “${name}”: ${error}</div>`;
     if (!snapshot || !view) return html`<p class="muted">Loading ${name}…</p>`;
     const exposure = snapshot.exposure || {}, limits = snapshot.limits || {}, correlation = snapshot.strategy_correlation;
@@ -373,15 +378,16 @@
         <${Tile} label=${live ? "Since start, at bar close" : "Since start"} value=${pct(change, 2, true)} note=${signedMoney(snapshot.equity - snapshot.initial_equity, snapshot.base_currency)} />
         <${Tile} label="Drawdown" value=${pct(snapshot.drawdown, 2)} note=${`stops at ${pct(limits.max_drawdown, 0)}`} />
         <${Tile} label="Gross exposure" value=${times(snapshot.gross)} note=${`net ${times(snapshot.net)}`} />
-        <${Tile} label="Bitcoin beta" value=${times(exposure.beta_exposure)} note="a 1% BTC move ≈ this × 1%" />
+        ${finite(exposure.beta_exposure) ? html`<${Tile} label="Bitcoin beta" value=${times(exposure.beta_exposure)} note="a 1% BTC move ≈ this × 1%" />` : null}
+        ${snapshot.cash_rate ? html`<${Tile} label="Interest on idle cash" value=${money(snapshot.interest_earned, snapshot.base_currency)} note=${`${pct(snapshot.cash_rate, 2)} a year on ${money(snapshot.idle_cash, snapshot.base_currency)} not tied up as margin`} />` : null}
         <${Tile} label="Volatility" value=${pct(exposure.volatility, 0)} note=${`stressed ${pct(exposure.stressed_volatility, 0)} a year`} />
         <${Tile} label="Positions" value=${String(held)} note=${snapshot.pending_orders ? `${snapshot.pending_orders} order${snapshot.pending_orders > 1 ? "s" : ""} resting on the exchange` : `${fills.length} fills so far`} />
         <${Tile} label="Independent bets" value=${finite(exposure.effective_bets) ? exposure.effective_bets.toFixed(1) : "–"} note="higher = more diversified" />
       </div>
       <div class="grid">
-        <${Card} title="The book against Bitcoin" sub="both start at 100" span="c8"
-          table=${() => html`<${SeriesTable} time=${view.time} series=${[{ name: "Book", values: view.bookIndex }, { name: "Bitcoin", values: view.benchIndex }]} format=${index} />`}>
-          <${LineChart} time=${view.time} series=${[{ name: "Book", values: view.bookIndex }, { name: "Bitcoin", values: view.benchIndex }]} format=${index} height=${260} />
+        <${Card} title="The book against its benchmark" sub=${`both start at 100; the benchmark grows ${pct(view.rate, 2)} a year`} span="c8"
+          table=${() => html`<${SeriesTable} time=${view.time} series=${[{ name: "Book", values: view.bookIndex }, { name: `Benchmark ${pct(view.rate, 1)}`, values: view.benchIndex }]} format=${index} />`}>
+          <${LineChart} time=${view.time} series=${[{ name: "Book", values: view.bookIndex }, { name: `Benchmark ${pct(view.rate, 1)}`, values: view.benchIndex }]} format=${index} height=${260} />
         <//>
         <${Card} title="Risk against its limits" span="c4"><${Limits} snapshot=${snapshot} /><//>
         <${Card} title="Drawdown" sub="below the highest equity so far" span="c6"
@@ -389,8 +395,8 @@
           <${LineChart} time=${view.time} series=${[{ name: "Drawdown", values: view.drawdown }]} format=${percent} area=${true} zero=${true} height=${200} />
         <//>
         <${Card} title="Exposure" sub="as a multiple of equity" span="c6"
-          table=${() => html`<${SeriesTable} time=${view.time} series=${[{ name: "Gross", values: view.gross }, { name: "Net", values: view.net }, { name: "Bitcoin beta", values: view.beta }]} format=${times} />`}>
-          <${LineChart} time=${view.time} series=${[{ name: "Gross", values: view.gross }, { name: "Net", values: view.net }, { name: "Bitcoin beta", values: view.beta }]} format=${multiple} zero=${true} height=${200} />
+          table=${() => html`<${SeriesTable} time=${view.time} series=${[{ name: "Gross", values: view.gross }, { name: "Net", values: view.net }, ...(view.beta.some(finite) ? [{ name: "Bitcoin beta", values: view.beta }] : [])]} format=${times} />`}>
+          <${LineChart} time=${view.time} series=${[{ name: "Gross", values: view.gross }, { name: "Net", values: view.net }, ...(view.beta.some(finite) ? [{ name: "Bitcoin beta", values: view.beta }] : [])]} format=${multiple} zero=${true} height=${200} />
         <//>
         <${Card} title="Strategies" sub="each one's request and its profit"><${Strategies} snapshot=${snapshot} history=${history} /><//>
         <${Card} title="Positions" sub=${`as of ${clock(snapshot.timestamp)}`} span=${correlation && correlation.matrix ? "c8" : ""}><${Positions} snapshot=${snapshot} live=${live} /><//>

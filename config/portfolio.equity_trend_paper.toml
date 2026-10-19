@@ -26,6 +26,10 @@ base_currency = "NOK"
 initial_equity = 10000000
 rebalance_band = 0.02
 scale = 1.0                       # three sleeves share the book equally: each market at 10%/3 volatility, as in H13
+# Futures tie up only margin, so most of the 10,000,000 NOK sits idle. On paper it earns a savings rate: 3-month NIBOR was
+# 4.8% in 2026-09 (OECD); 4.5% allows for a bank's margin. Set it to what the account really pays. The dashboard's
+# benchmark is the same 4.5% a year: the book has to beat leaving the money in the bank.
+cash_rate = 0.045
 allocation = "equal"
 
 [risk]

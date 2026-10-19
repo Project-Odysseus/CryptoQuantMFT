@@ -129,3 +129,30 @@ def test_a_paper_book_from_a_config_splits_equity_across_venues() -> None:
         book.apply_fill(BTC, "buy", "0", "50000")
     with pytest.raises(KeyError, match="not in the book"):
         book.apply_fill("kraken_futures:SOL/USD", "buy", "1", "100")
+
+
+def test_idle_cash_earns_interest_and_survives_a_restart() -> None:
+    from datetime import timedelta
+
+    book = PortfolioBook(base_currency="USD", instruments={BTC: InstrumentSpec(id=BTC, max_leverage=2.0)}, cash={"kraken_futures": D("10000")})
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert book.accrue_interest(0.05, start) == 0  # the first call starts the clock
+    book.apply_fill(BTC, "buy", "0.1", "50000")       # 5,000 notional at 2x: 2,500 tied up as margin
+    book.mark({BTC: 50000})
+    assert book.idle_cash() == D("7500")
+    earned = book.accrue_interest(0.05, start + timedelta(days=365))
+    assert earned == pytest.approx(D("375"), abs=D("0.01"))
+    assert book.equity() == pytest.approx(D("10375"), abs=D("0.01")) and book.interest_earned == earned
+    restored = PortfolioBook.from_dict(json.loads(json.dumps(book.to_dict())), instruments=book.instruments)
+    assert restored.interest_earned == earned and restored.interest_until == start + timedelta(days=365)
+
+
+def test_cash_rate_and_benchmark_are_checked_in_the_config() -> None:
+    from src.portfolio.config import PortfolioConfigError
+
+    raw = {"portfolio": {"name": "x", "cash_rate": 0.045, "benchmark_return": 0.08}, "instruments": {BTC: {"kind": "perp"}},
+           "sleeves": [{"id": "a", "instrument": BTC, "interval": "1d", "strategy": "moving_average_crossover"}]}
+    config = parse_portfolio_config(raw)
+    assert config.cash_rate == 0.045 and config.benchmark_return == 0.08
+    with pytest.raises(PortfolioConfigError, match="cash_rate must be"):
+        parse_portfolio_config({**raw, "portfolio": {"name": "x", "cash_rate": 4.5}})
