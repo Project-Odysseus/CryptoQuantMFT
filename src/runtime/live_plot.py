@@ -6,9 +6,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
+import sys
+
 import matplotlib
 
-matplotlib.use("Agg")
+if "ipykernel" not in sys.modules:  # files only in scripts; leave a notebook's inline backend alone
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 

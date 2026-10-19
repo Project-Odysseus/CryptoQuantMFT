@@ -13,9 +13,12 @@ import io
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+import sys
+
 import matplotlib
 
-matplotlib.use("Agg")
+if "ipykernel" not in sys.modules:  # files only in scripts; leave a notebook's inline backend alone
+    matplotlib.use("Agg")
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib import pyplot as plt  # noqa: E402
