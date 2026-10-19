@@ -20,6 +20,8 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=8"]
 stats = ["statsmodels>=0.14", "arch>=7"]
+calendars = ["exchange_calendars>=4.5"]  # exact exchange holidays (weekdays without it)
+parquet = ["pyarrow>=15"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

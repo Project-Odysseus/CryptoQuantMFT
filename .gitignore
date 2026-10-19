@@ -233,3 +233,6 @@ deploy/backup.env
 
 # Local research papers (not versioned)
 documentation/
+
+# The lab's data catalog when run from the repo root without QUANTLAB_DATA (the host uses data/quantlab)
+quantlab_data/

@@ -24,4 +24,16 @@ Phase 0 (foundations):
 - the strict config loader (`quantlab.config`);
 - the conventions as code (`quantlab.conventions`).
 
-The engine, data layer and regime work follow the plan's phases.
+Phase 1 (data):
+- `quantlab.calendars`;
+- `quantlab.data`: instruments, adapters, the versioned catalog, data cards, futures construction, panels, universes
+  and macro series.
+
+```python
+from quantlab.data import InstrumentMaster, DataCatalog, load_panel
+master = InstrumentMaster.load("config/instruments.toml")
+panel = load_panel(master, ["idx:NDX", "idx:SPX"], catalog=DataCatalog("data/quantlab"))
+panel["close"]; panel.cards["idx:NDX"].to_markdown(); panel.snapshots
+```
+
+The engine and regime work follow the plan's phases.

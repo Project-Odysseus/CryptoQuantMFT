@@ -90,3 +90,4 @@ migration log below and accepted by the owner.
 | Date | Step | Result |
 | --- | --- | --- |
 | 2026-10-19 | Phase 0: package, config loader, conventions, compliance note, this plan, golden numbers recorded | done |
+| 2026-10-19 | Phase 1: data layer in quantlab. Yahoo/OECD/Norges Bank fetching ported as adapters; Kraken and the contract store adapted (`src/lab_adapters`); `config/instruments.toml` generated from the host tables. The host's own loaders are untouched until the engine replaces their callers. | done |

@@ -11,7 +11,7 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parents[1]
 SOURCE = PACKAGE / "src" / "quantlab"
 DECLARED = {"numpy", "pandas", "scipy", "matplotlib"}
-OPTIONAL = {"statsmodels", "arch"}  # extras: may only be imported inside functions
+OPTIONAL = {"statsmodels", "arch", "exchange_calendars"}  # extras: may only be imported inside functions
 HOST_MODULES = {"src", "config", "main", "kill_switch", "scripts", "tests"}
 
 
