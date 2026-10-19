@@ -67,3 +67,10 @@ Phase 4 (validation), in `quantlab.validation`:
 - `fdr`: lab-wide false-discovery control.
 
 Walkthrough: `notebooks/validation_lab.ipynb`.
+
+Phase 5 (record and reporting):
+- `quantlab.tracking.store`: runs and the hypothesis registry, in `quantlab_data/research/lab.db`;
+- `quantlab.reporting.report.build_report`: one HTML report per strategy;
+- `quantlab.reporting.charts`: the charts library.
+
+Walkthrough: `notebooks/lab_record.ipynb`.

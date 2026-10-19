@@ -222,20 +222,24 @@ switch strategies.
 
 ## Phase 5: Experiment tracking and reporting
 
-- [ ] **5.1 Experiment store.** A queryable database (SQLite now, Postgres-ready) of every run:
+- [x] **5.1 Experiment store.** A queryable database (SQLite now, Postgres-ready) of every run:
       - hypothesis and version, config, config hash, data snapshots, commit;
       - metrics, card verdicts, artefacts' paths.
       It replaces scattered output folders as the index.
-- [ ] **5.2 Hypothesis registry.** Every hypothesis with status (idea, pre-registered, running, passed, failed,
+      *2026-10-19:* `quantlab.tracking.store.ExperimentStore`, SQLite at `quantlab_data/research/lab.db` (plain SQL; any DB-API connection via `connect=`). `store.run(...)` records config and hash, snapshots, commit, state (failed runs keep the error); a run logs metrics, results, cards, series, figures and artefacts. Queries: `runs`, `get`, `metrics`, `series`, `compare` (with config differences).
+- [x] **5.2 Hypothesis registry.** Every hypothesis with status (idea, pre-registered, running, passed, failed,
       paper, live, retired), its reports and its decision. One page shows the lab's whole state.
-- [ ] **5.3 Standard report generator.** One command or one notebook call gives an HTML or PDF report with:
+      *2026-10-19:* statuses idea, pre-registered, running, passed, inconclusive (added: most host studies ended there), failed, paper, live, retired; every change needs a reason and is kept (`history`); `lab_state()` is the one-page view, active work first. `scripts/lab/seed_registry.py` seeds H1-H14 from `research/prereg` and the reports' verdicts.
+- [x] **5.3 Standard report generator.** One command or one notebook call gives an HTML or PDF report with:
       - a data card and the strategy definition;
       - equity curves and drawdowns;
       - costs, attribution, regime breakdown, robustness, cards and verdict;
       - a section a portfolio manager can read in five minutes.
-- [ ] **5.4 Charts library:** consistent, publication-quality equity, drawdown, rolling, attribution, regime
+      *2026-10-19:* `quantlab.reporting.report.build_report`: one self-contained HTML file (charts embedded; print to PDF from a browser) with a five-minute summary (verdict, definition, headline numbers, what can go wrong, recommendation by verdict), definition and config, data cards, performance, costs and attribution, regimes, robustness, scenarios and stress, the strategy card, reproducibility. Anything not given is computed.
+- [x] **5.4 Charts library:** consistent, publication-quality equity, drawdown, rolling, attribution, regime
       shading, heatmaps and parameter surfaces. Works inline in notebooks (the Agg-backend problem must never come
       back) and in exported reports.
+      *2026-10-19:* `quantlab.reporting.charts`: equity, drawdown, rolling Sharpe, attribution by part or instrument, regime shading, heat maps, parameter surfaces, monthly returns, tearsheet; one style; PNG/base64 export. A test fails if any lab module selects a matplotlib backend. Notebook: `notebooks/lab_record.ipynb`.
 
 ## Phase 6: The notebook workflow (the owner's main interface)
 
