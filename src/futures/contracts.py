@@ -68,6 +68,7 @@ class Market:
     quote_exchange: str
     cost_ticks: Decimal
     spec_status: str = ""
+    anytime: bool = False  # set per book (`[futures] around_the_clock`): orders go out whenever the market is open, no slot
 
     @property
     def venue(self) -> str:

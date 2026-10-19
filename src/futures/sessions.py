@@ -3,6 +3,10 @@
 Most index and currency futures trade nearly around the clock, but the order book is thin outside the home market's
 day. So each market has a *liquid window* in its own local time, and orders are released only at a *slot* (a fixed
 time of day at the desk) that falls inside that window.
+
+A window may cross midnight (`liquid_from` later than `liquid_to`): it then opens the evening before the session day,
+like CME Globex's 18:00-17:00 New York day. A market marked `anytime` (a book's `[futures] around_the_clock`) needs no
+slot: its orders go out whenever it is inside its window.
 """
 
 from __future__ import annotations
@@ -80,18 +84,30 @@ def liquid_window(market: LiquidHours, day: date, sessions: Sessions) -> tuple[d
     if not sessions.is_session(market.calendar, day):
         return None
     zone = ZoneInfo(market.timezone)
-    start = datetime.combine(day, market.liquid_from, tzinfo=zone).astimezone(timezone.utc)
+    opens = day - timedelta(days=1) if market.liquid_from >= market.liquid_to else day  # an overnight window opens the evening before
+    start = datetime.combine(opens, market.liquid_from, tzinfo=zone).astimezone(timezone.utc)
     end = datetime.combine(day, market.liquid_to, tzinfo=zone).astimezone(timezone.utc)
     close = sessions.close(market.calendar, day)
-    if close is not None and start < close < end:
+    # The home exchange's close shortens a half day. A market on Globex hours (`anytime`) trades past the cash close
+    # every day, so for it the calendar only says which days are sessions.
+    if close is not None and start < close < end and not getattr(market, "anytime", False):
         end = close
     return (start, end) if start < end else None
 
 
+def window_at(market: LiquidHours, now: datetime, sessions: Sessions) -> tuple[datetime, datetime] | None:
+    """The liquid window `now` falls in, or None (an overnight window may belong to the next local day's session)."""
+    local = now.astimezone(ZoneInfo(market.timezone)).date()
+    for day in (local, local + timedelta(days=1)):
+        window = liquid_window(market, day, sessions)
+        if window is not None and window[0] <= now < window[1]:
+            return window
+    return None
+
+
 def is_liquid(market: LiquidHours, now: datetime, sessions: Sessions) -> bool:
     """Whether `now` is inside the market's liquid window."""
-    window = liquid_window(market, now.astimezone(ZoneInfo(market.timezone)).date(), sessions)
-    return window is not None and window[0] <= now < window[1]
+    return window_at(market, now, sessions) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +144,15 @@ def release_time(market: LiquidHours, after: datetime, slots: Sequence[Slot], se
     market is closed for longer than two weeks.
     """
     start = after.astimezone(timezone.utc)
+    if getattr(market, "anytime", False):
+        if is_liquid(market, start, sessions):
+            return start, Slot("anytime", start.time(), "UTC")
+        local = start.astimezone(ZoneInfo(market.timezone)).date()
+        for offset in range(0, SEARCH_DAYS + 2):
+            window = liquid_window(market, local + timedelta(days=offset), sessions)
+            if window is not None and window[0] >= start:
+                return window[0], Slot("anytime", window[0].time(), "UTC")
+        return None
     candidates = []
     for offset in range(-1, SEARCH_DAYS + 1):
         for slot in slots:
@@ -148,9 +173,11 @@ def releasable(market: LiquidHours, now: datetime, slots: Sequence[Slot], sessio
     for the slot.
     """
     moment = now.astimezone(timezone.utc)
-    window = liquid_window(market, moment.astimezone(ZoneInfo(market.timezone)).date(), sessions)
-    if window is None or not window[0] <= moment < window[1]:
+    window = window_at(market, moment, sessions)
+    if window is None:
         return None
+    if getattr(market, "anytime", False):
+        return Slot("anytime", moment.time(), "UTC")
     passed = [slot for slot in slots for day in (moment.date() - timedelta(days=1), moment.date(), moment.date() + timedelta(days=1))
               if window[0] <= slot.on(day) <= moment]
     return max(passed, key=lambda slot: slot.at) if passed else None

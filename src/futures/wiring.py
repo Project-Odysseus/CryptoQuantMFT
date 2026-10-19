@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -48,6 +49,8 @@ def build(config: Any, state_dir: Path | str, *, prices: Prices | None = None, s
     state_dir = Path(state_dir)
     table = load_markets()
     markets = {instrument: table[instrument] for instrument, spec in config.instruments.items() if spec.kind == "future"}
+    for instrument in config.futures.around_the_clock:  # CME Globex: 18:00 the evening before to 17:00, New York time
+        markets[instrument] = replace(markets[instrument], liquid_from=time(18, 0), liquid_to=time(17, 0), timezone="America/New_York", anytime=True)
     sessions = Sessions()
     board = ContractBoard(markets, sessions, state_dir / "futures_contracts.json")
     settings = config.futures

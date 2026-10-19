@@ -14,7 +14,7 @@
 #
 # Pricing: MNQ and MES at their own contracts (free source, delayed 10-15 min). FXXP has no contract quotes in the free
 # source, so it is marked and filled at the STOXX Europe 600 cash index (no futures basis, no roll gap).
-# Orders are decided when the day's bars are complete and wait for the next slot: 10:00 Oslo for Eurex, 16:00 Oslo for CME.
+# Orders are decided when the day's bars are complete. CME orders go out at once on Globex (around_the_clock); Eurex waits for 10:00 Oslo.
 #
 # Check:  python main.py --portfolio-check config/portfolio.equity_trend_paper.toml
 # Paper:  python main.py --runtime paper --portfolio config/portfolio.equity_trend_paper.toml --portfolio-state-dir data/portfolio/equity-trend-paper --runtime-iterations 0 --runtime-interval 300
@@ -47,6 +47,11 @@ mode = "paper"                    # never "file": nothing from this book goes to
 max_participation = 0.01
 min_daily_volume = 200
 slots = [ { name = "europe", at = "10:00", timezone = "Europe/Oslo" }, { name = "americas", at = "16:00", timezone = "Europe/Oslo" } ]
+# The CME micros trade nearly 23 hours a day on Globex: their orders go out as soon as the day's bars are decided (about
+# 00:00 Oslo, when Globex reopens after its 17:00-18:00 New York halt), not at the 16:00 slot. Overnight books are
+# thinner than the US day, so fills may cost more than the one tick assumed. FXXP keeps the 10:00 slot: it is priced
+# at the STOXX Europe 600 cash index, which only moves in European hours.
+around_the_clock = ["cme_usd:MNQ", "cme_usd:MES"]
 
 [instruments."cme_usd:MNQ"]
 kind = "future"

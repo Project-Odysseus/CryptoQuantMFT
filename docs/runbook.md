@@ -684,6 +684,10 @@ Things to know:
   The usual weight limits in `[risk]` and `[risk.groups]` apply as for any book.
 - **Money.** The capital stays in the base currency; each ledger (one per exchange and currency, such as `cme_usd`)
   holds only what its contracts have earned or lost. No fee is booked on paper: the cost is in the fill price.
+- **Around the clock (CME only).** `[futures] around_the_clock = ["cme_usd:MES", ...]` sends a CME market's orders as
+  soon as they are decided, at any hour Globex trades (Sunday 18:00 to Friday 17:00 New York, closed 17:00-18:00
+  daily), instead of at a slot. A daily decision then fills when Globex reopens (about 00:00 Oslo), not at 16:00 the
+  next day. Overnight books are thinner, so the one-tick cost may be low. Eurex markets keep their slots.
 - **Volatility targets use 365-day years**, as for crypto, so a target of 10% is about 8.3% on a 252-day basis.
 - **Not on free data:** the Eurex micro contracts (no quotes), and adjusted history across old rolls. A market whose
   `free_quote_symbol` is its cash index and whose `quote_exchange` is empty (the STOXX Europe 600 future, FXXP) is

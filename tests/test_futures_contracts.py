@@ -191,3 +191,32 @@ def test_a_market_without_contract_quotes_is_priced_at_its_index(markets: dict[s
     assert stoxx.quote_symbol is None and stoxx.price_symbol == "^STOXX"
     assert fc.Contract(markets["cme_usd:MES"], 2026, 12).price_symbol == "MESZ26.CME"
     assert fc.Contract(markets["eurex_eur:FDXS"], 2026, 12).price_symbol is None
+
+
+def test_a_globex_market_trades_overnight_without_a_slot(markets: dict[str, fc.Market]) -> None:
+    from dataclasses import replace
+    from datetime import datetime, time, timezone
+
+    from src.futures.sessions import Sessions, is_liquid, parse_slots, release_time, releasable
+
+    globex = replace(markets["cme_usd:MES"], liquid_from=time(18, 0), liquid_to=time(17, 0), timezone="America/New_York", anytime=True)
+    sessions, slots = Sessions(), parse_slots(None)
+    at = lambda text: datetime.fromisoformat(text).replace(tzinfo=timezone.utc)  # noqa: E731
+    assert is_liquid(globex, at("2026-10-20T03:00"), sessions)                     # 23:00 New York, the night before Tuesday's session
+    assert not is_liquid(globex, at("2026-10-19T21:30"), sessions)                 # the 17:00-18:00 halt
+    assert not is_liquid(globex, at("2026-10-24T12:00"), sessions)                 # Saturday
+    assert releasable(globex, at("2026-10-20T03:00"), slots, sessions).name == "anytime"
+    assert release_time(globex, at("2026-10-23T21:30"), slots, sessions)[0] == at("2026-10-25T22:00")  # Friday close to Sunday open
+    assert not is_liquid(markets["cme_usd:MES"], at("2026-10-20T03:00"), sessions)  # the table's own hours still apply elsewhere
+
+
+def test_around_the_clock_is_checked_in_the_config() -> None:
+    from src.portfolio.config import PortfolioConfigError, load_portfolio_config, parse_portfolio_config
+
+    assert load_portfolio_config("config/portfolio.equity_trend_paper.toml").futures.around_the_clock == ("cme_usd:MNQ", "cme_usd:MES")
+    raw = {"portfolio": {"name": "x", "base_currency": "NOK"}, "instruments": {"eurex_eur:FXXP": {"kind": "future"}},
+           "sleeves": [{"id": "a", "instrument": "eurex_eur:FXXP", "interval": "1d", "strategy": "moving_average_crossover"}],
+           "futures": {"around_the_clock": ["eurex_eur:FXXP", "cme_usd:MES"]}}
+    with pytest.raises(PortfolioConfigError) as error:
+        parse_portfolio_config(raw)
+    assert "only CME Globex hours are known" in str(error.value) and "'cme_usd:MES' is not a futures instrument" in str(error.value)

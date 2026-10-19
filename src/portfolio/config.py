@@ -133,6 +133,8 @@ class FuturesSettings:
             paths are inside the book's state directory.
         max_contracts: Optional cap on the position per market, in contracts ({"cme_usd:MES": 20}).
         no_trade: Markets that may only be reduced.
+        around_the_clock: CME markets whose orders go out as soon as they are decided, at any hour Globex trades
+            (Sunday 18:00 to Friday 17:00 New York, with the daily 17:00-18:00 halt), instead of waiting for a slot.
     """
 
     mode: str = "paper"
@@ -143,6 +145,7 @@ class FuturesSettings:
     fills_dir: str = "fills"
     max_contracts: dict[str, int] = field(default_factory=dict)
     no_trade: tuple[str, ...] = ()
+    around_the_clock: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +239,9 @@ _EXECUTION_KEYS = {"policy", "maker_timeout_seconds"}
 EXECUTION_POLICIES = ("taker", "maker_first")
 
 
+GLOBEX_EXCHANGES = ("CME", "CBOT")
+
+
 def _futures_markets(errors: list[str]) -> dict[str, Any]:
     """The futures contract table, or an empty one (with the reason added to `errors`) when it cannot be read."""
     from src.futures.contracts import load_markets
@@ -273,6 +279,13 @@ def _parse_futures(table: dict[str, Any], instruments: Mapping[str, InstrumentSp
     for market in no_trade:
         if market not in futures:
             errors.append(f"[futures] no_trade '{market}' is not a futures instrument of this book")
+    anytime = tuple(str(market) for market in table.get("around_the_clock", ()) or ())
+    known = _futures_markets(errors) if anytime else {}
+    for market in anytime:
+        if market not in futures:
+            errors.append(f"[futures] around_the_clock '{market}' is not a futures instrument of this book")
+        elif market in known and known[market].exchange not in GLOBEX_EXCHANGES:
+            errors.append(f"[futures] around_the_clock '{market}': only CME Globex hours are known ({known[market].exchange} is not CME or CBOT)")
     try:
         participation, floor = float(table.get("max_participation", 0.01)), float(table.get("min_daily_volume", 200.0))
         if not 0.0 < participation <= 1.0 or floor < 0:
@@ -282,7 +295,8 @@ def _parse_futures(table: dict[str, Any], instruments: Mapping[str, InstrumentSp
         participation, floor = 0.01, 200.0
     return FuturesSettings(mode=str(table.get("mode", "paper")), slots=slots, max_participation=participation, min_daily_volume=floor,
                            order_dir=str(table.get("order_dir", "orders")), fills_dir=str(table.get("fills_dir", "fills")),
-                           max_contracts={str(market): int(cap) for market, cap in caps.items() if isinstance(cap, int)}, no_trade=tuple(str(m) for m in no_trade))
+                           max_contracts={str(market): int(cap) for market, cap in caps.items() if isinstance(cap, int)}, no_trade=tuple(str(m) for m in no_trade),
+                           around_the_clock=anytime)
 
 
 def _known(cls: type) -> set[str]:
