@@ -196,22 +196,29 @@ switch strategies.
 
 ## Phase 4: Validation and statistics
 
-- [ ] **4.1 Power analysis at pre-registration.** Given the history length, the frequency and the hypothesised
+- [x] **4.1 Power analysis at pre-registration.** Given the history length, the frequency and the hypothesised
       Sharpe or effect, report the detectable effect and the probability of a pass. Warn when a test cannot answer
       its question. H13 and H14 needed this: 27 daily years cannot separate a Sharpe of 0.3 from zero.
-- [ ] **4.2 Walk-forward and purged cross-validation.** Expanding and rolling walk-forward with refit schedules;
+      *2026-10-19:* `validation.power` (Sharpe standard error, pass probability under the t >= 2 gate and with trials, detectable Sharpe, years needed, detectable IC, `power_report` with an underpowered warning), checked against simulation. NDX's 41 years detect a Sharpe of 0.44 at 80% power; a true 0.3 passes 47% of the time.
+- [x] **4.2 Walk-forward and purged cross-validation.** Expanding and rolling walk-forward with refit schedules;
       combinatorial purged CV with an embargo, for anything fitted; the probability of backtest overfitting
       reported automatically.
-- [ ] **4.3 Strategy, signal and regime cards** (extend the existing ones). One standard each, with pass marks in
+      *2026-10-19:* `validation.crossval`: expanding and rolling walk-forward splits, purged k-fold with embargo, CPCV splits and path recombination, `select_walk_forward` (pick on train, trade on test, with PBO). H14's trend grid on NDX: walk-forward Sharpe 0.36 vs 0.38 best in hindsight, PBO 0.73 (the grid is a plateau, so picking adds nothing).
+- [x] **4.3 Strategy, signal and regime cards** (extend the existing ones). One standard each, with pass marks in
       versioned files; equity curves and attribution on every card.
-- [ ] **4.4 Lab-wide multiple-testing control.** False-discovery-rate control across all hypotheses and their trials
+      *2026-10-19:* the host's strategy and signal cards ported to `validation.strategy_card` / `validation.signal_card` (statistics unchanged), regime card from Phase 3; pass marks in versioned `validation/standards/{strategy,signal,regime}.toml`. `card_backtest` cards an engine result with the timing placebo and attribution charts (by part, by instrument, against the baseline). The host keeps its own cards for `--portfolio-check` until the paper books move.
+- [x] **4.4 Lab-wide multiple-testing control.** False-discovery-rate control across all hypotheses and their trials
       (Benjamini-Hochberg / Storey), alongside the per-study deflated Sharpe and Romano-Wolf. A lab-level dashboard
       of how many ideas were tried and how many passed.
-- [ ] **4.5 Robustness suite:** parameter plateaus (not optima), cost multipliers, start-date and sub-period
+      *2026-10-19:* `validation.ledger` (the lab's own ledger: trials, card notes, pre-registration locks) and `validation.fdr` (Benjamini-Hochberg, Storey with at least 20 cards, `lab_fdr`, `dashboard`, `ledger.lab_summary`). A strategy card's p is the larger of its t-test p and its timing placebo p, so drift alone is no discovery. First run: of seven cards (six regime detectors, H14's trend), none survives at FDR 10%.
+- [x] **4.5 Robustness suite:** parameter plateaus (not optima), cost multipliers, start-date and sub-period
       stability, market environments, cross-market transfer with unchanged rules, and episode dependence.
-- [ ] **4.6 Scenario and stress testing.** Historical scenarios (1987, 2000-02, 2008, 2020, 2022 rates) and
+      *2026-10-19:* `validation.robustness`: parameter plateau (neighbourhood ratio, sweep for PBO), cost sensitivity and break-even, start dates, sub-periods, bull/bear and calm/volatile environments, cross-market transfer, best-months removal and best-day concentration.
+- [x] **4.6 Scenario and stress testing.** Historical scenarios (1987, 2000-02, 2008, 2020, 2022 rates) and
       hypothetical shocks: volatility doubling, correlations going to one, gaps.
-- [ ] **4.7 Holdout governance.** Keep the frozen final holdout. One logged look per candidate, with approval.
+      *2026-10-19:* `validation.scenarios`: twelve named crises (1987 to the 2022 rates shock) against a benchmark; volatility x2, correlations to one and n-sigma gaps on the book's own positions.
+- [x] **4.7 Holdout governance.** Keep the frozen final holdout. One logged look per candidate, with approval.
+      *2026-10-19:* `ledger.holdout_cut` cuts from 2026-01-01 on every card; `ledger.holdout_look(candidate, approved_by=...)` opens it once per candidate, logged; a second look needs `again=<reason>`. Notebook for Phase 4: `notebooks/validation_lab.ipynb`.
 
 ## Phase 5: Experiment tracking and reporting
 

@@ -11,19 +11,26 @@ between the strategies it switches between over the following days. The card mea
 - **lag after events**: bars from a fresh 60-bar breakout until the model says A's state (median).
 - **redundancy**: rank correlation between P(A's state) and |a signal| it is meant to add to (e.g. the trend signal).
 
-Pass marks are in `RegimeStandard` (version 1, fixed before use): the interval excludes zero, placebo p <= 0.05, and
+Pass marks are in `standards/regime.toml` (version 1, fixed before use): the interval excludes zero, placebo p <= 0.05, and
 at least 20 spells of each state. Verdicts: "useful", "weak" (one of interval/placebo), "no evidence", "too few spells".
+Each card is noted in the lab ledger with its placebo p (quantlab.validation.ledger).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import tomllib
+from dataclasses import dataclass, field, fields
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from quantlab.regimes.models import labels as most_likely
+from quantlab.validation import ledger as lab_ledger
+
+STANDARD_PATH = Path(__file__).parent / "standards" / "regime.toml"
 
 
 @dataclass(frozen=True)
@@ -38,6 +45,15 @@ class RegimeStandard:
     runs: int = 1000
     placebo_runs: int = 500
     placebo_min_shift: int = 250
+
+
+def load_standard(path: Path | str = STANDARD_PATH) -> RegimeStandard:
+    """The standard from its file; an unknown key is an error."""
+    raw = tomllib.loads(Path(path).read_text())
+    unknown = sorted(set(raw) - {item.name for item in fields(RegimeStandard)})
+    if unknown:
+        raise ValueError(f"{path}: unknown keys {unknown}")
+    return RegimeStandard(**raw)
 
 
 @dataclass
@@ -72,10 +88,11 @@ def _edge(label_values: np.ndarray, difference: np.ndarray, a: str, b: str) -> f
 
 
 def regime_card(probabilities: pd.DataFrame, pnl_a: pd.Series, pnl_b: pd.Series, *, state_a: str, state_b: str, name: str = "", horizon: int = 20,
-                bars: pd.DataFrame | None = None, redundancy_signal: pd.Series | None = None, standard: RegimeStandard | None = None, seed: int = 0) -> RegimeCard:
+                bars: pd.DataFrame | None = None, redundancy_signal: pd.Series | None = None, standard: RegimeStandard | None = None, seed: int = 0, family: str = "", ledger: bool = True) -> RegimeCard:
     """Every check (see the module docstring). `pnl_a`/`pnl_b`: daily net returns of the two strategies the model chooses
     between (A should win in `state_a`)."""
-    standard = standard or RegimeStandard()
+    standard = standard or load_standard()
+    probabilities = lab_ledger.holdout_cut(probabilities)
     states = most_likely(probabilities)
     difference = (pnl_a - pnl_b).reindex(states.index)
     forward = difference[::-1].rolling(horizon, min_periods=horizon).sum()[::-1].shift(-1)  # bars t+1 .. t+horizon, after the label at t
@@ -135,5 +152,10 @@ def regime_card(probabilities: pd.DataFrame, pnl_a: pd.Series, pnl_b: pd.Series,
                                     "placebo p (shifted labels)": f"{placebo_p:.3f}", "switches a year": f"{switches:.1f}",
                                     "median bars from a breakout to the A state": f"{lag:.0f}" if np.isfinite(lag) else "-",
                                     "rank correlation with |signal|": f"{redundancy:.2f}" if np.isfinite(redundancy) else "-"}})
-    return RegimeCard(name, verdict, reason, table, behaviour, {"edge": edge, "interval": (float(low), float(high)), "placebo_p": placebo_p, "placebo": placebo,
+    card = RegimeCard(name, verdict, reason, table, behaviour, {"edge": edge, "interval": (float(low), float(high)), "placebo_p": placebo_p, "placebo": placebo,
                                                                  "switches": switches, "lag": lag, "redundancy": redundancy, "standard": standard})
+    if ledger:
+        digest = hashlib.sha256(pd.util.hash_pandas_object(frame, index=True).values.tobytes() + repr((name, state_a, state_b, horizon, standard)).encode()).hexdigest()[:16]
+        lab_ledger.note_card("regime", name or "regime model", fingerprint=digest, verdict=verdict, p_value=placebo_p, family=family, trials=1,
+                             details={"edge": edge, "states": [state_a, state_b], "horizon": horizon, "standard_version": standard.version})
+    return card

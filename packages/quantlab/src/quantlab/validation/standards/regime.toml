@@ -1,0 +1,13 @@
+# What a regime model's state has to show on its card (quantlab.validation.regime_card) before it may drive an
+# overlay. Fixed before a model is looked at; a change is a new version, with the reason in the research log.
+# Version 1, 2026-10-19 (Phase 3 of the lab plan).
+version = 1
+
+level = 0.95                # the edge's block-bootstrap interval must exclude zero at this level
+placebo_p = 0.05            # at most this share of time-shifted labels may show as large an edge
+min_spells = 20             # spells of each of the two states needed before a verdict
+
+block = 60                  # bars per bootstrap block
+runs = 1000                 # bootstrap resamples
+placebo_runs = 500          # shifted-label placebos
+placebo_min_shift = 250     # a placebo moves the labels at least this many bars

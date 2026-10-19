@@ -58,4 +58,12 @@ Phase 3 (regimes as research objects):
 - `quantlab.overlays.overlay`;
 - `quantlab.analytics.conditional`.
 
-Walkthrough: `notebooks/regime_lab.ipynb`. Validation follows in Phase 4.
+Walkthrough: `notebooks/regime_lab.ipynb`.
+
+Phase 4 (validation), in `quantlab.validation`:
+- `strategy_card` / `signal_card` / `regime_card`, with pass marks in `validation/standards/*.toml`;
+- `power`, `crossval`, `robustness`, `scenarios`;
+- `ledger`: trials, cards, pre-registrations, holdout looks; `$QUANTLAB_LEDGER`;
+- `fdr`: lab-wide false-discovery control.
+
+Walkthrough: `notebooks/validation_lab.ipynb`.

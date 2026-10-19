@@ -26,5 +26,8 @@ parquet = ["pyarrow>=15"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+quantlab = ["validation/standards/*.toml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
