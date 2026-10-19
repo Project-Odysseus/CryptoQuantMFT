@@ -51,4 +51,11 @@ result = run_backtest(Targets(apply_signal(mom, panel)), returns, costs_bps=1.5,
 metrics(result)
 ```
 
-Regime work and validation follow the plan's phases.
+Phase 3 (regimes as research objects):
+- `quantlab.signals.library`: the signal catalog;
+- `quantlab.regimes`: models, HMM, simulator, bench;
+- `quantlab.validation.regime_card`;
+- `quantlab.overlays.overlay`;
+- `quantlab.analytics.conditional`.
+
+Walkthrough: `notebooks/regime_lab.ipynb`. Validation follows in Phase 4.

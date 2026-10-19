@@ -158,10 +158,11 @@ pipeline. The pipeline is held to the same standard at every step, so deployment
 The regime detector is a signal like any other: it gets researched, scored and validated, and it does not just
 switch strategies.
 
-- [ ] **3.1 Signal library.** Port and normalise the existing signals: trend forms (MA cross, EWMAC, breakout,
+- [x] **3.1 Signal library.** Port and normalise the existing signals: trend forms (MA cross, EWMAC, breakout,
       `trend_forecast`), mean reversion, carry, relative momentum, volatility, and the crypto signals (funding, taker
       flow). Each gets a docstring stating its hypothesis and its expected sign and horizon.
-- [ ] **3.2 Regime models as components:**
+      *2026-10-19:* `quantlab.signals.library`: MA cross, EWMAC, breakout, slope t-stat, `trend_forecast`, H14's trend, z-score reversion, short reversal, time-series momentum, low volatility, ATR channel, cross-sectional `relative_momentum`; a causal `normalize`; each with hypothesis, sign and horizon; tested causal and on the forecast scale. Carry and the crypto signals (funding, taker flow) wait for their data in the lab catalog.
+- [x] **3.2 Regime models as components:**
       - Feature-score blends (the H14 overlay).
       - Single-feature thresholds.
       - Hidden Markov / Markov-switching models (Gaussian HMM on returns and volatility).
@@ -169,7 +170,8 @@ switch strategies.
       - Trend-strength filters.
       - Cross-asset regimes (rates and volatility).
       - Each outputs state probabilities over time, not only labels, and states its decision lag.
-- [ ] **3.3 Regime test bench with synthetic ground truth.** A simulator of regime-switching price processes: trend
+      *2026-10-19:* `quantlab.regimes.models`: `FeatureBlendRegime` (H14, hard or soft), `PercentileRegime` (any feature or callable, soft or hard with hysteresis and confirmation; trend-strength filters are this on ER, |slope t| or ADX), `VolatilityRegime`, `HMMRegime` (`regimes.hmm`: own Baum-Welch, filtered probabilities only, refitted yearly on the past, states named by volatility). All return probabilities, declare a lag, and are tested not to change with later data. Cross-asset regimes (rates, implied vol) are a `PercentileRegime` on a cross-asset feature once that data is in the catalog.
+- [x] **3.3 Regime test bench with synthetic ground truth.** A simulator of regime-switching price processes: trend
       stretches, mean-reverting stretches, volatility shocks, structural breaks, configurable durations and noise.
       For every regime model it measures:
       - detection accuracy, precision and recall per state;
@@ -177,16 +179,20 @@ switch strategies.
       - false-switch rate;
       - stability under noise and parameter changes.
       A regime model must show it can detect regimes that exist before it is trusted on real data.
-- [ ] **3.4 Regime card (real data).** The signal-card equivalent for a regime model:
+      *2026-10-19:* `regimes.simulate` (TREND / RANGE / SHOCK episodes, noise, structural break) and `regimes.bench` (`bench`, `sweep`). First result: no detector is good. Balanced accuracy 0.57-0.60 for the single features, 0.45 for H14's blend (it abstains 30% of the time and confirms 13 bars late), 0.53 for the HMM (it finds volatility, not trend).
+- [x] **3.4 Regime card (real data).** The signal-card equivalent for a regime model:
       - does the state predict which strategy earns more next (out of sample, with intervals)?
       - persistence and duration statistics;
       - lag after market events;
       - redundancy with the signals it switches between;
       - placebo (shifted states).
-- [ ] **3.5 Overlay as component.** Any set of signals plus any regime model gives weights, through blending
+      *2026-10-19:* `validation.regime_card` (edge with block-bootstrap interval, shifted-label placebo, spells, lag after breakouts, redundancy; `RegimeStandard` v1). On NDX, trend vs 40-day reversion: H14's blend, ER, |slope t| and ADX show no evidence. The volatility state and the HMM pass at p 0.040 and 0.044, which six trials can produce by chance, so they are candidates for a pre-registered test, not findings.
+- [x] **3.5 Overlay as component.** Any set of signals plus any regime model gives weights, through blending
       schedules, hysteresis, confidence scaling, stress rules and caps. The benchmarks are computed automatically:
       static blend, hard switch, exposure-matched static, best single signal.
-- [ ] **3.6 Conditional evaluation** of every signal by regime state, as a standard report section.
+      *2026-10-19:* `overlays.overlay.RegimeOverlay` (soft blend or hard switch, gross cap, cap) and `benchmarks` (static blend, hard switch, exposure-matched static, each signal alone). Confidence scaling and stress rules remain inside H14's strategy until a second overlay needs them.
+- [x] **3.6 Conditional evaluation** of every signal by regime state, as a standard report section.
+      *2026-10-19:* `analytics.conditional.by_regime` and `after_changes`. Notebook: `notebooks/regime_lab.ipynb` covers all of Phase 3.
 
 ## Phase 4: Validation and statistics
 
