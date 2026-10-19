@@ -1,0 +1,106 @@
+# PAPER ONLY, research: the H13 design on the Nasdaq-100, S&P 500 and STOXX Europe 600 futures, 10,000,000 NOK pretend capital.
+# The owner may not trade these markets personally (employer rule), so this book must never run live or in "file" mode.
+#
+# The design (Martin 2023, research/prereg/H13.txt, research/reports/H13.md): a volatility-normalised EMA difference at
+# three speeds (10/20, 20/40, 40/80 days) through a smooth activation that stays small while the trend is weak and
+# trims a little when it is extreme. The sleeves are continuous: the position is resized every day, and the 2% band
+# and whole contracts decide when that is an order. H13 (2005-07 to 2025-12, index data): PASS, Sharpe 0.27 after
+# costs (95% interval -0.11 to 0.65), 0.38 / 0.16 in the two halves, worst drawdown -21%, 63-day skew +0.53 vs +0.33 for
+# the +/-1 rule. The STOXX Europe 600 lost money in the second half (-0.36), and daily returns are left-skewed (-0.93):
+# expect a choppy ride and a win rate near 20% per trade.
+#
+# Pricing: MNQ and MES at their own contracts (free source, delayed 10-15 min). FXXP has no contract quotes in the free
+# source, so it is marked and filled at the STOXX Europe 600 cash index (no futures basis, no roll gap).
+# Orders are decided when the day's bars are complete and wait for the next slot: 10:00 Oslo for Eurex, 16:00 Oslo for CME.
+#
+# Check:  python main.py --portfolio-check config/portfolio.equity_trend_paper.toml
+# Paper:  python main.py --runtime paper --portfolio config/portfolio.equity_trend_paper.toml --portfolio-state-dir data/portfolio/equity-trend-paper --runtime-iterations 0 --runtime-interval 300
+# Background: deploy/launchd/com.cryptoquant.paper-equity-trend.plist
+
+[portfolio]
+name = "equity-trend-paper"
+base_currency = "NOK"
+initial_equity = 10000000
+rebalance_band = 0.02
+scale = 1.0                       # three sleeves share the book equally: each market at 10%/3 volatility, as in H13
+allocation = "equal"
+
+[risk]
+max_gross_exposure = 2.0
+max_net_exposure = 1.5
+max_instrument_weight = 1.0       # H13's cap per market
+max_drawdown = 0.30               # kill: flatten and stay flat until --portfolio-reset-peak (H13's worst was -21%)
+daily_loss_limit = 0.04
+stale_after_bars = 4              # a daily bar on Friday must last through the weekend and a Monday holiday
+rejection_cooldown_after = 3
+rejection_cooldown_hours = 24
+
+[risk.groups.equity]
+max_gross = 2.0
+max_net = 1.5
+
+[futures]
+mode = "paper"                    # never "file": nothing from this book goes to a desk
+max_participation = 0.01
+min_daily_volume = 200
+slots = [ { name = "europe", at = "10:00", timezone = "Europe/Oslo" }, { name = "americas", at = "16:00", timezone = "Europe/Oslo" } ]
+
+[instruments."cme_usd:MNQ"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+[instruments."cme_usd:MES"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+[instruments."eurex_eur:FXXP"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+# The sizer annualises daily bars with 365 days, H13 with 252: 0.1204 = 0.10 x sqrt(365/252) gives H13's 10%.
+# Its half-life of 13.5 days is H13's exponential average (decay 0.95 a day).
+[[sleeves]]
+id = "mnq_forecast"
+instrument = "cme_usd:MNQ"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "mes_forecast"
+instrument = "cme_usd:MES"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "fxxp_forecast"
+instrument = "eurex_eur:FXXP"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[review]
+source = "scripts/research/h13_study.py, 2026-10-19: index data 2005-07..2025-12 (research/reports/H13.md); P per market"
+backtest_sharpe = { mnq_forecast = 0.36, mes_forecast = 0.25, fxxp_forecast = 0.07 }
+book_backtest_sharpe = 0.27
+book_backtest_max_drawdown = 0.21
+min_days = 90
+floor_days = 365
+decay_z = 2.0
+max_drawdown_multiple = 1.5

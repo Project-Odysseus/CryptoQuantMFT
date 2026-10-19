@@ -673,8 +673,29 @@ Things to know:
 - **Money.** The capital stays in the base currency; each ledger (one per exchange and currency, such as `cme_usd`)
   holds only what its contracts have earned or lost. No fee is booked on paper: the cost is in the fill price.
 - **Volatility targets use 365-day years**, as for crypto, so a target of 10% is about 8.3% on a 252-day basis.
-- **Not on free data:** the Eurex micro contracts (no quotes), and adjusted history across old rolls.
+- **Not on free data:** the Eurex micro contracts (no quotes), and adjusted history across old rolls. A market whose
+  `free_quote_symbol` is its cash index and whose `quote_exchange` is empty (the STOXX Europe 600 future, FXXP) is
+  marked and filled at the index: no basis and no roll gap. That is acceptable on paper and never for real orders.
 - A futures book cannot be mixed with crypto instruments in one portfolio yet, and `--runtime live` refuses it.
+
+### The equity index trend book (paper, research only)
+
+`config/portfolio.equity_trend_paper.toml` runs the H13 design (`research/reports/H13.md`) on MNQ, MES and FXXP at
+10,000,000 NOK. Its sleeves are **continuous** (`continuous = true`, strategy `trend_forecast`): the strategy returns a
+position size, and the sleeve holds signal × the sizer's share and resizes every day. The 2% band and whole contracts
+decide when that becomes an order. A continuous sleeve takes no stops. The owner may not trade these markets
+personally, so this book stays on paper: never `mode = "file"`, never live.
+
+    python main.py --portfolio-check config/portfolio.equity_trend_paper.toml
+    cp deploy/launchd/com.cryptoquant.paper-equity-trend.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cryptoquant.paper-equity-trend.plist
+
+It shows on the dashboard next to the crypto books, with amounts in NOK. Expect H13's ride:
+- daily returns that are left-skewed;
+- about one trade in five winning;
+- trades that give back much of their peak before they exit.
+
+Judge it on quarters, not weeks (the review's `min_days = 90`).
 
 ### Recording futures contracts
 

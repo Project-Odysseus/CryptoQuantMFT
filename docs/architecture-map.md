@@ -173,7 +173,8 @@ flowchart TD
 Plan and status: `docs/portfolio_plan.md`.
 
 - `src/portfolio/config.py`: the TOML portfolio config and its validation (`main.py --portfolio-check`).
-- `src/portfolio/sleeves.py`: one strategy on one instrument, turned into a target weight bar by bar.
+- `src/portfolio/sleeves.py`: one strategy on one instrument, turned into a target weight bar by bar. A `continuous`
+  sleeve uses the signal's size (`trend_forecast`, from `src/signals/trend_forecast.py`) and resizes every bar.
 - `src/portfolio/basket.py`: basket sleeves (`[[baskets]]`): one cross-sectional strategy that sets the weights of
   many member sleeves (`<basket>__<coin>`) on a calendar rebalance schedule, from Binance daily candles (archive for
   research, public REST in the runtime via `CachedPanelSource`). The engine steps them in `_step_baskets`;
@@ -247,6 +248,8 @@ Plan and status: `docs/portfolio_plan.md`.
 
 - `contracts.py`: the contract table `config/futures_markets.csv` as `Market` objects; contract codes, last trading
   days, roll days, and the contract to hold (the calendar, or earlier when the next month trades more).
+  `Contract.price_symbol` is the contract's own quote, or the cash index for a market the free source has no
+  contracts for (FXXP, paper only).
 - `sessions.py`: exchange holidays (`exchange_calendars`), each market's liquid window, the desk's slots, and whether
   an order may go out now.
 - `liquidity.py`: the cap on an order as a share of average daily volume and the volume floor.
