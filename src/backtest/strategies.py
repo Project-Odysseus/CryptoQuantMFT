@@ -325,6 +325,36 @@ def trend_tstat_strategy(window: int = 24, strength_threshold: float = 1.5, allo
     return _latched_strategy(rules, warmup=window)
 
 
+def trend_forecast_strategy(activation: str = "compound_sigmoid", speeds: Sequence[Sequence[int]] = ((10, 20), (20, 40), (40, 80)), warmup: int = 160) -> StrategyFn:
+    """Continuous trend forecast (Martin 2023, `src/signals/trend_forecast.py`): a signed position size, mostly within +/-1.5.
+
+    Unlike every other strategy here it does not emit -1/0/1: the value grows with the strength of the trend and stays
+    small while the trend is weak, which is what gives trend returns their positive skew over months. Run it in a
+    sleeve with `continuous = true` so the size is used and the position is resized every bar; an ordinary sleeve
+    takes only its sign. Tested on equity indices in H13 (`research/reports/H13.md`).
+    """
+    from src.signals.trend_forecast import ACTIVATIONS, trend_forecast
+
+    if activation not in ACTIVATIONS:
+        raise ValueError(f"activation must be one of {sorted(ACTIVATIONS)}")
+    pairs = tuple((int(fast), int(slow)) for fast, slow in speeds)
+    if not pairs or any(not 1 < fast < slow for fast, slow in pairs):
+        raise ValueError("speeds must be [fast, slow] pairs with 1 < fast < slow")
+
+    def signal_series(bars: Sequence[Any]) -> np.ndarray:
+        values = trend_forecast(series(bars, "close"), activation=activation, speeds=pairs) if len(bars) else np.array([])
+        values[:warmup] = 0.0
+        return np.nan_to_num(values)
+
+    def strategy(history: Sequence[Any], index: int, current_bar: Any) -> float | int | str | None:
+        """The forecast at the latest bar."""
+        values = signal_series(history)
+        return float(values[-1]) if len(values) else 0
+
+    strategy.signal_series = signal_series  # type: ignore[attr-defined]
+    return strategy
+
+
 def volatility_squeeze_strategy(
     window: int = 20,
     num_std: float = 2.0,

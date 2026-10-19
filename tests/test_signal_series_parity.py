@@ -1,4 +1,7 @@
-"""The vectorized signal_series must equal the per-bar strategy output at every bar (runtime uses per-bar)."""
+"""The vectorized signal_series must equal the per-bar strategy output at every bar (runtime uses per-bar).
+
+Compared by sign, the part every sleeve acts on; `trend_forecast`'s sizes are checked exactly in test_trend_forecast.py.
+"""
 
 from __future__ import annotations
 
@@ -42,7 +45,7 @@ def test_every_catalog_strategy_matches_per_bar_signals(name: str, params: dict)
         bars = _bars(seed)
         strategy = build_strategy(name, **params)
         assert callable(getattr(strategy, "signal_series", None)), f"{name} has no vectorized path"
-        assert list(np.asarray(strategy.signal_series(bars)).astype(int)) == _per_bar(strategy, bars)
+        assert list(np.sign(np.asarray(strategy.signal_series(bars))).astype(int)) == _per_bar(strategy, bars)
 
 
 def test_wrappers_keep_parity() -> None:
@@ -53,7 +56,7 @@ def test_wrappers_keep_parity() -> None:
         make_regime_gated(build_strategy("moving_average_crossover"), required_regime="trending"),
         make_regime_gated(build_strategy("rsi_reversion"), required_regime="ranging"),
     ):
-        assert list(np.asarray(strategy.signal_series(bars)).astype(int)) == _per_bar(strategy, bars)
+        assert list(np.sign(np.asarray(strategy.signal_series(bars))).astype(int)) == _per_bar(strategy, bars)
 
 
 def test_backtester_results_are_identical_with_and_without_the_fast_path() -> None:

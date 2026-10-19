@@ -407,6 +407,10 @@ def parse_portfolio_config(raw: dict[str, Any], *, path: str | None = None) -> P
             errors.append(f"{label} sizing: {exc}")
         for key in sorted(set(table.get("stops", {})) - set(STOP_KEYS)):
             errors.append(f"{label} stops: unknown key '{key}'; allowed: {list(STOP_KEYS)}")
+        if not isinstance(table.get("continuous", False), bool):
+            errors.append(f"{label} continuous must be true or false")
+        elif table.get("continuous") and table.get("stops"):
+            errors.append(f"{label} a continuous sleeve takes no stops (its size already shrinks as the trend weakens)")
         pause = dict(table.get("stops", {})).get(PAUSE_KEY)
         if pause is not None and (isinstance(pause, bool) or not isinstance(pause, (int, float)) or not 0 < pause < 1):
             errors.append(f"{label} stops: {PAUSE_KEY} must be above 0 and below 1 (0.2 = pause after losing 20% from the sleeve's peak)")
@@ -587,7 +591,7 @@ def describe(config: PortfolioConfig) -> str:
         state = "" if sleeve.enabled else "  [disabled]"
         params = ", ".join(f"{k}={v}" for k, v in sleeve.params.items())
         lines.append(f"  {sleeve.id:<18} {sleeve.instrument:<24} {sleeve.interval:<3} {sleeve.strategy}({params}){' long-only' if sleeve.long_only else ''}; "
-                     f"sizing {sleeve.sizing} {sleeve.sizing_params}; budget {sleeve.budget:g} -> {share}{'; stops ' + str(sleeve.stops) if sleeve.stops else ''}{state}")
+                     f"{'continuous; ' if sleeve.continuous else ''}sizing {sleeve.sizing} {sleeve.sizing_params}; budget {sleeve.budget:g} -> {share}{'; stops ' + str(sleeve.stops) if sleeve.stops else ''}{state}")
     for basket in config.baskets:
         scale = group_scales.get(basket.id)
         legs = "long only" if basket.long_only else f"long top {basket.quantile:.0%} / short bottom {basket.quantile:.0%}"

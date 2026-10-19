@@ -143,6 +143,13 @@ CATALOG: dict[str, StrategySpec] = {
             grid={"window": [12, 24, 48, 96], "strength_threshold": [0.5, 1.0, 1.5, 2.0]},
         ),
         StrategySpec(
+            name="trend_forecast",
+            family="trend",
+            hypothesis="Trends persist for months; sizing with trend strength (small while it is weak) keeps the return of the binary rule with better skew (H13).",
+            defaults={"activation": "compound_sigmoid"},
+            grid={"activation": ["compound_sigmoid", "sign", "linear", "double_step"]},
+        ),
+        StrategySpec(
             name="volatility_squeeze",
             family="volatility_breakout",
             hypothesis="Volatility clusters: unusually quiet stretches end in sharp moves, so trade the first break.",

@@ -21,6 +21,12 @@ a time, in this order:
    size until the position closes. This is what the runtime does, and research
    found resizing open positions hurt.
 
+A *continuous* sleeve (`continuous = true`) is the exception: its strategy
+returns a position size, not -1/0/1 (`trend_forecast`), and the sleeve holds
+signal x sizer share at every bar, resized each bar (the book's rebalance band
+decides when that is worth an order). It takes no stops; only the re-entry gate
+after an exchange stop applies.
+
 Research runs the same runner over history (`run_sleeve`), and the runtime
 calls `step` once per new bar, so both make identical decisions by
 construction. `SleeveState` holds everything a sleeve remembers between bars
@@ -39,6 +45,7 @@ from src.risk.controls import RiskControlConfig, RiskManager, gate_reentry
 from src.risk.sizing import PositionSizer, SizingContext, build_sizer
 
 PAUSE_KEY = "sleeve_drawdown_pause_pct"
+MAX_CONTINUOUS_SIGNAL = 2.0
 STOP_KEYS = ("atr_stop_multiplier", "atr_window", "atr_trailing", "time_stop_bars", "position_drawdown_stop_pct", PAUSE_KEY)
 
 
@@ -62,6 +69,7 @@ class SleeveSpec:
             and wait once the sleeve's own return is this far below its peak).
         warmup_bars: History to load before the first decision.
         enabled: A disabled sleeve holds nothing.
+        continuous: Use the signal's size (clipped to +/-2), not only its sign, and resize every bar.
     """
 
     id: str
@@ -77,6 +85,7 @@ class SleeveSpec:
     warmup_bars: int = 200
     enabled: bool = True
     basket: str | None = None  # set on a basket's member sleeves: the basket sets its weight (src/portfolio/basket.py)
+    continuous: bool = False
 
     @property
     def venue(self) -> str:
@@ -118,7 +127,7 @@ class SleeveState:
 class SleeveDecision:
     """What a step did and why, for logs and reports."""
 
-    action: str  # hold | enter | exit | flip | stop | blocked | declined | flat
+    action: str  # hold | enter | exit | flip | stop | blocked | declined | flat (a continuous sleeve resizes under "hold")
     weight: float
     reason: str | None = None
     details: dict[str, float] = field(default_factory=dict)
@@ -171,6 +180,8 @@ class SleeveRunner:
             self.strategy = make_long_only(strategy) if spec.long_only else strategy
         self.sizer: PositionSizer = build_sizer(spec.sizing, **dict(spec.sizing_params))
         unknown = sorted(set(spec.stops) - set(STOP_KEYS))
+        if spec.continuous and spec.stops:
+            raise ValueError(f"sleeve {spec.id}: a continuous sleeve takes no stops (its size already shrinks as the trend weakens)")
         if unknown:
             raise ValueError(f"sleeve {spec.id}: unknown stops {unknown}; use {list(STOP_KEYS)}")
         self._pause = spec.stops.get(PAUSE_KEY)
@@ -180,9 +191,9 @@ class SleeveRunner:
         self._exits = RiskManager(RiskControlConfig(**exits)) if exits else None
 
     def signals(self, bars: Sequence[Any]) -> np.ndarray:
-        """The strategy's signal (-1/0/1) at every bar, using data up to each bar only."""
-        values = np.asarray(self.strategy.signal_series(list(bars)), dtype=float)
-        return np.sign(np.nan_to_num(values))
+        """The strategy's signal at every bar, using data up to each bar only: -1/0/1, or a size within +/-2 when continuous."""
+        values = np.nan_to_num(np.asarray(self.strategy.signal_series(list(bars)), dtype=float))
+        return np.clip(values, -MAX_CONTINUOUS_SIGNAL, MAX_CONTINUOUS_SIGNAL) if self.spec.continuous else np.sign(values)
 
     def step(self, state: SleeveState, bars: Sequence[Any], signal: float) -> tuple[SleeveState, SleeveDecision]:
         """Decide at the close of `bars[-1]` given the strategy's `signal` there; returns the new state and why."""
@@ -196,6 +207,8 @@ class SleeveRunner:
         )
         gated, new.reentry_block, blocked = gate_reentry(float(signal), state.reentry_block)
         side = 1.0 if new.weight > 0 else -1.0 if new.weight < 0 else 0.0
+        if self.spec.continuous:
+            return self._step_continuous(new, bars, price, gated, side, blocked)
         if self._pause is not None:
             if side != 0.0 and state.last_price:
                 new.equity = state.equity * (1.0 + state.weight * (price / state.last_price - 1.0))
@@ -232,6 +245,32 @@ class SleeveRunner:
             return new, SleeveDecision("declined", 0.0, sized.reason or "sizing_zero", dict(sized.details))
         new.weight, new.entry_price, new.bars_held = gated * sized.fraction, price, 0
         return new, SleeveDecision("flip" if side != 0.0 else "enter", new.weight, None, dict(sized.details))
+
+    def _step_continuous(self, new: SleeveState, bars: Sequence[Any], price: float, signal: float, side: float, blocked: bool) -> tuple[SleeveState, SleeveDecision]:
+        """Hold signal x the sizer's share now; a change of sign closes the trade (for its return) and opens the next."""
+        details: dict[str, float] = {}
+        target = 0.0
+        if signal != 0.0:
+            sized = self.sizer.size(SizingContext(bars=bars, equity=1.0, price=price, side="buy" if signal > 0 else "sell", trade_returns=new.trade_returns))
+            details = dict(sized.details)
+            if sized.fraction <= 0.0:
+                if side != 0.0:
+                    self._close_position(new, price)
+                    return new, SleeveDecision("exit", 0.0, sized.reason or "sizing_zero", details)
+                return new, SleeveDecision("declined", 0.0, sized.reason or "sizing_zero", details)
+            target = signal * sized.fraction
+        new_side = float(np.sign(target))
+        if side != 0.0 and new_side == side:
+            new.weight, new.bars_held = target, new.bars_held + 1
+            return new, SleeveDecision("hold", target, None, details)
+        if side != 0.0:
+            self._close_position(new, price)
+        if new_side == 0.0:
+            if side != 0.0:
+                return new, SleeveDecision("exit", 0.0, "signal_flat")
+            return new, SleeveDecision("blocked" if blocked else "flat", 0.0, "reentry_after_stop" if blocked else None)
+        new.weight, new.entry_price, new.bars_held = target, price, 0
+        return new, SleeveDecision("flip" if side != 0.0 else "enter", target, None, details)
 
     @staticmethod
     def _close_position(state: SleeveState, price: float) -> None:
