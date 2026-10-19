@@ -6,6 +6,32 @@ accident.
 
 ---
 
+## 2026-10-19: Every running sleeve carded: none shows "evidence of an edge"
+
+`scripts/research/card_books.py` on the BTC live, multi-paper and small-paper books (`data/research/cards_running_books/`).
+Each sleeve runs alone at full size with costs and funding, 2020-2025 Kraken perps. Its catalog grid supplies the
+variants, its catalog family supplies the ledger trials (trend 63, Keltner 24, taker 27), and buy-and-hold is the
+baseline.
+
+| Sleeve | Verdict | Sharpe (interval) | t | Deflated Sharpe | Timing placebo p | Shrunk Sharpe | vs buy-and-hold |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| BTC 4/48 daily, long only | weak | 1.46 (0.41 to 2.42) | 3.07 | 0.85 | 0.01 | 0.79 | +0.54, not shown better |
+| BTC 8/96 4h, long only | weak | 1.27 (0.34 to 2.11) | 2.73 | 0.76 | 0.02 | 0.70 | +0.27, not shown better |
+| ETH 4/48 daily, long only | weak | 1.11 (0.27 to 1.94) | 2.53 | 0.57 | 0.05 | 0.63 | +0.26, not shown better |
+| Taker basket (40 coins) | weak | 1.26 (0.04 to 2.48) | 2.44 | 0.65 | 0.00 | 0.59 | (no baseline) |
+| BTC Keltner long/short | no evidence | 0.92 (-0.08 to 1.91) | 2.06 | 0.56 | 0.07 | 0.52 | +0.01 |
+| ETH Keltner long/short | no evidence | 0.85 (-0.02 to 1.67) | 1.86 | 0.49 | 0.04 | 0.47 | +0.00 |
+| SOL 4/48 daily, long only | no evidence | 0.89 (-0.56 to 2.09) | 1.49 | 0.22 | 0.20 | 0.37 | +0.02 |
+
+- **The trend sleeves on BTC and ETH are real but modest.** Their means are significant and the timing placebo
+  passes (the timing earns, not just being long). They fail the deflated Sharpe once the 63 trend trials are counted,
+  and none is shown better than holding the coin. Shrunk Sharpes of 0.6 to 0.8 are the honest live expectation; the
+  configs' review Sharpes (1.02 for BTC 4/48) are optimistic.
+- **Keltner long/short and SOL trend show no evidence.** They earn what buy-and-hold earns, inside noise. SOL's timing
+  placebo fails too.
+- **The taker basket's timing is the strongest (placebo p 0.00)**, but its first half is negative.
+- Nothing was changed in the books. Removing sleeves is the owner's call.
+
 ## 2026-10-19: The strategy card, and H13 judged by it: no evidence
 
 `src/research/strategy_checks.py`, `research/strategy_standard.toml` (v1), `scripts/research/strategy_card.py`: one
