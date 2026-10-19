@@ -122,11 +122,11 @@ class FuturesFeed:
         symbols: dict[str, str] = {}
         for name in wanted:
             market = self.markets[name]
-            if not market.free_quote_symbol or held[name].quote_symbol is None:
+            if not market.free_quote_symbol or held[name].price_symbol is None:
                 self._errors[name] = "the free source has no quotes for this market"
                 continue
             symbols[f"front:{name}"] = market.free_quote_symbol
-            symbols[f"held:{name}"] = held[name].quote_symbol
+            symbols[f"held:{name}"] = held[name].price_symbol  # the index itself when the source has no contracts: the splice is then a no-op
         for currency in self.currencies:
             symbols[f"fx:{currency}"] = currency_symbol(currency, self.base_currency)
         async with aiohttp.ClientSession() as session:

@@ -26,7 +26,7 @@ def markets() -> dict[str, fc.Market]:
 
 
 def test_table_loads_and_is_consistent(markets: dict[str, fc.Market]) -> None:
-    assert len(markets) == 14 and markets["cme_usd:MES"].multiplier == Decimal(5) and markets["cme_usd:MES"].venue == "cme_usd"
+    assert len(markets) == 15 and markets["cme_usd:MES"].multiplier == Decimal(5) and markets["cme_usd:MES"].venue == "cme_usd"
     assert markets["cme_jpy:MNI"].currency == "JPY" and markets["eurex_eur:FDXS"].quote_exchange == ""
     assert all(market.multiplier * market.tick_size == market.tick_value for market in markets.values())
 
@@ -184,3 +184,10 @@ def test_order_file_round_trip_and_fills(tmp_path) -> None:
     fills = order_file.read_fills(tmp_path)
     assert fills[0] == {"order_id": "pf-1-0", "contract": "MESZ26", "side": "buy", "quantity": 3, "price": 6801.25, "fee": 1.5, "filled_utc": "2026-10-09T14:01:00Z", "file": "fills_1.csv", "line": 2}
     assert "error" in fills[1] and "line 3" in fills[1]["error"]
+
+
+def test_a_market_without_contract_quotes_is_priced_at_its_index(markets: dict[str, fc.Market]) -> None:
+    stoxx = fc.Contract(markets["eurex_eur:FXXP"], 2026, 12)
+    assert stoxx.quote_symbol is None and stoxx.price_symbol == "^STOXX"
+    assert fc.Contract(markets["cme_usd:MES"], 2026, 12).price_symbol == "MESZ26.CME"
+    assert fc.Contract(markets["eurex_eur:FDXS"], 2026, 12).price_symbol is None

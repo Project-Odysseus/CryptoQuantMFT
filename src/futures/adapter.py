@@ -213,7 +213,7 @@ class SessionFuturesAdapter:
         """The price to fill at: the contract's latest trade if fresh, the engine's mark when no price source is set."""
         if self.prices is None:
             return self._marks.get(symbol, fallback)
-        quote = self.prices(contract.quote_symbol) if contract.quote_symbol else None
+        quote = self.prices(contract.price_symbol) if contract.price_symbol else None
         if quote is None or abs(now - quote[1]) > MAX_PRICE_AGE:
             return None
         return float(quote[0])

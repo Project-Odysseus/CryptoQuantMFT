@@ -40,6 +40,7 @@ class Market:
         calendar: The `exchange_calendars` code whose holidays close this market's liquid window.
         liquid_from, liquid_to, timezone: The liquid part of the day, local time.
         history_proxy: The index or currency whose history stands in for expired contracts.
+        free_quote_symbol: The free source's continuous series ("MES=F"), or the cash index when it has no contracts ("^STOXX").
         quote_exchange: The suffix of the free source's contract symbols ("MESZ26.CME"); empty when it has none.
         cost_ticks: Assumed cost per side in ticks: half the spread plus commission.
     """
@@ -138,6 +139,15 @@ class Contract:
     def quote_symbol(self) -> str | None:
         """The free source's symbol ("MESZ26.CME"), or None when it does not carry this market."""
         return f"{self.code}.{self.market.quote_exchange}" if self.market.quote_exchange else None
+
+    @property
+    def price_symbol(self) -> str | None:
+        """The symbol a paper book prices this contract with: its own quotes, else the market's index (`free_quote_symbol`).
+
+        The free source has no Eurex contracts, so a market like the STOXX Europe 600 future is marked and filled at its
+        cash index. That leaves out the futures basis and real roll gaps: fine for a paper record, not for real orders.
+        """
+        return self.quote_symbol or self.market.free_quote_symbol or None
 
     def following(self) -> "Contract":
         """The next contract month of the same market."""
