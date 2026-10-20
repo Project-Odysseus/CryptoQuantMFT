@@ -10,6 +10,8 @@ __pycache__/
 *.sqlite3
 logs/
 data/
+# quantlab's data package is code (catalog, adapters, instruments), not data
+!packages/quantlab/src/quantlab/data/
 
 # Conda environment artifacts
 .conda-envs/
