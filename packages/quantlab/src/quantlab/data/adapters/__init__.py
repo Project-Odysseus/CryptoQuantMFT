@@ -8,7 +8,7 @@ they return. A host or a future employer adds its own sources by registering an 
     register(MyBloombergExport(root="/data/bbg"))
 
 Built in: `yahoo` (free index/ETF/futures bars), `yahoo_tr` (the same, scaled to total return), `oecd` (monthly 3-month interbank rates), `norges_bank` (daily FX
-fixings against NOK), and `file` (CSV or Parquet files you bring).
+fixings against NOK), `norges_bank_usd` (the same, crossed to US dollars), and `file` (CSV or Parquet files you bring).
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def _register_builtins() -> None:
         return
     _BUILTINS_LOADED = True
     from quantlab.data.adapters.files import FileAdapter
-    from quantlab.data.adapters.public import NorgesBankAdapter, OecdRatesAdapter, YahooAdapter, YahooTotalReturnAdapter
+    from quantlab.data.adapters.public import NorgesBankAdapter, NorgesBankUsdAdapter, OecdRatesAdapter, YahooAdapter, YahooTotalReturnAdapter
 
-    for adapter in (YahooAdapter(), YahooTotalReturnAdapter(), OecdRatesAdapter(), NorgesBankAdapter(), FileAdapter()):
+    for adapter in (YahooAdapter(), YahooTotalReturnAdapter(), OecdRatesAdapter(), NorgesBankAdapter(), NorgesBankUsdAdapter(), FileAdapter()):
         _REGISTRY.setdefault(adapter.name, adapter)

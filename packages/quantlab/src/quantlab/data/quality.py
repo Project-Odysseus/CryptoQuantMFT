@@ -91,6 +91,8 @@ def data_card(bars: pd.DataFrame, *, name: str = "", calendar: TradingCalendar |
     flat = ((h == l) & (l == c)).to_numpy()
     per_year = pd.Series(flat, index=frame.index).groupby(frame.index.year).sum()
     close_only = per_year[per_year > CLOSE_ONLY_YEAR]
+    if len(close_only) and flat.mean() > 0.99:
+        close_only = close_only.iloc[:0]  # one price a day throughout (a fixing, a rate): the series itself, not missing early ranges
     usable_from = pd.Timestamp(year=int(close_only.index.max()) + 1, month=1, day=1) if len(close_only) else frame.index[0]
     if getattr(frame.index, "tz", None) is not None:
         usable_from = usable_from.tz_localize(frame.index.tz) if usable_from.tz is None else usable_from

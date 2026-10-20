@@ -148,3 +148,26 @@ class NorgesBankAdapter:
         text = self._fetch(NORGES_BANK.format(currency=symbol, start=(start or "1990-01-01")[:10])).decode("utf-8")
         frame = parse_norges_bank(text)
         return frame.loc[:end] if end else frame
+
+
+class NorgesBankUsdAdapter:
+    """US dollars per one unit of a currency, from two Norges Bank fixings taken at the same time (X/NOK over USD/NOK).
+
+    Daily bars with open = high = low = close (a fixing is one price a day). Cleaner than free spot quotes, which have
+    bad ticks; the stand-in for a currency future's history (with the interest differential, quantlab.engine.returns).
+    """
+
+    name, version = "norges_bank_usd", "1"
+
+    def __init__(self, fetch: Fetch = http_get) -> None:
+        self._source = NorgesBankAdapter(fetch)
+
+    def fetch(self, symbol: str, *, interval: str = "1d", start: str | None = None, end: str | None = None) -> pd.DataFrame:
+        if interval != "1d":
+            raise ValueError("Norges Bank fixings are daily")
+        nok = self._source.fetch(symbol, start=start, end=end)["value"]
+        usd = self._source.fetch("USD", start=start, end=end)["value"]
+        cross = (nok / usd).dropna()
+        frame = pd.DataFrame({"open": cross, "high": cross, "low": cross, "close": cross, "volume": 0.0}, index=cross.index)
+        frame.index.name = "time"
+        return frame

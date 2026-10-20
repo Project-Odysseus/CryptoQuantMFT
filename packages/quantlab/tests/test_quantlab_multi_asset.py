@@ -37,6 +37,14 @@ def test_total_return_bars_include_distributions() -> None:
     assert np.isclose(total["close"].iloc[-1] / total["close"].iloc[0], 1.0) and np.isclose(total["high"].iloc[0], 101.0 * 0.99)
 
 
+def test_a_fixing_series_is_usable_whole_and_an_empty_instrument_is_an_error(tmp_path) -> None:
+    from quantlab.data.quality import data_card
+
+    index = pd.bdate_range("2010-01-01", "2012-12-31")
+    fixing = pd.DataFrame({"open": 1.1, "high": 1.1, "low": 1.1, "close": 1.1, "volume": 0.0}, index=index)
+    assert data_card(fixing, name="fixing", calendar=get_calendar("weekdays")).usable_from == index[0]
+
+
 def test_fx_spot_earns_its_interest_differential_and_etfs_pay_for_cash() -> None:
     index = pd.bdate_range("2024-01-01", periods=5)
     flat = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 0.0}, index=index)

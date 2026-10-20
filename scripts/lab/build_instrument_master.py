@@ -109,9 +109,10 @@ def instruments() -> dict[str, dict[str, Any]]:
                               "session_close": "16:00", "cost_bps": cost, "rate_area": "USA", "sources": {"1d": f"yahoo_tr:{symbol}"}, "proxy_for": future,
                               "notes": notes}
     for currency, (area, future) in FX_PROXIES.items():
-        out[f"fxusd:{currency}"] = {"name": f"{currency} against the US dollar (spot, with its interest differential)", "asset_class": "fx", "kind": "spot",
-                                    "currency": "USD", "calendar": "weekdays", "timezone": "Europe/London", "session_close": "22:00", "cost_bps": 1.0,
-                                    "rate_area": "USA", "carry_area": area, "sources": {"1d": f"yahoo:{currency}USD=X"}, "proxy_for": future}
+        out[f"fxusd:{currency}"] = {"name": f"{currency} against the US dollar (Norges Bank fixings, with its interest differential)", "asset_class": "fx",
+                                    "kind": "spot", "currency": "USD", "calendar": "XOSL", "timezone": "Europe/Oslo", "session_close": "14:15", "cost_bps": 1.0,
+                                    "rate_area": "USA", "carry_area": area, "sources": {"1d": f"norges_bank_usd:{currency}"}, "proxy_for": future,
+                                    "notes": "free spot quotes have bad ticks (EUR and JPY +17% in 2008-12), so fixings"}
 
     for market, row in h11.items():
         if row["sector"] != "fx" or market == "NOK":

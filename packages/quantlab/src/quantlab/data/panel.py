@@ -90,6 +90,9 @@ def load_panel(master: InstrumentMaster, ids: Iterable[str], *, catalog: DataCat
         if cut_close_only:
             bars = bars[bars.index >= card.usable_from]
         frames[instrument_id] = bars.loc[start:end]
+        if frames[instrument_id].empty:
+            raise ValueError(f"{instrument_id}: no usable bars between {start} and {end} (data card: usable from {card.usable_from:%Y-%m-%d}, "
+                             f"{card.rows} bars {card.first} to {card.last})")
         snapshots[instrument_id], cards[instrument_id] = snapshot.id, card
     panel = align(frames, interval=interval)
     panel.snapshots, panel.cards = snapshots, cards
