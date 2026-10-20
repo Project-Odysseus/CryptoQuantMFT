@@ -26,7 +26,7 @@ def markets() -> dict[str, fc.Market]:
 
 
 def test_table_loads_and_is_consistent(markets: dict[str, fc.Market]) -> None:
-    assert len(markets) == 15 and markets["cme_usd:MES"].multiplier == Decimal(5) and markets["cme_usd:MES"].venue == "cme_usd"
+    assert len(markets) == 18 and markets["cme_usd:MES"].multiplier == Decimal(5) and markets["cme_usd:MES"].venue == "cme_usd"
     assert markets["cme_jpy:MNI"].currency == "JPY" and markets["eurex_eur:FDXS"].quote_exchange == ""
     assert all(market.multiplier * market.tick_size == market.tick_value for market in markets.values())
 
@@ -56,6 +56,11 @@ def test_last_trading_days(markets: dict[str, fc.Market], sessions: Sessions) ->
     assert fc.last_trade_day(fc.Contract(markets["cme_jpy:MNI"], 2026, 12), sessions) == date(2026, 12, 10)  # Thursday before the second Friday
     april = replace(markets["cme_usd:MES"], months="J")
     assert fc.last_trade_day(fc.Contract(april, 2025, 4), sessions) == date(2025, 4, 17)  # the third Friday was Good Friday
+    assert fc.last_trade_day(fc.Contract(markets["cme_usd:ZN"], 2026, 12), sessions) == date(2026, 11, 30)  # first notice: the last session of November
+    assert fc.last_trade_day(fc.Contract(markets["cme_usd:MCL"], 2026, 12), sessions) == date(2026, 11, 20)  # three sessions before Wednesday the 25th
+    assert fc.last_trade_day(fc.Contract(markets["cme_usd:MCL"], 2026, 11), sessions) == date(2026, 10, 20)  # the 25th a Sunday: four sessions before
+    assert fc.scheduled_contract(markets["cme_usd:MCL"], date(2026, 10, 20), sessions).code == "MCLZ26"
+    assert fc.scheduled_contract(markets["cme_usd:ZN"], date(2026, 10, 20), sessions).code == "ZNZ26"
 
 
 def test_roll_day_and_the_contract_to_hold(markets: dict[str, fc.Market], sessions: Sessions) -> None:

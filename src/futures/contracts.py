@@ -21,7 +21,8 @@ from src.futures.sessions import Sessions
 MARKETS_PATH = Path("config/futures_markets.csv")
 MONTH_CODES = {1: "F", 2: "G", 3: "H", 4: "J", 5: "K", 6: "M", 7: "N", 8: "Q", 9: "U", 10: "V", 11: "X", 12: "Z"}
 MONTH_OF_CODE = {code: month for month, code in MONTH_CODES.items()}
-LAST_TRADE_RULES = ("third_friday", "two_sessions_before_third_wednesday", "one_session_before_third_wednesday", "thursday_before_second_friday")
+LAST_TRADE_RULES = ("third_friday", "two_sessions_before_third_wednesday", "one_session_before_third_wednesday", "thursday_before_second_friday",
+                    "first_notice_prior_month", "crude_oil")
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +36,9 @@ class Market:
         tick_size, tick_value: The smallest price step and what it is worth per contract.
         settlement: "cash", "physical" (must always be rolled before the last trading day) or "check".
         months: Contract months as month codes, e.g. "HMUZ".
-        last_trade_rule: One of `LAST_TRADE_RULES`.
+        last_trade_rule: One of `LAST_TRADE_RULES`. For contracts delivered over a month (CBOT Treasuries, COMEX
+            metals), `first_notice_prior_month` gives the first notice day, the last session of the month before: the
+            book must be out by then, so the roll counts back from it.
         roll_sessions_before: Trading days before the last trading day on which the position moves to the next contract.
         calendar: The `exchange_calendars` code whose holidays close this market's liquid window.
         liquid_from, liquid_to, timezone: The liquid part of the day, local time.
@@ -169,6 +172,13 @@ def last_trade_day(contract: Contract, sessions: Sessions) -> date:
         return sessions.on_or_before(market.calendar, _nth_weekday(contract.year, contract.month, month_calendar.FRIDAY, 3))
     if rule == "thursday_before_second_friday":
         return sessions.on_or_before(market.calendar, _nth_weekday(contract.year, contract.month, month_calendar.FRIDAY, 2) - timedelta(days=1))
+    if rule in ("first_notice_prior_month", "crude_oil"):
+        prior_year, prior_month = (contract.year, contract.month - 1) if contract.month > 1 else (contract.year - 1, 12)
+        if rule == "first_notice_prior_month":
+            return sessions.on_or_before(market.calendar, date(prior_year, prior_month, month_calendar.monthrange(prior_year, prior_month)[1]))
+        # NYMEX WTI: three sessions before the 25th of the month before; four when the 25th is not a session
+        anchor = date(prior_year, prior_month, 25)
+        return sessions.shift(market.calendar, anchor if sessions.is_session(market.calendar, anchor) else sessions.on_or_before(market.calendar, anchor), -3)
     third_wednesday = _nth_weekday(contract.year, contract.month, month_calendar.WEDNESDAY, 3)
     if rule == "two_sessions_before_third_wednesday":
         return sessions.shift(market.calendar, third_wednesday, -2)

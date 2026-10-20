@@ -46,6 +46,17 @@ INDICES = {
 }
 CURRENCY = {"SPX": "USD", "NDX": "USD", "RUT": "USD", "DJI": "USD", "NIKKEI": "JPY", "DAX": "EUR", "STOXX50": "EUR", "STOXX600": "EUR", "SMI": "CHF",
             "FTSE": "GBP", "CAC": "EUR", "AEX": "EUR", "IBEX": "EUR", "MIB": "EUR", "HSI": "HKD", "ASX": "AUD", "TSX": "CAD"}
+# research proxies for futures with no long free history: total-return ETFs (less the US short rate) and FX spot (plus
+# the interest differential). id -> (name, asset class, Yahoo symbol, cost bps per side, future, notes)
+ETF_PROXIES = {
+    "etf:IEI": ("iShares 3-7 Year Treasury (total return)", "rates", "IEI", 1.0, "cme_usd:ZF", "from 2007; duration about 4.5 years, near the 5-year note's"),
+    "etf:IEF": ("iShares 7-10 Year Treasury (total return)", "rates", "IEF", 1.0, "cme_usd:ZN", "from 2002; duration about 7.5 years, a little above the 10-year note's"),
+    "etf:USO": ("United States Oil Fund (total return)", "commodity", "USO", 2.0, "cme_usd:MCL",
+                "from 2006; holds front-month WTI (spread over later months since 2020), so it pays the roll like the future, less a 0.7% fee"),
+}
+FX_PROXIES = {"EUR": ("EA20", "cme_usd:M6E"), "GBP": ("GBR", "cme_usd:M6B"), "AUD": ("AUS", "cme_usd:M6A"), "CHF": ("CHE", "cme_usd:MSF"),
+              "JPY": ("JPN", "cme_usd:MJY"), "CAD": ("CAN", "cme_usd:MCD")}
+ASSET_CLASS = {"equity": "equity_index", "fx": "fx", "rates": "rates", "energy": "commodity", "metals": "commodity"}
 RATE_AREAS = ["AUS", "CAN", "CHE", "EA20", "GBR", "JPN", "NOR", "NZL", "SWE", "USA"]
 COST_BY_CLASS = {"major": 1.5, "minor": 3.0}
 KRAKEN_TAKER_BPS = 5.0
@@ -69,7 +80,7 @@ def instruments() -> dict[str, dict[str, Any]]:
     with (ROOT / "config" / "futures_markets.csv").open() as handle:
         for row in csv.DictReader(handle):
             settlement = "physical" if row["settlement"] in ("physical", "check") else "cash"
-            item = {"name": row["name"], "asset_class": "equity_index" if row["sector"] == "equity" else "fx", "kind": "future",
+            item = {"name": row["name"], "asset_class": ASSET_CLASS[row["sector"]], "kind": "future",
                     "currency": row["currency"], "venue": row["exchange"], "calendar": row["calendar"], "timezone": row["timezone"],
                     "session_close": row["liquid_to"], "multiplier": float(row["multiplier"]), "tick_size": float(row["tick_size"]),
                     "cost_ticks": float(row["cost_ticks_per_side"])}
@@ -92,6 +103,15 @@ def instruments() -> dict[str, dict[str, Any]]:
         if market == "DAX":
             item["notes"] = "total-return index: dividends are already in the price (carry_yield 0)"
         out[f"idx:{market}"] = item
+
+    for instrument_id, (name, asset_class, symbol, cost, future, notes) in ETF_PROXIES.items():
+        out[instrument_id] = {"name": name, "asset_class": asset_class, "kind": "etf", "currency": "USD", "calendar": "XNYS", "timezone": "America/New_York",
+                              "session_close": "16:00", "cost_bps": cost, "rate_area": "USA", "sources": {"1d": f"yahoo_tr:{symbol}"}, "proxy_for": future,
+                              "notes": notes}
+    for currency, (area, future) in FX_PROXIES.items():
+        out[f"fxusd:{currency}"] = {"name": f"{currency} against the US dollar (spot, with its interest differential)", "asset_class": "fx", "kind": "spot",
+                                    "currency": "USD", "calendar": "weekdays", "timezone": "Europe/London", "session_close": "22:00", "cost_bps": 1.0,
+                                    "rate_area": "USA", "carry_area": area, "sources": {"1d": f"yahoo:{currency}USD=X"}, "proxy_for": future}
 
     for market, row in h11.items():
         if row["sector"] != "fx" or market == "NOK":

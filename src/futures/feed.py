@@ -26,7 +26,8 @@ from src.storage.bar_aggregator import OHLCVBar
 DAY_SECONDS = 86_400
 SPLICE_DAYS = 20  # the held contract's own bars are used for this many days; before that, the scaled front-month series
 # When a trade date is over, local time, by exchange; a bar is used half an hour later
-TRADE_DATE_END = {"CME": (time(17, 0), "America/New_York"), "CBOT": (time(17, 0), "America/New_York"), "Eurex": (time(22, 0), "Europe/Berlin")}
+TRADE_DATE_END = {"CME": (time(17, 0), "America/New_York"), "CBOT": (time(17, 0), "America/New_York"), "NYMEX": (time(17, 0), "America/New_York"),
+                  "Eurex": (time(22, 0), "Europe/Berlin")}
 SETTLE_DELAY = timedelta(minutes=30)
 Fetch = Callable[[aiohttp.ClientSession, str], Awaitable[tuple[pd.DataFrame, dict[str, Any]]]]
 

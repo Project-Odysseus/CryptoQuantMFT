@@ -239,6 +239,54 @@ sources = { "1d" = "yahoo:^STOXX" }
 contract = { root = "FXXP", months = "HMUZ", last_trade_rule = "third_friday", roll_sessions_before = 3, settlement = "cash" }
 notes = "checked 2026-10-19 on eurex.com; paper only: the free source has no Eurex contracts, so it is priced at the cash index (no basis, no roll gap)"
 
+[instruments."cme_usd:ZF"]
+name = "5-Year US Treasury Note"
+asset_class = "rates"
+kind = "future"
+currency = "USD"
+venue = "CBOT"
+calendar = "CMES"
+timezone = "America/New_York"
+session_close = "15:00"
+multiplier = 1000.0
+tick_size = 0.0078125
+cost_ticks = 1.0
+sources = { "1d" = "yahoo:ZF=F" }
+contract = { root = "ZF", months = "HMUZ", last_trade_rule = "first_notice_prior_month", roll_sessions_before = 3, settlement = "physical" }
+notes = "not confirmed: specs from memory 2026-10-20 ($100k face, 1/4 of 1/32 tick); rolled before first notice; quotes checked"
+
+[instruments."cme_usd:ZN"]
+name = "10-Year US Treasury Note"
+asset_class = "rates"
+kind = "future"
+currency = "USD"
+venue = "CBOT"
+calendar = "CMES"
+timezone = "America/New_York"
+session_close = "15:00"
+multiplier = 1000.0
+tick_size = 0.015625
+cost_ticks = 1.0
+sources = { "1d" = "yahoo:ZN=F" }
+contract = { root = "ZN", months = "HMUZ", last_trade_rule = "first_notice_prior_month", roll_sessions_before = 3, settlement = "physical" }
+notes = "not confirmed: specs from memory 2026-10-20 ($100k face, 1/2 of 1/32 tick); rolled before first notice; quotes checked"
+
+[instruments."cme_usd:MCL"]
+name = "Micro WTI Crude Oil"
+asset_class = "commodity"
+kind = "future"
+currency = "USD"
+venue = "NYMEX"
+calendar = "CMES"
+timezone = "America/New_York"
+session_close = "14:30"
+multiplier = 100.0
+tick_size = 0.01
+cost_ticks = 2.0
+sources = { "1d" = "yahoo:MCL=F" }
+contract = { root = "MCL", months = "FGHJKMNQUVXZ", last_trade_rule = "crude_oil", roll_sessions_before = 5, settlement = "cash" }
+notes = "not confirmed: specs from memory 2026-10-20 (100 barrels, cash-settled; last day taken as CL's, rolled 5 sessions earlier); quotes checked"
+
 [instruments."idx:SPX"]
 name = "SPX index"
 asset_class = "equity_index"
@@ -469,6 +517,132 @@ cost_bps = 3.0
 carry_yield = 0.025
 rate_area = "CAN"
 sources = { "1d" = "yahoo:^GSPTSE" }
+
+[instruments."etf:IEI"]
+name = "iShares 3-7 Year Treasury (total return)"
+asset_class = "rates"
+kind = "etf"
+currency = "USD"
+calendar = "XNYS"
+timezone = "America/New_York"
+session_close = "16:00"
+cost_bps = 1.0
+rate_area = "USA"
+sources = { "1d" = "yahoo_tr:IEI" }
+proxy_for = "cme_usd:ZF"
+notes = "from 2007; duration about 4.5 years, near the 5-year note's"
+
+[instruments."etf:IEF"]
+name = "iShares 7-10 Year Treasury (total return)"
+asset_class = "rates"
+kind = "etf"
+currency = "USD"
+calendar = "XNYS"
+timezone = "America/New_York"
+session_close = "16:00"
+cost_bps = 1.0
+rate_area = "USA"
+sources = { "1d" = "yahoo_tr:IEF" }
+proxy_for = "cme_usd:ZN"
+notes = "from 2002; duration about 7.5 years, a little above the 10-year note's"
+
+[instruments."etf:USO"]
+name = "United States Oil Fund (total return)"
+asset_class = "commodity"
+kind = "etf"
+currency = "USD"
+calendar = "XNYS"
+timezone = "America/New_York"
+session_close = "16:00"
+cost_bps = 2.0
+rate_area = "USA"
+sources = { "1d" = "yahoo_tr:USO" }
+proxy_for = "cme_usd:MCL"
+notes = "from 2006; holds front-month WTI (spread over later months since 2020), so it pays the roll like the future, less a 0.7% fee"
+
+[instruments."fxusd:EUR"]
+name = "EUR against the US dollar (spot, with its interest differential)"
+asset_class = "fx"
+kind = "spot"
+currency = "USD"
+calendar = "weekdays"
+timezone = "Europe/London"
+session_close = "22:00"
+cost_bps = 1.0
+rate_area = "USA"
+carry_area = "EA20"
+sources = { "1d" = "yahoo:EURUSD=X" }
+proxy_for = "cme_usd:M6E"
+
+[instruments."fxusd:GBP"]
+name = "GBP against the US dollar (spot, with its interest differential)"
+asset_class = "fx"
+kind = "spot"
+currency = "USD"
+calendar = "weekdays"
+timezone = "Europe/London"
+session_close = "22:00"
+cost_bps = 1.0
+rate_area = "USA"
+carry_area = "GBR"
+sources = { "1d" = "yahoo:GBPUSD=X" }
+proxy_for = "cme_usd:M6B"
+
+[instruments."fxusd:AUD"]
+name = "AUD against the US dollar (spot, with its interest differential)"
+asset_class = "fx"
+kind = "spot"
+currency = "USD"
+calendar = "weekdays"
+timezone = "Europe/London"
+session_close = "22:00"
+cost_bps = 1.0
+rate_area = "USA"
+carry_area = "AUS"
+sources = { "1d" = "yahoo:AUDUSD=X" }
+proxy_for = "cme_usd:M6A"
+
+[instruments."fxusd:CHF"]
+name = "CHF against the US dollar (spot, with its interest differential)"
+asset_class = "fx"
+kind = "spot"
+currency = "USD"
+calendar = "weekdays"
+timezone = "Europe/London"
+session_close = "22:00"
+cost_bps = 1.0
+rate_area = "USA"
+carry_area = "CHE"
+sources = { "1d" = "yahoo:CHFUSD=X" }
+proxy_for = "cme_usd:MSF"
+
+[instruments."fxusd:JPY"]
+name = "JPY against the US dollar (spot, with its interest differential)"
+asset_class = "fx"
+kind = "spot"
+currency = "USD"
+calendar = "weekdays"
+timezone = "Europe/London"
+session_close = "22:00"
+cost_bps = 1.0
+rate_area = "USA"
+carry_area = "JPN"
+sources = { "1d" = "yahoo:JPYUSD=X" }
+proxy_for = "cme_usd:MJY"
+
+[instruments."fxusd:CAD"]
+name = "CAD against the US dollar (spot, with its interest differential)"
+asset_class = "fx"
+kind = "spot"
+currency = "USD"
+calendar = "weekdays"
+timezone = "Europe/London"
+session_close = "22:00"
+cost_bps = 1.0
+rate_area = "USA"
+carry_area = "CAN"
+sources = { "1d" = "yahoo:CADUSD=X" }
+proxy_for = "cme_usd:MCD"
 
 [instruments."fx:EURNOK"]
 name = "EUR in NOK (Norges Bank fixing)"

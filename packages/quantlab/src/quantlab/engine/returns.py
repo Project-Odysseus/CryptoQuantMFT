@@ -2,6 +2,10 @@
 
 - **Index proxy or index:** price return + (carry yield - its short rate) / periods, the excess return of a future on
   it. The rate comes point-in-time from an `oecd` series (`rate:<area>` in the master), known from the next month.
+- **ETF proxy** (total-return prices, `yahoo_tr`): the same, minus its short rate: a fund's return less the cash that
+  would have bought it is about the excess return of the future it stands in for (less the fund's fee).
+- **FX spot proxy** (`carry_area` set): spot return + (the foreign short rate - the funding rate) / periods, the
+  excess return of a currency future (covered interest parity).
 - **Future with held-contract data:** pass its `held_returns` (quantlab.data.futures) instead; the price is not used.
 - **Perp, spot, FX rate:** price return. Perp funding is a separate cash flow (a later item).
 
@@ -19,6 +23,8 @@ import pandas as pd
 from quantlab.data.catalog import DataCatalog
 from quantlab.data.instruments import InstrumentMaster
 from quantlab.data.panel import Panel, asof_daily
+
+FUNDED = ("index", "future", "etf")  # kinds whose return is net of the short rate when they name a rate_area
 
 
 def short_rates(master: InstrumentMaster, areas: set[str], index: pd.DatetimeIndex, catalog: DataCatalog) -> dict[str, pd.Series]:
@@ -40,16 +46,18 @@ def excess_returns(panel: Panel, master: InstrumentMaster, *, catalog: DataCatal
     """
     close = panel["close"]
     price_return = close.pct_change(fill_method=None)
-    needs_rate = {master[instrument].rate_area for instrument in panel.instruments if master[instrument].kind in ("index", "future") and master[instrument].rate_area}
+    funded = [instrument for instrument in panel.instruments if master[instrument].rate_area and (master[instrument].kind in FUNDED or master[instrument].carry_area)]
+    needs_rate = {master[instrument].rate_area for instrument in funded} | {master[instrument].carry_area for instrument in funded if master[instrument].carry_area}
     if rates is None and needs_rate:
         rates = short_rates(master, needs_rate, panel.index, catalog or DataCatalog())
     out = {}
     for instrument in panel.instruments:
         spec = master[instrument]
         series = price_return[instrument]
-        if spec.kind in ("index", "future") and spec.rate_area:
+        if instrument in funded:
             rate = (rates or {})[spec.rate_area].reindex(panel.index)
-            series = series + (spec.carry_yield - rate) / periods
+            earned = (rates or {})[spec.carry_area].reindex(panel.index) if spec.carry_area else 0.0
+            series = series + (spec.carry_yield + earned - rate) / periods
         out[instrument] = series.where(close[instrument].notna() & close[instrument].shift(1).notna())
     return pd.DataFrame(out, index=panel.index)
 
