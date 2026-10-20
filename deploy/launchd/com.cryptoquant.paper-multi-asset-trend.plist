@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The multi-asset trend book in PAPER mode (research only, never live): the H13 design on twelve CME, CBOT and NYMEX
+  futures (US equity index micros, 5- and 10-year Treasury notes, micro WTI crude, six currency micros), at 30,000,000
+  NOK of pretend capital (config/portfolio.multi_asset_trend_paper.toml, H15). It polls every 5 minutes, decides when
+  the day's bars are complete, fills at the free source's delayed prices as soon as Globex trades, is restarted if it
+  exits, and keeps the Mac from idle-sleeping while it runs. It shows on the dashboard (http://127.0.0.1:8787).
+    install:  cp deploy/launchd/com.cryptoquant.paper-multi-asset-trend.plist ~/Library/LaunchAgents/
+              launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cryptoquant.paper-multi-asset-trend.plist
+    status:   python main.py --portfolio config/portfolio.multi_asset_trend_paper.toml --dashboard
+    remove:   launchctl bootout gui/$(id -u)/com.cryptoquant.paper-multi-asset-trend && rm ~/Library/LaunchAgents/com.cryptoquant.paper-multi-asset-trend.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.cryptoquant.paper-multi-asset-trend</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string>
+    <string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin/python</string>
+    <string>main.py</string>
+    <string>--runtime</string><string>paper</string>
+    <string>--portfolio</string><string>config/portfolio.multi_asset_trend_paper.toml</string>
+    <string>--portfolio-state-dir</string><string>data/portfolio/multi-asset-trend-paper</string>
+    <string>--runtime-iterations</string><string>0</string>
+    <string>--runtime-interval</string><string>300</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/Sakarias/Odysseus/QuantMultiStrat</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/Users/Sakarias/anaconda3/envs/CryptoArb/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>StandardOutPath</key><string>/Users/Sakarias/Odysseus/QuantMultiStrat/logs/paper-multi-asset-trend/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/Sakarias/Odysseus/QuantMultiStrat/logs/paper-multi-asset-trend/launchd.err.log</string>
+</dict>
+</plist>

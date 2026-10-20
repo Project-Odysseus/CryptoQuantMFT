@@ -718,6 +718,30 @@ It shows on the dashboard next to the crypto books, with amounts in NOK. Expect 
 
 Judge it on quarters, not weeks (the review's `min_days = 90`).
 
+### The multi-asset trend book (paper, research only)
+
+`config/portfolio.multi_asset_trend_paper.toml` runs the same design on twelve CME, CBOT and NYMEX futures at
+30,000,000 NOK: MES, MNQ and M2K; the 5- and 10-year Treasury notes (ZF, ZN); micro WTI crude (MCL); and six currency
+micros (M6E, M6B, M6A, MJY, MSF, MCD). Its research is H15 (`research/reports/H15.md`, inconclusive). The lab spec is
+`research/strategies/multi_asset_trend.toml`. The same rules apply as for the equity book: paper only, never
+`mode = "file"`, never live.
+
+    python main.py --portfolio-check config/portfolio.multi_asset_trend_paper.toml
+    cp deploy/launchd/com.cryptoquant.paper-multi-asset-trend.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cryptoquant.paper-multi-asset-trend.plist
+
+Points specific to this book:
+- **Treasuries roll early.** They roll three sessions before first notice, at the end of the month before the contract
+  month (`first_notice_prior_month`).
+- **Crude rolls monthly.** It moves five sessions before WTI's last trading day (`crude_oil`).
+- **MCL is marked at CL.** The free source has no MCL history, so the micro is priced at the full-size CL contract of
+  the same month (`quote_root = CL` in `config/futures_markets.csv`). The price per barrel is the same, but the
+  volumes the liquidity limits see are CL's.
+- **Thin micros build slowly.** An order is at most 1% of a day's volume, so the first CHF and GBP positions can take a
+  few days to build.
+- **Unconfirmed specs.** The ZF, ZN and MCL contract specs were written from memory: check them on cmegroup.com before
+  relying on contract counts.
+
 ### Recording futures contracts
 
 `scripts/collectors/futures_daily.py --every 21600` (part of `scripts/collectors/run_collectors.sh`) saves the daily

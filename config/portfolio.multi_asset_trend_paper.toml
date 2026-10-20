@@ -1,0 +1,258 @@
+# PAPER ONLY, research: the H13 design on equity index, Treasury, crude oil and currency futures (H15), 30,000,000 NOK
+# pretend capital. The owner may not trade these markets personally (employer rule), so this book must never run live
+# or in "file" mode. The contracts are CME, CBOT and NYMEX futures (the ones Kraken's futures broker offers), priced
+# from the free source at their own contracts (delayed 10-15 min).
+#
+# The design is H13's P unchanged (research/prereg/H13.txt; research/prereg/H15.txt for this universe): a
+# volatility-normalised EMA difference at three speeds (10/20, 20/40, 40/80 days) through a smooth activation, each
+# market at 10% volatility, twelve markets weighted equally. The lab spec is research/strategies/multi_asset_trend.toml.
+# H15 (research/reports/H15.md, 2007-01 to 2025-12 on stand-in series): INCONCLUSIVE. Sharpe 0.39 after costs (95%
+# interval -0.02 to 0.81), t 1.76, strategy card "no evidence"; halves 0.62 and 0.15; 0.37 at twice the costs; worst
+# drawdown -12%, volatility 4.3%. Treasuries carried the most (Sharpe 0.41, against equities). Underpowered: a test this
+# long can only detect a Sharpe near 1. Read this book as a record of the design across asset classes, not a proven edge.
+#
+# Capital: 30,000,000 NOK, so each of the twelve sleeves (2,500,000 NOK, about 230,000 USD) holds several contracts;
+# at 10,000,000 NOK the Nasdaq-100 and 10-year note sleeves would round to 0 or 1 contract on most days.
+# Thin micros (CHF, GBP): an order is at most 1% of a day's volume, so the first positions may take a few days to build.
+# All markets trade on Globex nearly 23 hours a day: orders go out as soon as the day's bars are decided.
+#
+# Check:  python main.py --portfolio-check config/portfolio.multi_asset_trend_paper.toml
+# Paper:  python main.py --runtime paper --portfolio config/portfolio.multi_asset_trend_paper.toml --portfolio-state-dir data/portfolio/multi-asset-trend-paper --runtime-iterations 0 --runtime-interval 300
+# Background: deploy/launchd/com.cryptoquant.paper-multi-asset-trend.plist
+
+[portfolio]
+name = "multi-asset-trend-paper"
+base_currency = "NOK"
+initial_equity = 30000000
+rebalance_band = 0.02
+scale = 1.0                       # twelve sleeves share the book equally: each market at 10%/12 volatility, as in H15
+cash_rate = 0.045                 # idle cash earns a savings rate (as the equity-trend book); the dashboard's benchmark
+allocation = "equal"
+
+[risk]
+max_gross_exposure = 4.0          # Treasuries need large notionals for 10% volatility; futures tie up only margin
+max_net_exposure = 3.0
+max_instrument_weight = 1.0
+max_drawdown = 0.30               # kill: flatten and stay flat until --portfolio-reset-peak
+daily_loss_limit = 0.04
+stale_after_bars = 4              # a daily bar on Friday must last through the weekend and a Monday holiday
+rejection_cooldown_after = 3
+rejection_cooldown_hours = 24
+
+[risk.groups.equity]
+max_gross = 1.5
+max_net = 1.0
+
+[risk.groups.rates]
+max_gross = 2.5
+max_net = 2.5
+
+[risk.groups.energy]
+max_gross = 0.5
+max_net = 0.5
+
+[risk.groups.fx]
+max_gross = 2.0
+max_net = 1.5
+
+[futures]
+mode = "paper"                    # never "file": nothing from this book goes to a desk
+max_participation = 0.01
+min_daily_volume = 200
+slots = [ { name = "americas", at = "16:00", timezone = "Europe/Oslo" } ]
+around_the_clock = ["cme_usd:MES", "cme_usd:MNQ", "cme_usd:M2K", "cme_usd:ZF", "cme_usd:ZN", "cme_usd:MCL",
+                    "cme_usd:M6E", "cme_usd:M6B", "cme_usd:M6A", "cme_usd:MJY", "cme_usd:MSF", "cme_usd:MCD"]
+
+[instruments."cme_usd:MES"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+[instruments."cme_usd:MNQ"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+[instruments."cme_usd:M2K"]
+kind = "future"
+max_leverage = 5.0
+group = "equity"
+
+[instruments."cme_usd:ZF"]
+kind = "future"
+max_leverage = 8.0                # a 5-year note moves about 4% a year: 10% volatility is 2.5x its sleeve, 5x at full forecast
+group = "rates"
+
+[instruments."cme_usd:ZN"]
+kind = "future"
+max_leverage = 8.0
+group = "rates"
+
+[instruments."cme_usd:MCL"]
+kind = "future"
+max_leverage = 5.0
+group = "energy"
+
+[instruments."cme_usd:M6E"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[instruments."cme_usd:M6B"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[instruments."cme_usd:M6A"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[instruments."cme_usd:MJY"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[instruments."cme_usd:MSF"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+[instruments."cme_usd:MCD"]
+kind = "future"
+max_leverage = 5.0
+group = "fx"
+
+# The sizer annualises daily bars with 365 days, H13 with 252: 0.1204 = 0.10 x sqrt(365/252) gives the design's 10%.
+# Its half-life of 13.5 days is H13's exponential average (decay 0.95 a day).
+[[sleeves]]
+id = "mes_trend"
+instrument = "cme_usd:MES"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "mnq_trend"
+instrument = "cme_usd:MNQ"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "m2k_trend"
+instrument = "cme_usd:M2K"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "zf_trend"
+instrument = "cme_usd:ZF"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "zn_trend"
+instrument = "cme_usd:ZN"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "mcl_trend"
+instrument = "cme_usd:MCL"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "m6e_trend"
+instrument = "cme_usd:M6E"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "m6b_trend"
+instrument = "cme_usd:M6B"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "m6a_trend"
+instrument = "cme_usd:M6A"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "mjy_trend"
+instrument = "cme_usd:MJY"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "msf_trend"
+instrument = "cme_usd:MSF"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
+
+[[sleeves]]
+id = "mcd_trend"
+instrument = "cme_usd:MCD"
+interval = "1d"
+strategy = "trend_forecast"
+params = { activation = "compound_sigmoid" }
+continuous = true
+warmup_bars = 300
+sizing = "vol_target"
+sizing_params = { target_annual_vol = 0.1204, halflife_days = 13.5 }
