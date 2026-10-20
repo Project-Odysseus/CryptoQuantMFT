@@ -1,0 +1,52 @@
+# The H13 design on equity index, Treasury, crude oil and currency futures (H15, research/prereg/H15.txt): what the
+# multi-asset trend paper book runs (config/portfolio.multi_asset_trend_paper.toml). Research series stand in for the
+# futures' history (each names its future in the instrument master's proxy_for).
+# Any change here is a new version: raise `version`, and the promotion gates must pass again before a book uses it.
+
+[strategy]
+id = "multi_asset_trend"
+version = 1
+title = "Smooth volatility-normalised trend on equity, Treasury, crude oil and currency futures"
+hypothesis = "H15"
+description = """H13's design unchanged on twelve markets in four asset classes: a volatility-normalised EMA difference at \
+three speeds (10/20, 20/40, 40/80 days) through a compound sigmoid (Martin 2023). Each market is sized to 10% volatility \
+and weighted equally; decisions at the close trade at the next close. Time-series momentum across asset classes \
+(Moskowitz, Ooi and Pedersen 2012): the markets trend for different reasons, so the book has more independent bets than \
+equity alone."""
+
+[signal]
+name = "trend_forecast"
+params = { activation = "compound_sigmoid", speeds = [[10, 20], [20, 40], [40, 80]] }
+
+[sizing]
+target_vol = 0.10
+span = 20
+
+[engine]
+band = 0.02
+band_exits_to_zero = false
+max_position = 1.0
+
+[universe]
+instruments = ["idx:SPX", "idx:NDX", "idx:RUT", "etf:IEI", "etf:IEF", "etf:USO",
+               "fxusd:EUR", "fxusd:GBP", "fxusd:AUD", "fxusd:JPY", "fxusd:CHF", "fxusd:CAD"]
+
+[capacity]
+# Average daily traded value of the full-size contracts (ES, NQ, RTY, ZF, ZN, CL, 6E, 6B, 6A, 6J, 6S, 6C), order of
+# magnitude, 2025. Assumptions: check against CME volume reports before relying on a capacity figure.
+max_participation = 0.01
+impact_coefficient = 0.01
+
+[capacity.adv_usd]
+"idx:SPX" = 4.0e11
+"idx:NDX" = 2.0e11
+"idx:RUT" = 1.5e10
+"etf:IEI" = 1.5e11
+"etf:IEF" = 1.8e11
+"etf:USO" = 3.0e10
+"fxusd:EUR" = 2.0e10
+"fxusd:GBP" = 8.0e9
+"fxusd:AUD" = 6.0e9
+"fxusd:JPY" = 1.2e10
+"fxusd:CHF" = 2.0e9
+"fxusd:CAD" = 6.0e9
