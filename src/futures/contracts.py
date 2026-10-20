@@ -71,6 +71,7 @@ class Market:
     quote_exchange: str
     cost_ticks: Decimal
     spec_status: str = ""
+    quote_root: str = ""  # the free source's root for this market's contracts when it differs (MCL is priced at CL's same month)
     anytime: bool = False  # set per book (`[futures] around_the_clock`): orders go out whenever the market is open, no slot
 
     @property
@@ -109,7 +110,7 @@ def load_markets(path: Path | str = MARKETS_PATH) -> dict[str, Market]:
                         roll_sessions_before=int(row["roll_sessions_before"]), calendar=row["calendar"], liquid_from=_clock(row["liquid_from"]),
                         liquid_to=_clock(row["liquid_to"]), timezone=row["timezone"], history_proxy=row["history_proxy"],
                         free_quote_symbol=row["free_quote_symbol"], quote_exchange=row["quote_exchange"], cost_ticks=Decimal(row["cost_ticks_per_side"]),
-                        spec_status=row.get("spec_status", ""))
+                        spec_status=row.get("spec_status", ""), quote_root=row.get("quote_root", ""))
         if market.multiplier * market.tick_size != market.tick_value:
             problems.append(f"{market.id}: tick value {market.tick_value} is not multiplier {market.multiplier} x tick {market.tick_size}")
         if market.last_trade_rule not in LAST_TRADE_RULES:
@@ -141,8 +142,16 @@ class Contract:
 
     @property
     def quote_symbol(self) -> str | None:
-        """The free source's symbol ("MESZ26.CME"), or None when it does not carry this market."""
-        return f"{self.code}.{self.market.quote_exchange}" if self.market.quote_exchange else None
+        """The free source's symbol ("MESZ26.CME"), or None when it does not carry this market.
+
+        With a `quote_root` the same month of another contract on the same underlying is quoted instead: the micro WTI
+        future (MCL) has no history in the free source, so it is priced at the full-size CL contract of its month,
+        which has the same price per barrel. Its volumes are then CL's (larger), so liquidity limits are looser.
+        """
+        if not self.market.quote_exchange:
+            return None
+        root = self.market.quote_root or self.market.root
+        return f"{root}{self.code[len(self.market.root):]}.{self.market.quote_exchange}"
 
     @property
     def price_symbol(self) -> str | None:

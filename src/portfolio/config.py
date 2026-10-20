@@ -243,7 +243,7 @@ _EXECUTION_KEYS = {"policy", "maker_timeout_seconds"}
 EXECUTION_POLICIES = ("taker", "maker_first")
 
 
-GLOBEX_EXCHANGES = ("CME", "CBOT")
+GLOBEX_EXCHANGES = ("CME", "CBOT", "NYMEX")  # the same Globex day: 18:00-17:00 New York
 
 
 def _futures_markets(errors: list[str]) -> dict[str, Any]:
@@ -289,7 +289,7 @@ def _parse_futures(table: dict[str, Any], instruments: Mapping[str, InstrumentSp
         if market not in futures:
             errors.append(f"[futures] around_the_clock '{market}' is not a futures instrument of this book")
         elif market in known and known[market].exchange not in GLOBEX_EXCHANGES:
-            errors.append(f"[futures] around_the_clock '{market}': only CME Globex hours are known ({known[market].exchange} is not CME or CBOT)")
+            errors.append(f"[futures] around_the_clock '{market}': only CME Globex hours are known ({known[market].exchange} is not one of {', '.join(GLOBEX_EXCHANGES)})")
     try:
         participation, floor = float(table.get("max_participation", 0.01)), float(table.get("min_daily_volume", 200.0))
         if not 0.0 < participation <= 1.0 or floor < 0:

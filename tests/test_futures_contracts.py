@@ -44,6 +44,8 @@ def test_contract_codes_and_months(markets: dict[str, fc.Market]) -> None:
     assert december.code == "MESZ26" and december.quote_symbol == "MESZ26.CME"
     assert december.following().code == "MESH27" and december.following().following().code == "MESM27"
     assert fc.Contract(markets["eurex_eur:FDXS"], 2026, 12).quote_symbol is None
+    crude = fc.Contract(markets["cme_usd:MCL"], 2027, 1)
+    assert crude.code == "MCLF27" and crude.quote_symbol == "CLF27.NYM"  # priced at the full-size contract of the same month
     assert fc.parse_code(markets["cme_usd:M6E"], "M6EH27", near=date(2026, 10, 9)) == fc.Contract(markets["cme_usd:M6E"], 2027, 3)
     with pytest.raises(ValueError):
         fc.parse_code(markets["cme_usd:MES"], "M6EH27", near=date(2026, 10, 9))

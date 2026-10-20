@@ -283,9 +283,9 @@ session_close = "14:30"
 multiplier = 100.0
 tick_size = 0.01
 cost_ticks = 2.0
-sources = { "1d" = "yahoo:MCL=F" }
+sources = { "1d" = "yahoo:CL=F" }
 contract = { root = "MCL", months = "FGHJKMNQUVXZ", last_trade_rule = "crude_oil", roll_sessions_before = 5, settlement = "cash" }
-notes = "not confirmed: specs from memory 2026-10-20 (100 barrels, cash-settled; last day taken as CL's, rolled 5 sessions earlier); quotes checked"
+notes = "not confirmed: specs from memory 2026-10-20 (100 barrels, cash-settled; last day taken as CL's, rolled 5 sessions earlier); the free source has no MCL history, so it is priced at the full-size CL contract of the same month (same price per barrel)"
 
 [instruments."idx:SPX"]
 name = "SPX index"
@@ -561,88 +561,94 @@ proxy_for = "cme_usd:MCL"
 notes = "from 2006; holds front-month WTI (spread over later months since 2020), so it pays the roll like the future, less a 0.7% fee"
 
 [instruments."fxusd:EUR"]
-name = "EUR against the US dollar (spot, with its interest differential)"
+name = "EUR against the US dollar (Norges Bank fixings, with its interest differential)"
 asset_class = "fx"
 kind = "spot"
 currency = "USD"
-calendar = "weekdays"
-timezone = "Europe/London"
-session_close = "22:00"
+calendar = "XOSL"
+timezone = "Europe/Oslo"
+session_close = "14:15"
 cost_bps = 1.0
 rate_area = "USA"
 carry_area = "EA20"
-sources = { "1d" = "yahoo:EURUSD=X" }
+sources = { "1d" = "norges_bank_usd:EUR" }
 proxy_for = "cme_usd:M6E"
+notes = "free spot quotes have bad ticks (EUR and JPY +17% in 2008-12), so fixings"
 
 [instruments."fxusd:GBP"]
-name = "GBP against the US dollar (spot, with its interest differential)"
+name = "GBP against the US dollar (Norges Bank fixings, with its interest differential)"
 asset_class = "fx"
 kind = "spot"
 currency = "USD"
-calendar = "weekdays"
-timezone = "Europe/London"
-session_close = "22:00"
+calendar = "XOSL"
+timezone = "Europe/Oslo"
+session_close = "14:15"
 cost_bps = 1.0
 rate_area = "USA"
 carry_area = "GBR"
-sources = { "1d" = "yahoo:GBPUSD=X" }
+sources = { "1d" = "norges_bank_usd:GBP" }
 proxy_for = "cme_usd:M6B"
+notes = "free spot quotes have bad ticks (EUR and JPY +17% in 2008-12), so fixings"
 
 [instruments."fxusd:AUD"]
-name = "AUD against the US dollar (spot, with its interest differential)"
+name = "AUD against the US dollar (Norges Bank fixings, with its interest differential)"
 asset_class = "fx"
 kind = "spot"
 currency = "USD"
-calendar = "weekdays"
-timezone = "Europe/London"
-session_close = "22:00"
+calendar = "XOSL"
+timezone = "Europe/Oslo"
+session_close = "14:15"
 cost_bps = 1.0
 rate_area = "USA"
 carry_area = "AUS"
-sources = { "1d" = "yahoo:AUDUSD=X" }
+sources = { "1d" = "norges_bank_usd:AUD" }
 proxy_for = "cme_usd:M6A"
+notes = "free spot quotes have bad ticks (EUR and JPY +17% in 2008-12), so fixings"
 
 [instruments."fxusd:CHF"]
-name = "CHF against the US dollar (spot, with its interest differential)"
+name = "CHF against the US dollar (Norges Bank fixings, with its interest differential)"
 asset_class = "fx"
 kind = "spot"
 currency = "USD"
-calendar = "weekdays"
-timezone = "Europe/London"
-session_close = "22:00"
+calendar = "XOSL"
+timezone = "Europe/Oslo"
+session_close = "14:15"
 cost_bps = 1.0
 rate_area = "USA"
 carry_area = "CHE"
-sources = { "1d" = "yahoo:CHFUSD=X" }
+sources = { "1d" = "norges_bank_usd:CHF" }
 proxy_for = "cme_usd:MSF"
+notes = "free spot quotes have bad ticks (EUR and JPY +17% in 2008-12), so fixings"
 
 [instruments."fxusd:JPY"]
-name = "JPY against the US dollar (spot, with its interest differential)"
+name = "JPY against the US dollar (Norges Bank fixings, with its interest differential)"
 asset_class = "fx"
 kind = "spot"
 currency = "USD"
-calendar = "weekdays"
-timezone = "Europe/London"
-session_close = "22:00"
+calendar = "XOSL"
+timezone = "Europe/Oslo"
+session_close = "14:15"
 cost_bps = 1.0
 rate_area = "USA"
 carry_area = "JPN"
-sources = { "1d" = "yahoo:JPYUSD=X" }
+sources = { "1d" = "norges_bank_usd:JPY" }
 proxy_for = "cme_usd:MJY"
+notes = "free spot quotes have bad ticks (EUR and JPY +17% in 2008-12), so fixings"
 
 [instruments."fxusd:CAD"]
-name = "CAD against the US dollar (spot, with its interest differential)"
+name = "CAD against the US dollar (Norges Bank fixings, with its interest differential)"
 asset_class = "fx"
 kind = "spot"
 currency = "USD"
-calendar = "weekdays"
-timezone = "Europe/London"
-session_close = "22:00"
+calendar = "XOSL"
+timezone = "Europe/Oslo"
+session_close = "14:15"
 cost_bps = 1.0
 rate_area = "USA"
 carry_area = "CAN"
-sources = { "1d" = "yahoo:CADUSD=X" }
+sources = { "1d" = "norges_bank_usd:CAD" }
 proxy_for = "cme_usd:MCD"
+notes = "free spot quotes have bad ticks (EUR and JPY +17% in 2008-12), so fixings"
 
 [instruments."fx:EURNOK"]
 name = "EUR in NOK (Norges Bank fixing)"
